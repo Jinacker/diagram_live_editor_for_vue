@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Mermaid Live Editor - Vue 2 based diagram editor with bidirectional script and GUI editing">
+  <title>Mermaid Live Editor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div id="app"></div>
+
+  <!-- Vue 2 -->
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.7.16/dist/vue.min.js"></script>
+  <!-- Mermaid.js -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+
+  <!-- Core modules -->
+  <script src="src/mermaid-parser.js"></script>
+  <script src="src/mermaid-generator.js"></script>
+
+  <!-- Vue Components (order matters: children first) -->
+  <script src="src/components/MermaidEditor.js"></script>
+  <script src="src/components/MermaidToolbar.js"></script>
+  <script src="src/components/MermaidPreview.js"></script>
+  <script src="src/components/MermaidLiveEditor.js"></script>
+
+  <!-- App Entry -->
+  <script src="src/app.js"></script>
+
+</body>
+</html>
