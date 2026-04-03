@@ -13,6 +13,8 @@ Vue.component('mermaid-toolbar', {
     undo:            function () { this.$emit('undo'); },
     redo:            function () { this.$emit('redo'); },
     changeDirection: function (e) { this.$emit('change-direction', e.target.value); },
+    zoomOut:         function () { this.$emit('zoom-out'); },
+    zoomIn:          function () { this.$emit('zoom-in'); },
     fitView:         function () { this.$emit('fit-view'); },
     copySvg:         function () { this.$emit('copy-svg'); }
   },
@@ -53,8 +55,14 @@ Vue.component('mermaid-toolbar', {
       </div>\
       <div class="toolbar__separator"></div>\
       <div class="toolbar__group">\
+        <button class="toolbar__btn" @click="zoomOut" title="Zoom Out">\
+          <span class="toolbar__btn-icon">－</span>\
+        </button>\
+        <button class="toolbar__btn" @click="zoomIn" title="Zoom In">\
+          <span class="toolbar__btn-icon">＋</span>\
+        </button>\
         <button class="toolbar__btn" @click="fitView" title="Fit to View">\
-          <span class="toolbar__btn-icon">⊞</span> Fit\
+          <span class="toolbar__btn-icon">⊞</span> 전체 맞춤\
         </button>\
         <button class="toolbar__btn" @click="copySvg" title="Copy SVG to clipboard">\
           <span class="toolbar__btn-icon">⊡</span> SVG\

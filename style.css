@@ -371,9 +371,15 @@ body {
   border: 1px solid var(--border-color);
   min-width: 300px;
   min-height: 200px;
-  padding: 32px;
+  width: 100%;
+  height: 100%;
+  padding: 0;
   box-shadow: var(--shadow-md);
   position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
   transition: box-shadow var(--transition-normal);
 }
 
@@ -381,9 +387,14 @@ body {
   box-shadow: var(--shadow-lg);
 }
 
+.preview-area__canvas--panning {
+  cursor: grabbing;
+}
+
 .preview-area__canvas svg {
-  max-width: 100%;
-  height: auto;
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .preview-area__empty {

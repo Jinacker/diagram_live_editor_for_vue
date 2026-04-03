@@ -46,10 +46,17 @@ Vue.component('mermaid-preview', {
       portDragging:  false,
       hoveredNodeId: null,
 
+      viewportZoom: 1,
+
       // Internal SVG state (not reactive on purpose — rebuilt each render)
       _positions: {},
       _elements:  {},
-      _edgePaths: []
+      _edgePaths: [],
+      _svgEl: null,
+      _baseViewBox: null,
+      _currentViewBox: null,
+      _panState: null,
+      _panMouseUpHandler: null
     };
   },
 
@@ -108,6 +115,13 @@ Vue.component('mermaid-preview', {
     });
   },
 
+  beforeDestroy: function () {
+    if (this._panMouseUpHandler) {
+      document.removeEventListener('mouseup', this._panMouseUpHandler);
+      this._panMouseUpHandler = null;
+    }
+  },
+
   methods: {
 
     // ── Rendering ────────────────────────────────────────────────
@@ -123,6 +137,10 @@ Vue.component('mermaid-preview', {
       var script = MermaidGenerator.generate(m);
       if (!script || /^flowchart\s+(TD|LR|BT|RL)\s*$/.test(script.trim())) {
         this.svgContent = '';
+        this._svgEl = null;
+        this._baseViewBox = null;
+        this._currentViewBox = null;
+        this.viewportZoom = 1;
         return;
       }
 
@@ -152,6 +170,9 @@ Vue.component('mermaid-preview', {
       if (!canvas) return;
       var svgEl = canvas.querySelector('svg');
       if (!svgEl) return;
+      this._svgEl = svgEl;
+
+      this._setupViewport(svgEl, canvas);
 
       // Extract positions and elements
       var collected    = SvgPositionTracker.collectNodePositions(svgEl);
@@ -192,6 +213,170 @@ Vue.component('mermaid-preview', {
           self.$emit('add-node');
         }
       });
+    },
+
+    _setupViewport: function (svgEl, canvas) {
+      var prevBase = this._baseViewBox ? Object.assign({}, this._baseViewBox) : null;
+      var prevCurrent = this._currentViewBox ? Object.assign({}, this._currentViewBox) : null;
+      var vb = svgEl.getAttribute('viewBox');
+      var parsed = this._parseViewBox(vb);
+      if (!parsed) {
+        var width = parseFloat(svgEl.getAttribute('width')) || 1000;
+        var height = parseFloat(svgEl.getAttribute('height')) || 800;
+        parsed = { x: 0, y: 0, width: width, height: height };
+      }
+
+      this._baseViewBox = {
+        x: parsed.x,
+        y: parsed.y,
+        width: parsed.width,
+        height: parsed.height
+      };
+      this._currentViewBox = {
+        x: parsed.x,
+        y: parsed.y,
+        width: parsed.width,
+        height: parsed.height
+      };
+
+      svgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      if (prevBase && prevCurrent) {
+        this._restoreViewport(prevBase, prevCurrent);
+      } else {
+        this.fitView();
+      }
+
+      var self = this;
+      canvas.onwheel = function (e) {
+        e.preventDefault();
+        self._zoomAtClient(e.deltaY < 0 ? 0.9 : 1.1, e.clientX, e.clientY);
+      };
+
+      canvas.onmousedown = function (e) {
+        if (e.button !== 0) return;
+        if (!self._canStartPan(e.target, svgEl)) return;
+        e.preventDefault();
+        self._panState = {
+          startX: e.clientX,
+          startY: e.clientY,
+          viewBox: Object.assign({}, self._currentViewBox)
+        };
+        canvas.classList.add('preview-area__canvas--panning');
+      };
+
+      canvas.onmousemove = function (e) {
+        if (!self._panState || !self._currentViewBox || !self._svgEl) return;
+        var rect = self._svgEl.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        var dx = e.clientX - self._panState.startX;
+        var dy = e.clientY - self._panState.startY;
+        self._currentViewBox.x = self._panState.viewBox.x - (dx / rect.width) * self._panState.viewBox.width;
+        self._currentViewBox.y = self._panState.viewBox.y - (dy / rect.height) * self._panState.viewBox.height;
+        self._applyViewBox();
+      };
+
+      if (this._panMouseUpHandler) {
+        document.removeEventListener('mouseup', this._panMouseUpHandler);
+      }
+      this._panMouseUpHandler = function () { self._endPan(); };
+      document.addEventListener('mouseup', this._panMouseUpHandler);
+    },
+
+    _parseViewBox: function (viewBoxStr) {
+      if (!viewBoxStr) return null;
+      var parts = String(viewBoxStr).trim().split(/\s+/);
+      if (parts.length !== 4) return null;
+      return {
+        x: parseFloat(parts[0]),
+        y: parseFloat(parts[1]),
+        width: parseFloat(parts[2]),
+        height: parseFloat(parts[3])
+      };
+    },
+
+    _applyViewBox: function () {
+      if (!this._svgEl || !this._currentViewBox) return;
+      this._svgEl.setAttribute(
+        'viewBox',
+        [
+          this._currentViewBox.x,
+          this._currentViewBox.y,
+          this._currentViewBox.width,
+          this._currentViewBox.height
+        ].join(' ')
+      );
+      if (this._baseViewBox && this._currentViewBox.width) {
+        this.viewportZoom = this._baseViewBox.width / this._currentViewBox.width;
+      }
+    },
+
+    _restoreViewport: function (prevBase, prevCurrent) {
+      if (!prevBase || !prevCurrent || !this._baseViewBox) return;
+
+      var zoomScale = prevCurrent.width / prevBase.width;
+      var centerXRatio = (prevCurrent.x + prevCurrent.width / 2 - prevBase.x) / prevBase.width;
+      var centerYRatio = (prevCurrent.y + prevCurrent.height / 2 - prevBase.y) / prevBase.height;
+
+      var nextWidth = this._baseViewBox.width * zoomScale;
+      var nextHeight = this._baseViewBox.height * zoomScale;
+      var centerX = this._baseViewBox.x + this._baseViewBox.width * centerXRatio;
+      var centerY = this._baseViewBox.y + this._baseViewBox.height * centerYRatio;
+
+      this._currentViewBox = {
+        x: centerX - nextWidth / 2,
+        y: centerY - nextHeight / 2,
+        width: nextWidth,
+        height: nextHeight
+      };
+      this._applyViewBox();
+    },
+
+    _canStartPan: function (target, svgEl) {
+      if (!target || !svgEl) return false;
+      if (target.closest && (
+        target.closest('.node') ||
+        target.closest('.edgeLabel') ||
+        target.closest('.edge-toolbar') ||
+        target.closest('#conn-port-overlay') ||
+        target.closest('#edge-ghost-overlay')
+      )) {
+        return false;
+      }
+      return target === svgEl ||
+        (target.tagName && target.tagName.toLowerCase() === 'svg') ||
+        (target.tagName && target.tagName.toLowerCase() === 'rect' && !target.closest('.node'));
+    },
+
+    _endPan: function () {
+      var canvas = this.$refs.canvas;
+      this._panState = null;
+      if (canvas) canvas.classList.remove('preview-area__canvas--panning');
+    },
+
+    _zoomAtClient: function (factor, clientX, clientY) {
+      if (!this._svgEl || !this._currentViewBox || !this._baseViewBox) return;
+      var rect = this._svgEl.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+
+      var nextWidth = this._currentViewBox.width * factor;
+      var minWidth = this._baseViewBox.width * 0.2;
+      var maxWidth = this._baseViewBox.width * 3;
+      nextWidth = Math.max(minWidth, Math.min(maxWidth, nextWidth));
+      factor = nextWidth / this._currentViewBox.width;
+
+      var nextHeight = this._currentViewBox.height * factor;
+      var px = (clientX - rect.left) / rect.width;
+      var py = (clientY - rect.top) / rect.height;
+      if (!isFinite(px) || !isFinite(py)) {
+        px = 0.5;
+        py = 0.5;
+      }
+
+      this._currentViewBox.x += (this._currentViewBox.width - nextWidth) * px;
+      this._currentViewBox.y += (this._currentViewBox.height - nextHeight) * py;
+      this._currentViewBox.width = nextWidth;
+      this._currentViewBox.height = nextHeight;
+      this._applyViewBox();
     },
 
     _buildCtx: function (svgEl) {
@@ -357,13 +542,47 @@ Vue.component('mermaid-preview', {
     },
 
     fitView: function () {
-      var canvas = this.$refs.canvas;
-      if (!canvas) return;
-      var svgEl = canvas.querySelector('svg');
-      if (svgEl) {
-        svgEl.style.maxWidth = '100%';
-        svgEl.style.height   = 'auto';
+      if (!this._baseViewBox || !this._svgEl) return;
+      var rect = this._svgEl.getBoundingClientRect();
+      var canvasAspect = rect.width && rect.height ? rect.width / rect.height : 1;
+      var box = this._baseViewBox;
+      var padX = Math.max(80, box.width * 0.14);
+      var padY = Math.max(80, box.height * 0.18);
+      var width = box.width + padX * 2;
+      var height = box.height + padY * 2;
+      var x = box.x - padX;
+      var y = box.y - padY;
+      var boxAspect = width / height;
+
+      if (canvasAspect > boxAspect) {
+        var targetWidth = height * canvasAspect;
+        x -= (targetWidth - width) / 2;
+        width = targetWidth;
+      } else {
+        var targetHeight = width / canvasAspect;
+        y -= (targetHeight - height) / 2;
+        height = targetHeight;
       }
+
+      this._currentViewBox = {
+        x: x,
+        y: y,
+        width: width,
+        height: height
+      };
+      this._applyViewBox();
+    },
+
+    zoomIn: function () {
+      var rect = this._svgEl ? this._svgEl.getBoundingClientRect() : null;
+      if (!rect) return;
+      this._zoomAtClient(0.85, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    },
+
+    zoomOut: function () {
+      var rect = this._svgEl ? this._svgEl.getBoundingClientRect() : null;
+      if (!rect) return;
+      this._zoomAtClient(1.15, rect.left + rect.width / 2, rect.top + rect.height / 2);
     }
   },
 

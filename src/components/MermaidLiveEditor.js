@@ -227,6 +227,14 @@ Vue.component('mermaid-live-editor', {
       if (this.$refs.preview) this.$refs.preview.fitView();
     },
 
+    zoomIn: function () {
+      if (this.$refs.preview) this.$refs.preview.zoomIn();
+    },
+
+    zoomOut: function () {
+      if (this.$refs.preview) this.$refs.preview.zoomOut();
+    },
+
     copySvg: function () {
       var preview = this.$refs.preview;
       if (!preview) return;
@@ -332,6 +340,8 @@ Vue.component('mermaid-live-editor', {
             @undo="undo"\
             @redo="redo"\
             @change-direction="changeDirection"\
+            @zoom-in="zoomIn"\
+            @zoom-out="zoomOut"\
             @fit-view="fitView"\
             @copy-svg="copySvg"\
           ></mermaid-toolbar>\
