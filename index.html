@@ -20,6 +20,16 @@
   <script src="src/mermaid-parser.js"></script>
   <script src="src/mermaid-generator.js"></script>
 
+  <!-- Services -->
+  <script src="src/services/HistoryManager.js"></script>
+  <script src="src/services/StorageManager.js"></script>
+
+  <!-- Preview sub-services (SvgPositionTracker must come first) -->
+  <script src="src/preview/SvgPositionTracker.js"></script>
+  <script src="src/preview/SvgNodeHandler.js"></script>
+  <script src="src/preview/SvgEdgeHandler.js"></script>
+  <script src="src/preview/PortDragHandler.js"></script>
+
   <!-- Vue Components (order matters: children first) -->
   <script src="src/components/MermaidEditor.js"></script>
   <script src="src/components/MermaidToolbar.js"></script>

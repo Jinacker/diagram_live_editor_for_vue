@@ -734,7 +734,7 @@ body {
 }
 
 .context-menu__shape-btn {
-  background: var(--surface-light);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
   border-radius: var(--radius-sm);
@@ -753,3 +753,86 @@ body {
   color: white;
   transform: translateY(-1px);
 }
+
+/* ---- Shape Grid (context menu) ---- */
+.context-menu__shapes-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px 10px 10px;
+}
+
+.context-menu__shapes-grid .context-menu__shape-btn {
+  flex: none;
+  font-size: 11px;
+  padding: 5px 4px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- 4-direction Ports ---- */
+.conn-port {
+  fill: var(--accent-secondary);
+  stroke: white;
+  stroke-width: 1.5px;
+  transition: r 120ms ease;
+}
+.conn-port:hover {
+  r: 7;
+}
+.conn-port-glow {
+  fill: var(--accent-glow);
+  stroke: none;
+  pointer-events: none;
+}
+
+/* Port drag snap target */
+.preview-area__canvas .node.port-drag-target rect,
+.preview-area__canvas .node.port-drag-target circle,
+.preview-area__canvas .node.port-drag-target polygon,
+.preview-area__canvas .node.port-drag-target path {
+  filter: drop-shadow(0 0 10px rgba(52, 211, 153, 0.8));
+  stroke: #34d399 !important;
+  stroke-width: 2.5px !important;
+}
+
+/* Node hover highlight */
+.preview-area__canvas .node.node-hovered > * {
+  filter: brightness(1.15);
+}
+
+/* ---- Toolbar disabled ---- */
+.toolbar__btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* ---- Toast notification ---- */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 20px;
+  font-size: 13px;
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  pointer-events: none;
+  transition: all var(--transition-normal);
+  z-index: 9999;
+  white-space: nowrap;
+}
+.toast.toast--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.toast.toast--success { border-color: var(--success); color: var(--success); }
+.toast.toast--error   { border-color: var(--error);   color: var(--error);   }
