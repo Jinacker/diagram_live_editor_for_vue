@@ -836,3 +836,50 @@ body {
 }
 .toast.toast--success { border-color: var(--success); color: var(--success); }
 .toast.toast--error   { border-color: var(--error);   color: var(--error);   }
+
+/* ---- Edge floating toolbar ---- */
+.edge-toolbar {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 10px));
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 5px 8px;
+  box-shadow: var(--shadow-md);
+  z-index: 500;
+  animation: fadeScaleIn var(--transition-fast) both;
+  pointer-events: all;
+}
+
+.edge-toolbar__btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.edge-toolbar__btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.edge-toolbar__btn--danger:hover {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--error);
+}
+
+.edge-toolbar__sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border-color);
+  margin: 0 2px;
+}

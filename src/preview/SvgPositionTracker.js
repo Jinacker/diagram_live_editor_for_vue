@@ -80,11 +80,20 @@
       }
     },
 
-    // Map rendered edgePath elements → model edge indices
-    // Returns array parallel to SVG .edgePath NodeList; each entry is { el, path, fromId, toId, index } or null
+    // Map rendered edge paths → model edge indices.
+    // Prefer the actual stroke path elements rather than wrapper groups, because
+    // unnamed Mermaid edges sometimes skip the same wrapper structure as labeled ones.
     collectEdgePaths: function (svgEl, modelEdges) {
       var results = [];
-      var edgePaths = svgEl.querySelectorAll('.edgePath');
+      var pathCandidates = svgEl.querySelectorAll(
+        '.edgePath path.path,' +
+        '.edgePath path:not([class*="arrowhead"]),' +
+        '.edgePaths path.path,' +
+        '.edgePaths > path,' +
+        'path.flowchart-link,' +
+        'path[id^="L_"]'
+      );
+      var seenPathEls = [];
 
       // Same logic as extractNodeId: find "flowchart-" prefix and strip trailing index
       var sanitize = function (id) {
@@ -103,14 +112,38 @@
 
       var edgeOccurrences = {};
 
-      for (var i = 0; i < edgePaths.length; i++) {
-        var edgeEl = edgePaths[i];
+      for (var i = 0; i < pathCandidates.length; i++) {
+        var pathEl = pathCandidates[i];
+        if (!pathEl || seenPathEls.indexOf(pathEl) !== -1) continue;
+        seenPathEls.push(pathEl);
+
+        var edgeEl = pathEl.closest ? pathEl.closest('.edgePath') : null;
+        if (!edgeEl) edgeEl = pathEl.parentNode;
+        if (!edgeEl) edgeEl = pathEl;
+
         var cls = edgeEl.getAttribute('class') || '';
         var sm  = cls.match(/LS-([^\s]+)/);
         var em  = cls.match(/LE-([^\s]+)/);
 
         var fId = sm ? sanitize(sm[1]) : null;
         var tId = em ? sanitize(em[1]) : null;
+
+        // Mermaid also encodes endpoints in ids like L_A_B_0
+        if ((!fId || !tId) && edgeEl.id) {
+          var idMatch = edgeEl.id.match(/^L_(.+)_(.+?)_\d+$/);
+          if (idMatch) {
+            fId = fId || sanitize(idMatch[1]);
+            tId = tId || sanitize(idMatch[2]);
+          }
+        }
+
+        if ((!fId || !tId) && pathEl.id) {
+          var pathIdMatch = pathEl.id.match(/^L_(.+)_(.+?)_\d+$/);
+          if (pathIdMatch) {
+            fId = fId || sanitize(pathIdMatch[1]);
+            tId = tId || sanitize(pathIdMatch[2]);
+          }
+        }
 
         // Fallback: use model index order
         if ((!fId || !tId) && i < modelEdges.length) {
@@ -132,8 +165,7 @@
           edgeOccurrences[key]++;
         }
 
-        var pathEl = edgeEl.querySelector('path') || edgeEl;
-        results.push(fId && tId ? {
+        results.push(pathEl ? {
           el:     edgeEl,
           path:   pathEl,
           fromId: fId,

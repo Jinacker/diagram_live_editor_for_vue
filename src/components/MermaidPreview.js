@@ -39,8 +39,8 @@ Vue.component('mermaid-preview', {
       edgeEditInputStyle:  {},
 
       // Context menus
-      contextMenu:     null,   // { nodeId, x, y }
-      edgeContextMenu: null,   // { edgeIndex, x, y }
+      contextMenu:  null,   // { nodeId, x, y }
+      edgeToolbar:  null,   // { edgeIndex, x, y }  — floating edge action bar
 
       // Port drag state
       portDragging:  false,
@@ -64,10 +64,10 @@ Vue.component('mermaid-preview', {
     this.renderDiagram();
     var self = this;
 
-    // Global click: close context menus
+    // Global click: close context menus / edge toolbar
     document.addEventListener('click', function () {
-      self.contextMenu     = null;
-      self.edgeContextMenu = null;
+      self.contextMenu = null;
+      self.edgeToolbar = null;
     });
 
     // Global keydown: Delete, Escape, Ctrl+Z/Y
@@ -93,7 +93,7 @@ Vue.component('mermaid-preview', {
         self.selectedNodeId    = null;
         self.selectedEdgeIndex = null;
         self.contextMenu       = null;
-        self.edgeContextMenu   = null;
+        self.edgeToolbar       = null;
         self.portDragging      = false;
       }
 
@@ -159,21 +159,18 @@ Vue.component('mermaid-preview', {
       this._elements   = collected.elements;
       this._edgePaths  = SvgPositionTracker.collectEdgePaths(svgEl, this.model.edges);
 
-      // Force pointer-events on all edge groups (Mermaid may disable them)
-      var allEdgeGroups = svgEl.querySelectorAll('.edgePaths, .edgePath, .edgeLabels, .edgeLabel');
-      for (var ei = 0; ei < allEdgeGroups.length; ei++) {
-        allEdgeGroups[ei].style.pointerEvents = 'all';
-      }
-
-      // Build ctx bridge (must be declared before use in closures)
+      // Build ctx bridge
       var ctx = this._buildCtx(svgEl);
 
-      // Init port overlay
+      // Edge ghost overlay FIRST (root-level, not blocked by Mermaid's pointer-events)
+      SvgEdgeHandler.initGhostOverlay(svgEl);
+      SvgEdgeHandler.attach(svgEl, this._edgePaths, this._positions, ctx);
+
+      // Port overlay on top of edge ghosts
       PortDragHandler.initOverlay(svgEl);
 
-      // Attach node and edge handlers
+      // Node handlers
       SvgNodeHandler.attach(svgEl, this._positions, this._elements, ctx);
-      SvgEdgeHandler.attach(svgEl, this._edgePaths, this._positions, ctx);
 
       // Canvas background click → deselect
       var self = this;
@@ -306,23 +303,23 @@ Vue.component('mermaid-preview', {
       this.contextMenu = null;
     },
 
-    // ── Edge context menu actions ─────────────────────────────────
+    // ── Edge toolbar actions ──────────────────────────────────────
 
-    contextEditEdge: function () {
-      if (!this.edgeContextMenu) return;
-      var idx = this.edgeContextMenu.edgeIndex;
-      var x   = this.edgeContextMenu.x;
-      var y   = this.edgeContextMenu.y;
-      this.edgeContextMenu = null;
+    edgeToolbarEdit: function () {
+      if (!this.edgeToolbar) return;
+      var idx = this.edgeToolbar.edgeIndex;
+      var x   = this.edgeToolbar.x;
+      var y   = this.edgeToolbar.y;
+      this.edgeToolbar = null;
       var canvas = this.$refs.canvas;
       var svgEl  = canvas ? canvas.querySelector('svg') : null;
       SvgEdgeHandler.startInlineEdit(idx, x, y, svgEl, this._positions, this._buildCtxLite());
     },
 
-    contextDeleteEdge: function () {
-      if (!this.edgeContextMenu) return;
-      this.$emit('delete-selected', { nodeId: null, edgeIndex: this.edgeContextMenu.edgeIndex });
-      this.edgeContextMenu   = null;
+    edgeToolbarDelete: function () {
+      if (!this.edgeToolbar) return;
+      this.$emit('delete-selected', { nodeId: null, edgeIndex: this.edgeToolbar.edgeIndex });
+      this.edgeToolbar       = null;
       this.selectedEdgeIndex = null;
     },
 
@@ -435,20 +432,20 @@ Vue.component('mermaid-preview', {
         </div>\
       </div>\
       \
-      <!-- Edge context menu -->\
+      <!-- Edge floating toolbar -->\
       <div\
-        v-if="edgeContextMenu"\
-        class="context-menu"\
-        :style="{ left: edgeContextMenu.x + \'px\', top: edgeContextMenu.y + \'px\' }"\
+        v-if="edgeToolbar"\
+        class="edge-toolbar"\
+        :style="{ left: edgeToolbar.x + \'px\', top: edgeToolbar.y + \'px\' }"\
         @click.stop\
       >\
-        <div class="context-menu__item" @click="contextEditEdge">\
-          <span class="context-menu__item-icon">✎</span> Edit Label\
-        </div>\
-        <div class="context-menu__separator"></div>\
-        <div class="context-menu__item context-menu__item--danger" @click="contextDeleteEdge">\
-          <span class="context-menu__item-icon">✕</span> Delete Edge\
-        </div>\
+        <button class="edge-toolbar__btn" @click="edgeToolbarEdit" title="Edit label">\
+          ✎ Label\
+        </button>\
+        <div class="edge-toolbar__sep"></div>\
+        <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="edgeToolbarDelete" title="Delete edge">\
+          ✕ Delete\
+        </button>\
       </div>\
     </div>\
   '

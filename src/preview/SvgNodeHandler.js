@@ -74,7 +74,7 @@
         ctx.setState({
           selectedNodeId:    nodeId,
           selectedEdgeIndex: null,
-          edgeContextMenu:   null
+          edgeToolbar:   null
         });
         ctx.emit('node-selected', nodeId);
       });
@@ -92,8 +92,8 @@
         e.preventDefault();
         e.stopPropagation();
         ctx.setState({
-          contextMenu:     { nodeId: nodeId, x: e.clientX, y: e.clientY },
-          edgeContextMenu: null
+          contextMenu: { nodeId: nodeId, x: e.clientX, y: e.clientY },
+          edgeToolbar: null
         });
       });
 
