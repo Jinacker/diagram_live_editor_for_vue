@@ -44,6 +44,11 @@ Vue.component('mermaid-editor', {
     onInput: function (e) {
       this.localValue = e.target.value;
       var self = this;
+      if (this.diagramType === 'sequenceDiagram') {
+        clearTimeout(this.debounceTimer);
+        this.$emit('input', this.localValue);
+        return;
+      }
       // 매 타이핑마다 바로 parse하지 않고 짧게 debounce해서 editor 입력감을 유지한다.
       clearTimeout(this.debounceTimer);
       this.debounceTimer = setTimeout(function () {

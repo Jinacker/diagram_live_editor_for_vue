@@ -24,9 +24,12 @@ Vue.component('mermaid-preview', {
       svgContent:  '',
       renderError: '',
       renderCounter: 0,
+      renderToken: 0,
 
       selectedNodeId:    null,
       selectedEdgeIndex: null,
+      selectedSequenceParticipantId: null,
+      selectedSequenceMessageIndex: null,
 
       // 노드 인라인 편집
       editingNodeId:  null,
@@ -38,9 +41,18 @@ Vue.component('mermaid-preview', {
       editingEdgeText:     '',
       edgeEditInputStyle:  {},
 
+      // 시퀀스 인라인 편집
+      editingSequenceParticipantId: null,
+      editingSequenceParticipantText: '',
+      sequenceParticipantEditStyle: {},
+      editingSequenceMessageIndex: null,
+      editingSequenceMessageText: '',
+      sequenceMessageEditStyle: {},
+
       // 컨텍스트 UI 상태
       contextMenu:  null,   // { nodeId, x, y }
       edgeToolbar:  null,   // { edgeIndex, x, y } - 플로팅 엣지 액션 바
+      sequenceToolbar: null, // { type, id|index, x, y }
 
       // 포트 드래그 상태
       portDragging:  false,
@@ -75,6 +87,7 @@ Vue.component('mermaid-preview', {
     document.addEventListener('click', function () {
       self.contextMenu = null;
       self.edgeToolbar = null;
+      self.sequenceToolbar = null;
     });
 
     // 전역 키 입력: Delete, Escape, Ctrl+Z/Y
@@ -83,7 +96,8 @@ Vue.component('mermaid-preview', {
       if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (self.editingNodeId !== null || self.editingEdgeIndex !== null) return;
+        if (self.editingNodeId !== null || self.editingEdgeIndex !== null ||
+            self.editingSequenceParticipantId !== null || self.editingSequenceMessageIndex !== null) return;
         if (self.selectedNodeId || self.selectedEdgeIndex !== null) {
           self.$emit('delete-selected', {
             nodeId:    self.selectedNodeId,
@@ -91,16 +105,28 @@ Vue.component('mermaid-preview', {
           });
           self.selectedNodeId    = null;
           self.selectedEdgeIndex = null;
+        } else if (self.selectedSequenceParticipantId || self.selectedSequenceMessageIndex !== null) {
+          self.$emit('delete-selected', {
+            sequenceParticipantId: self.selectedSequenceParticipantId,
+            sequenceMessageIndex: self.selectedSequenceMessageIndex
+          });
+          self.selectedSequenceParticipantId = null;
+          self.selectedSequenceMessageIndex = null;
         }
       }
 
       if (e.key === 'Escape') {
         self.cancelNodeEdit();
         self.cancelEdgeEdit();
+        self.cancelSequenceParticipantEdit();
+        self.cancelSequenceMessageEdit();
         self.selectedNodeId    = null;
         self.selectedEdgeIndex = null;
+        self.selectedSequenceParticipantId = null;
+        self.selectedSequenceMessageIndex = null;
         self.contextMenu       = null;
         self.edgeToolbar       = null;
+        self.sequenceToolbar   = null;
         self.portDragging      = false;
       }
 
@@ -160,19 +186,29 @@ Vue.component('mermaid-preview', {
 
       var self = this;
       self.renderCounter++;
+      self.renderToken++;
+      var renderToken = self.renderToken;
       var containerId = 'mermaid-render-' + self.renderCounter;
+      self.renderError = '';
+      self.svgContent = '';
 
       try {
         window.mermaid.render(containerId, script).then(function (result) {
+          // 더 최신 render 요청이 이미 있으면 늦게 도착한 이전 결과는 버린다.
+          if (renderToken !== self.renderToken) return;
           self.svgContent  = result.svg;
           self.renderError = '';
           self.$nextTick(function () { self.postRenderSetup(); });
         }).catch(function (err) {
+          if (renderToken !== self.renderToken) return;
+          self.svgContent = '';
           self.renderError = err.message || 'Render error';
           var errEl = document.getElementById('d' + containerId);
           if (errEl) errEl.remove();
         });
       } catch (e) {
+        if (renderToken !== self.renderToken) return;
+        self.svgContent = '';
         self.renderError = e.message || 'Render error';
       }
     },
@@ -214,6 +250,7 @@ Vue.component('mermaid-preview', {
         this._positions = {};
         this._elements = {};
         this._edgePaths = [];
+        SequenceSvgHandler.attach(svgEl, this.model, this._buildCtx(svgEl));
       }
 
       // 배경 클릭 시 선택 해제
@@ -223,6 +260,8 @@ Vue.component('mermaid-preview', {
             (e.target.tagName && e.target.tagName.toLowerCase() === 'svg')) {
           self.selectedNodeId    = null;
           self.selectedEdgeIndex = null;
+          self.selectedSequenceParticipantId = null;
+          self.selectedSequenceMessageIndex = null;
         }
       });
 
@@ -364,8 +403,10 @@ Vue.component('mermaid-preview', {
         target.closest('.node') ||
         target.closest('.edgeLabel') ||
         target.closest('.edge-toolbar') ||
+        target.closest('.sequence-toolbar') ||
         target.closest('#conn-port-overlay') ||
-        target.closest('#edge-ghost-overlay')
+        target.closest('#edge-ghost-overlay') ||
+        target.closest('#sequence-message-hit-overlay')
       )) {
         return false;
       }
@@ -425,9 +466,31 @@ Vue.component('mermaid-preview', {
           }
           return null;
         },
+        findSequenceParticipant: function (participantId) {
+          var participants = self.model.participants || [];
+          for (var i = 0; i < participants.length; i++) {
+            if (participants[i].id === participantId) return participants[i];
+          }
+          return null;
+        },
+        findSequenceMessage: function (messageIndex) {
+          var messages = self.model.messages || [];
+          return messages[messageIndex] || null;
+        },
         watchSelection: function (nodeId, nodeEl) {
           self.$watch('selectedNodeId', function (val) {
             nodeEl.classList.toggle('selected', val === nodeId);
+          }, { immediate: true });
+        },
+        watchSequenceParticipantSelection: function (participantId, el) {
+          self.$watch('selectedSequenceParticipantId', function (val) {
+            el.classList.toggle('sequence-participant-selected', val === participantId);
+          }, { immediate: true });
+        },
+        watchSequenceMessageSelection: function (messageIndex, lineEl, textEl) {
+          self.$watch('selectedSequenceMessageIndex', function (val) {
+            if (lineEl) lineEl.classList.toggle('sequence-message-selected', val === messageIndex);
+            if (textEl) textEl.classList.toggle('sequence-message-text-selected', val === messageIndex);
           }, { immediate: true });
         },
         focusEditInput: function () {
@@ -439,6 +502,18 @@ Vue.component('mermaid-preview', {
         focusEdgeEditInput: function () {
           self.$nextTick(function () {
             var el = self.$refs.editEdgeInput;
+            if (el) { el.focus(); el.select(); }
+          });
+        },
+        focusSequenceParticipantInput: function () {
+          self.$nextTick(function () {
+            var el = self.$refs.sequenceParticipantInput;
+            if (el) { el.focus(); el.select(); }
+          });
+        },
+        focusSequenceMessageInput: function () {
+          self.$nextTick(function () {
+            var el = self.$refs.sequenceMessageInput;
             if (el) { el.focus(); el.select(); }
           });
         }
@@ -492,6 +567,50 @@ Vue.component('mermaid-preview', {
       if (e.key === 'Escape') { this.cancelEdgeEdit(); }
     },
 
+    // ── 시퀀스 편집 ──────────────────────────────────────────────
+
+    confirmSequenceParticipantEdit: function () {
+      if (this.editingSequenceParticipantId && this.editingSequenceParticipantText.trim()) {
+        this.$emit('update-sequence-participant-text', {
+          participantId: this.editingSequenceParticipantId,
+          text: this.editingSequenceParticipantText.trim()
+        });
+      }
+      this.editingSequenceParticipantId = null;
+      this.editingSequenceParticipantText = '';
+    },
+
+    cancelSequenceParticipantEdit: function () {
+      this.editingSequenceParticipantId = null;
+      this.editingSequenceParticipantText = '';
+    },
+
+    onSequenceParticipantEditKeyDown: function (e) {
+      if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceParticipantEdit(); }
+      if (e.key === 'Escape') { this.cancelSequenceParticipantEdit(); }
+    },
+
+    confirmSequenceMessageEdit: function () {
+      if (this.editingSequenceMessageIndex !== null) {
+        this.$emit('update-sequence-message-text', {
+          index: this.editingSequenceMessageIndex,
+          text: this.editingSequenceMessageText.trim()
+        });
+      }
+      this.editingSequenceMessageIndex = null;
+      this.editingSequenceMessageText = '';
+    },
+
+    cancelSequenceMessageEdit: function () {
+      this.editingSequenceMessageIndex = null;
+      this.editingSequenceMessageText = '';
+    },
+
+    onSequenceMessageEditKeyDown: function (e) {
+      if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceMessageEdit(); }
+      if (e.key === 'Escape') { this.cancelSequenceMessageEdit(); }
+    },
+
     // ── 노드 컨텍스트 메뉴 액션 ─────────────────────────────────
 
     contextEditNode: function () {
@@ -535,6 +654,65 @@ Vue.component('mermaid-preview', {
       this.selectedEdgeIndex = null;
     },
 
+    // ── 시퀀스 툴바 액션 ────────────────────────────────────────
+
+    sequenceToolbarEdit: function () {
+      if (!this.sequenceToolbar) return;
+      var toolbar = this.sequenceToolbar;
+      var canvas = this.$refs.canvas;
+      var svgEl = canvas ? canvas.querySelector('svg') : null;
+
+      if (toolbar.type === 'participant') {
+        var participantMap = SequencePositionTracker.collectParticipants(svgEl, this.model);
+        var participant = participantMap[toolbar.id];
+        if (participant && participant.el) {
+          SequenceSvgHandler.startParticipantEdit(toolbar.id, participant.el, this._buildCtxLite());
+        }
+      } else if (toolbar.type === 'message') {
+        SequenceSvgHandler.startMessageEdit(toolbar.index, toolbar.x, toolbar.y, svgEl, this._buildCtxLite());
+      }
+    },
+
+    sequenceToolbarDelete: function () {
+      if (!this.sequenceToolbar) return;
+      if (this.sequenceToolbar.type === 'participant') {
+        this.$emit('delete-selected', {
+          sequenceParticipantId: this.sequenceToolbar.id,
+          sequenceMessageIndex: null
+        });
+        this.selectedSequenceParticipantId = null;
+      } else if (this.sequenceToolbar.type === 'message') {
+        this.$emit('delete-selected', {
+          sequenceParticipantId: null,
+          sequenceMessageIndex: this.sequenceToolbar.index
+        });
+        this.selectedSequenceMessageIndex = null;
+      }
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarAddMessage: function () {
+      if (!this.sequenceToolbar) return;
+      if (this.sequenceToolbar.type === 'participant') {
+        this.$emit('add-sequence-message', { participantId: this.sequenceToolbar.id });
+      } else if (this.sequenceToolbar.type === 'message') {
+        this.$emit('add-sequence-message', { afterIndex: this.sequenceToolbar.index });
+      }
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarReverse: function () {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'message') return;
+      this.$emit('reverse-sequence-message', this.sequenceToolbar.index);
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarToggleLineType: function () {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'message') return;
+      this.$emit('toggle-sequence-message-line-type', this.sequenceToolbar.index);
+      this.sequenceToolbar = null;
+    },
+
     // postRenderSetup 바깥에서도 쓸 수 있는 경량 ctx
     _buildCtxLite: function () {
       var self = this;
@@ -553,6 +731,17 @@ Vue.component('mermaid-preview', {
           }
           return null;
         },
+        findSequenceParticipant: function (participantId) {
+          var participants = self.model.participants || [];
+          for (var i = 0; i < participants.length; i++) {
+            if (participants[i].id === participantId) return participants[i];
+          }
+          return null;
+        },
+        findSequenceMessage: function (messageIndex) {
+          var messages = self.model.messages || [];
+          return messages[messageIndex] || null;
+        },
         focusEditInput: function () {
           self.$nextTick(function () {
             var el = self.$refs.editInput;
@@ -562,6 +751,18 @@ Vue.component('mermaid-preview', {
         focusEdgeEditInput: function () {
           self.$nextTick(function () {
             var el = self.$refs.editEdgeInput;
+            if (el) { el.focus(); el.select(); }
+          });
+        },
+        focusSequenceParticipantInput: function () {
+          self.$nextTick(function () {
+            var el = self.$refs.sequenceParticipantInput;
+            if (el) { el.focus(); el.select(); }
+          });
+        },
+        focusSequenceMessageInput: function () {
+          self.$nextTick(function () {
+            var el = self.$refs.sequenceMessageInput;
             if (el) { el.focus(); el.select(); }
           });
         }
@@ -615,7 +816,7 @@ Vue.component('mermaid-preview', {
   },
 
   template: '\
-    <div class="preview-area" @click.self="selectedNodeId = null; selectedEdgeIndex = null;">\
+    <div class="preview-area" @click.self="selectedNodeId = null; selectedEdgeIndex = null; selectedSequenceParticipantId = null; selectedSequenceMessageIndex = null;">\
       \
       <!-- Port drag hint -->\
       <div v-if="portDragging" class="edge-mode-overlay" style="background: var(--success);">\
@@ -623,11 +824,11 @@ Vue.component('mermaid-preview', {
       </div>\
       \
       <!-- SVG canvas -->\
-      <div v-if="svgContent" ref="canvas" class="preview-area__canvas" v-html="svgContent"></div>\
+      <div v-if="svgContent" :key="renderCounter" ref="canvas" class="preview-area__canvas" v-html="svgContent"></div>\
       <div v-else class="preview-area__empty">\
         <div class="preview-area__empty-icon">◇</div>\
-        <div class="preview-area__empty-text">Mermaid 스크립트를 입력하면 여기에 렌더링됩니다</div>\
-        <div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">플로우차트와 시퀀스 다이어그램을 지원합니다</div>\
+        <div class="preview-area__empty-text">{{ renderError || "Mermaid 스크립트를 입력하면 여기에 렌더링됩니다" }}</div>\
+        <div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">{{ renderError ? "렌더링 실패로 이전 SVG를 비웠습니다" : "플로우차트와 시퀀스 다이어그램을 지원합니다" }}</div>\
       </div>\
       \
       <!-- Node inline edit -->\
@@ -650,6 +851,29 @@ Vue.component('mermaid-preview', {
           placeholder="Edge label"\
           @keydown="onEdgeEditKeyDown"\
           @blur="confirmEdgeEdit"\
+        />\
+      </div>\
+      \
+      <!-- Sequence participant inline edit -->\
+      <div v-if="editingSequenceParticipantId" class="node-edit-overlay" :style="sequenceParticipantEditStyle">\
+        <input\
+          ref="sequenceParticipantInput"\
+          class="node-edit-input"\
+          v-model="editingSequenceParticipantText"\
+          @keydown="onSequenceParticipantEditKeyDown"\
+          @blur="confirmSequenceParticipantEdit"\
+        />\
+      </div>\
+      \
+      <!-- Sequence message inline edit -->\
+      <div v-if="editingSequenceMessageIndex !== null" class="node-edit-overlay" :style="sequenceMessageEditStyle">\
+        <input\
+          ref="sequenceMessageInput"\
+          class="node-edit-input"\
+          v-model="editingSequenceMessageText"\
+          placeholder="Message text"\
+          @keydown="onSequenceMessageEditKeyDown"\
+          @blur="confirmSequenceMessageEdit"\
         />\
       </div>\
       \
@@ -693,6 +917,20 @@ Vue.component('mermaid-preview', {
         <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="edgeToolbarDelete" title="Delete edge">\
           ✕ Delete\
         </button>\
+      </div>\
+      \
+      <!-- Sequence floating toolbar -->\
+      <div\
+        v-if="sequenceToolbar"\
+        class="sequence-toolbar"\
+        :style="{ left: sequenceToolbar.x + \'px\', top: sequenceToolbar.y + \'px\' }"\
+        @click.stop\
+      >\
+        <button class="edge-toolbar__btn" @click="sequenceToolbarEdit">✎ Edit</button>\
+        <button class="edge-toolbar__btn" @click="sequenceToolbarAddMessage">＋ Message</button>\
+        <button v-if="sequenceToolbar.type === \'message\'" class="edge-toolbar__btn" @click="sequenceToolbarReverse">↔ Reverse</button>\
+        <button v-if="sequenceToolbar.type === \'message\'" class="edge-toolbar__btn" @click="sequenceToolbarToggleLineType">⋯ Line</button>\
+        <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="sequenceToolbarDelete">✕ Delete</button>\
       </div>\
     </div>\
   '

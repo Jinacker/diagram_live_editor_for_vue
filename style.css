@@ -906,3 +906,44 @@ body {
   background: var(--border-color);
   margin: 0 2px;
 }
+
+/* ---- 시퀀스 다이어그램 인터랙션 ---- */
+.preview-area__canvas .sequence-participant-selected rect,
+.preview-area__canvas .sequence-participant-selected polygon,
+.preview-area__canvas .sequence-participant-selected path {
+  stroke: #4338ca !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 10px rgba(79, 70, 229, 0.35));
+}
+
+.preview-area__canvas .sequence-message-selected {
+  stroke: #4338ca !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 10px rgba(79, 70, 229, 0.35));
+}
+
+.preview-area__canvas .sequence-message-hovered {
+  stroke: #6366f1 !important;
+  stroke-width: 3px !important;
+}
+
+.preview-area__canvas .sequence-message-text-selected,
+.preview-area__canvas .sequence-message-text-hovered {
+  fill: #1f2a6b !important;
+  font-weight: 600 !important;
+}
+
+.sequence-toolbar {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 12px));
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 6px 8px;
+  box-shadow: var(--shadow-md);
+  z-index: 550;
+  animation: fadeScaleIn var(--transition-fast) both;
+}

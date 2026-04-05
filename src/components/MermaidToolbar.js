@@ -17,6 +17,8 @@ Vue.component('mermaid-toolbar', {
   },
   methods: {
     addNode:         function () { this.$emit('add-node'); },
+    addSequenceParticipant: function () { this.$emit('add-sequence-participant'); },
+    addSequenceMessage: function () { this.$emit('add-sequence-message'); },
     undo:            function () { this.$emit('undo'); },
     redo:            function () { this.$emit('redo'); },
     changeDirection: function (e) { this.$emit('change-direction', e.target.value); },
@@ -31,6 +33,12 @@ Vue.component('mermaid-toolbar', {
       <div class="toolbar__group">\
         <button v-if="isFlowchart" class="toolbar__btn" @click="addNode" title="Add Node (or double-click canvas)">\
           <span class="toolbar__btn-icon">＋</span> Node\
+        </button>\
+        <button v-else class="toolbar__btn" @click="addSequenceParticipant" title="Add participant">\
+          <span class="toolbar__btn-icon">＋</span> Participant\
+        </button>\
+        <button v-if="!isFlowchart" class="toolbar__btn" @click="addSequenceMessage" title="Add message">\
+          <span class="toolbar__btn-icon">↔</span> Message\
         </button>\
       </div>\
       <div v-if="isFlowchart" class="toolbar__separator"></div>\

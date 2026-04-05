@@ -13,8 +13,11 @@ Vue.component('mermaid-live-editor', {
 
       selectedNode: '',
       selectedEdge: null,
+      selectedSequenceParticipant: '',
+      selectedSequenceMessage: null,
       syncSource:   null,
       nodeCounter:  0,
+      participantCounter: 0,
 
       resizing:    false,
       editorWidth: 38,
@@ -55,6 +58,7 @@ Vue.component('mermaid-live-editor', {
     var self = this;
     this.$nextTick(function () {
       self.updateNodeCounter();
+      self.updateParticipantCounter();
     });
 
     // script 변경 시 600ms debounce 후 자동 저장
@@ -71,6 +75,53 @@ Vue.component('mermaid-live-editor', {
 
   methods: {
 
+    _normalizeSequenceMessages: function (messages) {
+      var result = [];
+      var activeCounts = {};
+
+      var splitOperator = function (operator) {
+        var suffix = '';
+        var base = operator || '->>';
+        if (/[+-]$/.test(base)) {
+          suffix = base.slice(-1);
+          base = base.slice(0, -1);
+        }
+        return { base: base, suffix: suffix };
+      };
+
+      for (var i = 0; i < messages.length; i++) {
+        var msg = Object.assign({}, messages[i]);
+        var parts = splitOperator(msg.operator);
+
+        // "+": target participant 활성화
+        if (parts.suffix === '+') {
+          activeCounts[msg.to] = (activeCounts[msg.to] || 0) + 1;
+        }
+
+        // "-": source participant가 실제로 active일 때만 유지한다.
+        if (parts.suffix === '-') {
+          if (activeCounts[msg.from] > 0) {
+            activeCounts[msg.from]--;
+          } else {
+            msg.operator = parts.base;
+          }
+        }
+
+        result.push(msg);
+      }
+
+      return result;
+    },
+
+    _updateSequenceModel: function (patch) {
+      var nextModel = Object.assign({}, this.model, patch);
+      if (nextModel.messages) {
+        nextModel.messages = this._normalizeSequenceMessages(nextModel.messages);
+      }
+      this.model = nextModel;
+      this.updateScriptFromModel();
+    },
+
     // ── 스냅샷 헬퍼 ───────────────────────────────────────────────
     _snapshot: function () {
       if (this.history) this.history.snapshot(this.model);
@@ -78,20 +129,24 @@ Vue.component('mermaid-live-editor', {
 
     // ── Script → Model ────────────────────────────────────────────
     onScriptChange: function (newScript) {
-      // GUI 쪽에서 script를 다시 생성한 직후에는 역파싱 루프를 막는다.
-      if (this.syncSource === 'gui') {
+      // GUI 직후 editor가 같은 값을 다시 emit하는 경우만 무시한다.
+      // 값이 실제로 달라졌다면 사용자가 편집한 것이므로 바로 파싱해야 한다.
+      if (this.syncSource === 'gui' && newScript === this.script) {
         this.syncSource = null;
         return;
       }
+      this.syncSource = null;
       this.script = newScript;
       this.parseScript();
     },
 
     parseScript: function () {
       try {
-        this.model = MermaidParser.parse(this.script);
+        var parsed = MermaidParser.parse(this.script);
+        this.model = parsed;
         this.error = '';
         this.updateNodeCounter();
+        this.updateParticipantCounter();
       } catch (e) {
         this.error = e.message || 'Parse error';
       }
@@ -116,6 +171,18 @@ Vue.component('mermaid-live-editor', {
         }
       }
       if (max > this.nodeCounter) this.nodeCounter = max;
+    },
+
+    updateParticipantCounter: function () {
+      var participants = (this.model && this.model.participants) || [];
+      var max = 0;
+      for (var i = 0; i < participants.length; i++) {
+        var pm = String(participants[i].id || '').match(/(\d+)$/);
+        if (!pm) continue;
+        var n = parseInt(pm[1], 10);
+        if (n > max) max = n;
+      }
+      if (max > this.participantCounter) this.participantCounter = max;
     },
 
     // ── GUI 액션 ─────────────────────────────────────────────────
@@ -143,6 +210,51 @@ Vue.component('mermaid-live-editor', {
       this.updateScriptFromModel();
     },
 
+    addSequenceParticipant: function () {
+      if (this.isFlowchart) return;
+      this._snapshot();
+      this.participantCounter++;
+      var id = 'P' + this.participantCounter;
+      var participants = (this.model.participants || []).slice();
+      participants.push({ id: id, label: 'Participant ' + this.participantCounter });
+      this._updateSequenceModel({ participants: participants });
+    },
+
+    addSequenceMessage: function (payload) {
+      if (this.isFlowchart) return;
+      var participants = this.model.participants || [];
+      if (participants.length < 2) return;
+
+      this._snapshot();
+      var fromId = participants[0].id;
+      var toId = participants[1].id;
+
+      if (payload && payload.participantId) {
+        fromId = payload.participantId;
+        for (var i = 0; i < participants.length; i++) {
+          if (participants[i].id === payload.participantId) {
+            toId = participants[(i + 1) % participants.length].id;
+            break;
+          }
+        }
+      }
+
+      var messages = (this.model.messages || []).slice();
+      var insertAt = messages.length;
+      if (payload && payload.afterIndex !== null && payload.afterIndex !== undefined) {
+        insertAt = Math.min(messages.length, payload.afterIndex + 1);
+      }
+
+      messages.splice(insertAt, 0, {
+        from: fromId,
+        to: toId,
+        operator: '->>',
+        text: 'Message'
+      });
+
+      this._updateSequenceModel({ messages: messages });
+    },
+
     deleteSelected: function (data) {
       if (!data) return;
       this._snapshot();
@@ -158,13 +270,32 @@ Vue.component('mermaid-live-editor', {
         var ec = this.model.edges.slice();
         ec.splice(data.edgeIndex, 1);
         this.model = Object.assign({}, this.model, { edges: ec });
+      } else if (!this.isFlowchart && data.sequenceParticipantId) {
+        var participants = (this.model.participants || []).filter(function (p) {
+          return p.id !== data.sequenceParticipantId;
+        });
+        var messages = (this.model.messages || []).filter(function (m) {
+          return m.from !== data.sequenceParticipantId && m.to !== data.sequenceParticipantId;
+        });
+        this._updateSequenceModel({
+          participants: participants,
+          messages: messages
+        });
+      } else if (!this.isFlowchart && data.sequenceMessageIndex !== null && data.sequenceMessageIndex !== undefined) {
+        var mc = (this.model.messages || []).slice();
+        mc.splice(data.sequenceMessageIndex, 1);
+        this._updateSequenceModel({ messages: mc });
       } else {
         return;
       }
 
       this.selectedNode = '';
       this.selectedEdge = null;
-      this.updateScriptFromModel();
+      this.selectedSequenceParticipant = '';
+      this.selectedSequenceMessage = null;
+      if (this.isFlowchart) {
+        this.updateScriptFromModel();
+      }
     },
 
     updateNodeText: function (data) {
@@ -204,6 +335,46 @@ Vue.component('mermaid-live-editor', {
       this.updateScriptFromModel();
     },
 
+    updateSequenceParticipantText: function (data) {
+      if (this.isFlowchart) return;
+      this._snapshot();
+      var participants = (this.model.participants || []).map(function (p) {
+        return p.id === data.participantId ? Object.assign({}, p, { label: data.text }) : p;
+      });
+      this._updateSequenceModel({ participants: participants });
+    },
+
+    updateSequenceMessageText: function (data) {
+      if (this.isFlowchart) return;
+      this._snapshot();
+      var messages = (this.model.messages || []).map(function (m, idx) {
+        return idx === data.index ? Object.assign({}, m, { text: data.text }) : m;
+      });
+      this._updateSequenceModel({ messages: messages });
+    },
+
+    reverseSequenceMessage: function (index) {
+      if (this.isFlowchart) return;
+      this._snapshot();
+      var messages = (this.model.messages || []).map(function (m, idx) {
+        if (idx !== index) return m;
+        return Object.assign({}, m, { from: m.to, to: m.from });
+      });
+      this._updateSequenceModel({ messages: messages });
+    },
+
+    toggleSequenceMessageLineType: function (index) {
+      if (this.isFlowchart) return;
+      this._snapshot();
+      var messages = (this.model.messages || []).map(function (m, idx) {
+        if (idx !== index) return m;
+        return Object.assign({}, m, {
+          operator: SequenceSvgHandler.toggleMessageLineType(m)
+        });
+      });
+      this._updateSequenceModel({ messages: messages });
+    },
+
     // ── Undo / Redo ──────────────────────────────────────────────
 
     undo: function () {
@@ -234,6 +405,16 @@ Vue.component('mermaid-live-editor', {
     onEdgeSelected: function (edgeIdx) {
       this.selectedEdge = this.model.edges[edgeIdx] || null;
       this.selectedNode = '';
+    },
+
+    onSequenceParticipantSelected: function (participantId) {
+      this.selectedSequenceParticipant = participantId;
+      this.selectedSequenceMessage = null;
+    },
+
+    onSequenceMessageSelected: function (messageIndex) {
+      this.selectedSequenceMessage = (this.model.messages || [])[messageIndex] || null;
+      this.selectedSequenceParticipant = '';
     },
 
     // ── 툴바 액션 연결 ───────────────────────────────────────────
@@ -355,6 +536,8 @@ Vue.component('mermaid-live-editor', {
             :can-undo="canUndo"\
             :can-redo="canRedo"\
             @add-node="addNode"\
+            @add-sequence-participant="addSequenceParticipant"\
+            @add-sequence-message="addSequenceMessage"\
             @undo="undo"\
             @redo="redo"\
             @change-direction="changeDirection"\
@@ -368,12 +551,19 @@ Vue.component('mermaid-live-editor', {
             :model="model"\
             @add-node="addNode"\
             @add-edge="addEdge"\
+            @add-sequence-message="addSequenceMessage"\
             @delete-selected="deleteSelected"\
             @update-node-text="updateNodeText"\
             @update-node-shape="updateNodeShape"\
             @update-edge-text="updateEdgeText"\
+            @update-sequence-participant-text="updateSequenceParticipantText"\
+            @update-sequence-message-text="updateSequenceMessageText"\
+            @reverse-sequence-message="reverseSequenceMessage"\
+            @toggle-sequence-message-line-type="toggleSequenceMessageLineType"\
             @node-selected="onNodeSelected"\
             @edge-selected="onEdgeSelected"\
+            @sequence-participant-selected="onSequenceParticipantSelected"\
+            @sequence-message-selected="onSequenceMessageSelected"\
             @undo="undo"\
             @redo="redo"\
           ></mermaid-preview>\
