@@ -50,6 +50,23 @@
       var ids = Object.keys(participantMap);
       var rows = (insertSlots && insertSlots.length) ? insertSlots : [];
 
+      // 참가자가 1명뿐인 경우에는 hover 없이 기본 self-message 슬롯을 바로 보여 준다.
+      if (ids.length === 1) {
+        var onlyParticipant = participantMap[ids[0]];
+        if (onlyParticipant) {
+          var gapMidY = (onlyParticipant.lifelineTopY + onlyParticipant.lifelineBottomY) / 2;
+          if (onlyParticipant.topBox && onlyParticipant.bottomBox) {
+            gapMidY = (onlyParticipant.topBox.y + onlyParticipant.topBox.height + onlyParticipant.bottomBox.y) / 2;
+          }
+          var singleSlot = {
+            y: gapMidY,
+            insertIndex: 0
+          };
+          this._addHandle(svgEl, onlyParticipant, singleSlot, participantMap, ctx);
+        }
+        return;
+      }
+
       for (var i = 0; i < ids.length; i++) {
         this._attachHoverZone(svgEl, participantMap[ids[i]], rows, participantMap, ctx);
       }

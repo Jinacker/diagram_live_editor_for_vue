@@ -63,7 +63,6 @@
     collectParticipants: function (svgEl, model) {
       var participants = model.participants || [];
       var candidates = collectParticipantCandidateEls(svgEl);
-      var bottomCandidates = svgEl.querySelectorAll('.actor-bottom, g[class*="actor-bottom"]');
       var byId = {};
       var used = [];
 
@@ -84,6 +83,8 @@
             label: participant.label || participant.id,
             el: el,
             bbox: bbox,
+            topBox: bbox,
+            bottomBox: null,
             cx: bbox.x + bbox.width / 2,
             handleY: bbox.y + bbox.height + 22,
             lifelineTopY: bbox.y + bbox.height,
@@ -113,6 +114,8 @@
           label: current.label || current.id,
           el: fallback,
           bbox: fb,
+          topBox: fb,
+          bottomBox: null,
           cx: fb.x + fb.width / 2,
           handleY: fb.y + fb.height + 22,
           lifelineTopY: fb.y + fb.height,
@@ -120,19 +123,24 @@
         };
       }
 
-      // 아래 actor box가 있으면 lifeline 하단을 더 정확히 잡는다.
-      for (var b = 0; b < bottomCandidates.length; b++) {
-        var bottomEl = bottomCandidates[b];
-        var bottomLabel = readLabel(bottomEl);
-        if (!bottomLabel) continue;
-        for (var id in byId) {
-          if (normalizeText(byId[id].label) !== bottomLabel) continue;
+      // Mermaid 테마/버전에 따라 actor-bottom 클래스가 없을 수 있으므로
+      // 같은 라벨의 박스들 중 가장 위/아래를 직접 찾아 top/bottom box로 확정한다.
+      for (var id in byId) {
+        var matchedBoxes = [];
+        for (var c = 0; c < candidates.length; c++) {
+          var candidateEl = candidates[c];
+          if (normalizeText(readLabel(candidateEl)) !== normalizeText(byId[id].label)) continue;
           try {
-            var bb = bottomEl.getBBox();
-            byId[id].lifelineBottomY = bb.y;
+            matchedBoxes.push(candidateEl.getBBox());
           } catch (e3) {}
-          break;
         }
+
+        if (!matchedBoxes.length) continue;
+        matchedBoxes.sort(function (a, b) { return a.y - b.y; });
+        byId[id].topBox = matchedBoxes[0];
+        byId[id].bottomBox = matchedBoxes[matchedBoxes.length - 1];
+        byId[id].lifelineTopY = byId[id].topBox.y + byId[id].topBox.height;
+        byId[id].lifelineBottomY = byId[id].bottomBox.y;
       }
 
       return byId;
@@ -298,7 +306,10 @@
       var MIN_SLOT_GAP = 34;
 
       if (!rows.length) {
-        slots.push({ y: topY + 32, insertIndex: 0 });
+        slots.push({
+          y: (topY + bottomY) / 2,
+          insertIndex: 0
+        });
         return slots;
       }
 

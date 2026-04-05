@@ -224,11 +224,11 @@ Vue.component('mermaid-live-editor', {
     addSequenceMessage: function (payload) {
       if (this.isFlowchart) return;
       var participants = this.model.participants || [];
-      if (participants.length < 2) return;
+      if (!participants.length) return;
 
       this._snapshot();
       var fromId = participants[0].id;
-      var toId = participants[1].id;
+      var toId = participants[Math.min(1, participants.length - 1)].id;
       var messageText = 'Message';
 
       if (payload && payload.fromId) fromId = payload.fromId;
