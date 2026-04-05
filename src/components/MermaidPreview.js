@@ -622,17 +622,25 @@ Vue.component('mermaid-preview', {
     // ==================== NODE EDIT & UTILS ====================
 
     extractNodeId: function (nodeEl) {
+      if (!nodeEl) return null;
       var dataId = nodeEl.getAttribute('data-id');
       if (dataId) return dataId;
-      var id = nodeEl.id;
-      if (id) {
-        var parts = id.split('-');
-        if (parts.length >= 2) {
-          return parts.slice(1, -1).join('-') || parts[1];
-        }
-        return id;
-      }
-      return null;
+      var id = nodeEl.getAttribute('id');
+      if (!id) return null;
+
+      // Extract the actual base ID.
+      // Mermaid v11 generates IDs like: mermaid-render-4_flowchart-Start-1
+      // 1. Remove the instance prefix (anything before 'flowchart-')
+      var flowchartIdx = id.indexOf('flowchart-');
+      var baseId = flowchartIdx !== -1 ? id.substring(flowchartIdx) : id;
+      
+      // 2. Remove the standard 'flowchart-' prefix
+      baseId = baseId.replace(/^flowchart-/, '');
+      
+      // 3. Remove the suffix counter (e.g. '-1', '-24')
+      baseId = baseId.replace(/-\d+$/, '');
+      
+      return baseId;
     },
 
     getSVGPoint: function (svgEl, evt) {
