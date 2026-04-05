@@ -979,6 +979,14 @@ body {
   animation: dashOffset 0.8s linear infinite;
 }
 
+.sequence-target-line {
+  stroke: #1d4ed8;
+  stroke-width: 6px;
+  stroke-linecap: round;
+  opacity: 0.35;
+  filter: drop-shadow(0 0 10px rgba(29, 78, 216, 0.45));
+}
+
 .preview-area__canvas .sequence-participant-drag-target rect,
 .preview-area__canvas .sequence-participant-drag-target polygon,
 .preview-area__canvas .sequence-participant-drag-target path {

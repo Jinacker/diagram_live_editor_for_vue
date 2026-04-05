@@ -20,6 +20,12 @@
         rankSpacing: 50,
         useMaxWidth: false
       },
+      sequence: {
+        useMaxWidth: false,
+        diagramMarginY: 40,
+        actorMargin: 80,
+        messageMargin: 48
+      },
       themeVariables: {
         darkMode: true,
         background: '#1c1f2e',

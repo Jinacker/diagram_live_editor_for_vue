@@ -256,30 +256,67 @@
       var topY = sample.lifelineTopY + 18;
       var bottomY = sample.lifelineBottomY - 18;
 
+      var MIN_SLOT_GAP = 34;
+
       if (!rows.length) {
-        slots.push({ y: topY + 28, insertIndex: 0 });
+        slots.push({ y: topY + 32, insertIndex: 0 });
         return slots;
       }
 
       slots.push({
-        y: (topY + rows[0]) / 2,
+        y: Math.max(topY + 12, rows[0] - 48),
         insertIndex: 0
       });
 
       for (var r = 0; r < rows.length - 1; r++) {
+        var midY = (rows[r] + rows[r + 1]) / 2;
         slots.push({
-          y: (rows[r] + rows[r + 1]) / 2,
+          y: midY,
           insertIndex: r + 1
         });
       }
 
       // 맨 아래보다는 중간 삽입을 우선하지만, 마지막 뒤에 추가할 슬롯도 유지한다.
       slots.push({
-        y: (rows[rows.length - 1] + bottomY) / 2,
+        y: Math.min(bottomY - 12, rows[rows.length - 1] + 48),
         insertIndex: rows.length
       });
 
-      return slots;
+      // 맨 위/맨 아래 슬롯은 항상 유지하고,
+      // 중간 슬롯끼리만 합쳐 + 버튼 겹침을 줄인다.
+      if (slots.length <= 2) return slots;
+
+      var deduped = [slots[0]];
+      for (var s = 1; s < slots.length - 1; s++) {
+        var current = slots[s];
+        var prev = deduped[deduped.length - 1];
+        if (prev !== slots[0] && Math.abs(current.y - prev.y) < MIN_SLOT_GAP) {
+          prev.y = (prev.y + current.y) / 2;
+          prev.insertIndex = Math.max(prev.insertIndex, current.insertIndex);
+        } else {
+          deduped.push(current);
+        }
+      }
+      deduped.push(slots[slots.length - 1]);
+
+      // 끝 슬롯은 항상 남기되, 바로 옆 슬롯과 최소 간격을 강제로 확보한다.
+      if (deduped.length >= 2) {
+        var first = deduped[0];
+        var second = deduped[1];
+        if (Math.abs(second.y - first.y) < MIN_SLOT_GAP) {
+          first.y = Math.max(topY + 8, second.y - MIN_SLOT_GAP);
+        }
+      }
+
+      if (deduped.length >= 2) {
+        var last = deduped[deduped.length - 1];
+        var beforeLast = deduped[deduped.length - 2];
+        if (Math.abs(last.y - beforeLast.y) < MIN_SLOT_GAP) {
+          last.y = Math.min(bottomY - 8, beforeLast.y + MIN_SLOT_GAP);
+        }
+      }
+
+      return deduped;
     },
 
     refineParticipantLifelines: function (participantMap, messages) {
@@ -300,8 +337,10 @@
       for (var j = 0; j < ids.length; j++) {
         var participant = participantMap[ids[j]];
         if (!participant) continue;
-        participant.lifelineTopY = topY;
-        participant.lifelineBottomY = bottomY;
+        // 실제 보이는 lifeline 범위는 유지하되,
+        // 메시지 구간이 그 안에 포함되도록만 보정한다.
+        participant.lifelineTopY = Math.min(participant.lifelineTopY, topY);
+        participant.lifelineBottomY = Math.max(participant.lifelineBottomY, bottomY);
       }
 
       return participantMap;

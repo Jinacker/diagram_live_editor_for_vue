@@ -4,8 +4,10 @@
   var SequenceMessageDragHandler = {
     _overlay: null,
     _dragLine: null,
+    _targetLine: null,
     _handles: [],
     _hoverTargets: [],
+    _dragging: false,
 
     initOverlay: function (svgEl) {
       var old = svgEl.querySelector('#sequence-drag-overlay');
@@ -26,8 +28,17 @@
       dragLine.style.pointerEvents = 'none';
       overlay.appendChild(dragLine);
       this._dragLine = dragLine;
+
+      var targetLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      targetLine.setAttribute('class', 'sequence-target-line');
+      targetLine.style.display = 'none';
+      targetLine.style.pointerEvents = 'none';
+      overlay.appendChild(targetLine);
+      this._targetLine = targetLine;
+
       this._handles = [];
       this._hoverTargets = [];
+      this._dragging = false;
     },
 
     attach: function (svgEl, participantMap, insertSlots, ctx) {
@@ -58,6 +69,7 @@
       this._overlay.appendChild(zone);
 
       zone.addEventListener('mouseenter', function () {
+        if (self._dragging) return;
         self.clearHandles();
         for (var i = 0; i < slots.length; i++) {
           self._addHandle(svgEl, participant, slots[i], participantMap, ctx);
@@ -116,6 +128,8 @@
     _startDrag: function (svgEl, fromId, startX, startY, insertIndex, participantMap, ctx) {
       var self = this;
       this._bringOverlayToFront(svgEl);
+      this._dragging = true;
+      this.clearHandles();
 
       this._dragLine.setAttribute('x1', startX);
       this._dragLine.setAttribute('y1', startY);
@@ -132,9 +146,9 @@
 
         var target = self._findTarget(svgPt.x, svgPt.y, fromId, startY, participantMap);
         if (target !== currentTarget) {
-          if (currentTarget) self._clearTargetHighlight(participantMap[currentTarget].el);
+          if (currentTarget) self._clearTargetHighlight(participantMap[currentTarget]);
           currentTarget = target;
-          if (currentTarget) self._highlightTarget(participantMap[currentTarget].el);
+          if (currentTarget) self._highlightTarget(participantMap[currentTarget]);
         }
       };
 
@@ -142,12 +156,14 @@
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         self._dragLine.style.display = 'none';
+        self._targetLine.style.display = 'none';
+        self._dragging = false;
 
-        if (currentTarget) self._clearTargetHighlight(participantMap[currentTarget].el);
+        if (currentTarget) self._clearTargetHighlight(participantMap[currentTarget]);
 
         var svgPt = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
         var target = self._findTarget(svgPt.x, svgPt.y, fromId, startY, participantMap);
-        if (target && target !== fromId) {
+        if (target) {
           ctx.emit('add-sequence-message', {
             fromId: fromId,
             toId: target,
@@ -170,7 +186,6 @@
 
       for (var i = 0; i < ids.length; i++) {
         var id = ids[i];
-        if (id === fromId) continue;
         var p = participantMap[id];
         if (!p || !p.bbox) continue;
 
@@ -187,11 +202,26 @@
     },
 
     _highlightTarget: function (el) {
-      if (el) el.classList.add('sequence-participant-drag-target');
+      if (!el) return;
+      if (el.el) {
+        el.el.classList.add('sequence-participant-drag-target');
+        this._targetLine.setAttribute('x1', el.cx);
+        this._targetLine.setAttribute('x2', el.cx);
+        this._targetLine.setAttribute('y1', el.lifelineTopY);
+        this._targetLine.setAttribute('y2', el.lifelineBottomY);
+        this._targetLine.style.display = '';
+        return;
+      }
+      el.classList.add('sequence-participant-drag-target');
     },
 
     _clearTargetHighlight: function (el) {
-      if (el) el.classList.remove('sequence-participant-drag-target');
+      if (!el) return;
+      if (el.el) {
+        el.el.classList.remove('sequence-participant-drag-target');
+        return;
+      }
+      el.classList.remove('sequence-participant-drag-target');
     },
 
     clearHandles: function () {
