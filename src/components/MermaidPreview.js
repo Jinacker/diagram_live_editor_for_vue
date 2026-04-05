@@ -126,16 +126,30 @@ Vue.component('mermaid-preview', {
 
     // ── 렌더링 ───────────────────────────────────────────────────
 
+    _hasRenderableContent: function (model) {
+      if (!model) return false;
+      if (model.type === 'sequenceDiagram') {
+        return !!((model.participants && model.participants.length) || (model.messages && model.messages.length));
+      }
+      return !!((model.nodes && model.nodes.length) || (model.edges && model.edges.length));
+    },
+
+    _isScriptHeaderOnly: function (script) {
+      var trimmed = (script || '').trim();
+      return /^flowchart\s+(TD|TB|BT|LR|RL)\s*$/i.test(trimmed) ||
+        /^sequenceDiagram\s*$/i.test(trimmed);
+    },
+
     renderDiagram: function () {
       var m = this.model;
-      if (!m || (!m.nodes.length && !m.edges.length)) {
+      if (!this._hasRenderableContent(m)) {
         this.svgContent  = '';
         this.renderError = '';
         return;
       }
 
       var script = MermaidGenerator.generate(m);
-      if (!script || /^flowchart\s+(TD|LR|BT|RL)\s*$/.test(script.trim())) {
+      if (!script || this._isScriptHeaderOnly(script)) {
         this.svgContent = '';
         this._svgEl = null;
         this._baseViewBox = null;
@@ -176,23 +190,31 @@ Vue.component('mermaid-preview', {
       this._setupViewport(svgEl, canvas);
 
       // 노드 위치와 SVG 요소 수집
-      var collected    = SvgPositionTracker.collectNodePositions(svgEl);
-      this._positions  = collected.positions;
-      this._elements   = collected.elements;
-      this._edgePaths  = SvgPositionTracker.collectEdgePaths(svgEl, this.model.edges);
+      var isFlowchart = this.model && this.model.type !== 'sequenceDiagram';
 
-      // 하위 핸들러에 넘길 bridge 객체 구성
-      var ctx = this._buildCtx(svgEl);
+      if (isFlowchart) {
+        var collected    = SvgPositionTracker.collectNodePositions(svgEl);
+        this._positions  = collected.positions;
+        this._elements   = collected.elements;
+        this._edgePaths  = SvgPositionTracker.collectEdgePaths(svgEl, this.model.edges);
 
-      // 엣지 ghost overlay를 먼저 구성
-      SvgEdgeHandler.initGhostOverlay(svgEl);
-      SvgEdgeHandler.attach(svgEl, this._edgePaths, this._positions, ctx);
+        // 하위 핸들러에 넘길 bridge 객체 구성
+        var ctx = this._buildCtx(svgEl);
 
-      // 포트 overlay는 ghost보다 위에 올라온다.
-      PortDragHandler.initOverlay(svgEl);
+        // 엣지 ghost overlay를 먼저 구성
+        SvgEdgeHandler.initGhostOverlay(svgEl);
+        SvgEdgeHandler.attach(svgEl, this._edgePaths, this._positions, ctx);
 
-      // 노드 인터랙션 연결
-      SvgNodeHandler.attach(svgEl, this._positions, this._elements, ctx);
+        // 포트 overlay는 ghost보다 위에 올라온다.
+        PortDragHandler.initOverlay(svgEl);
+
+        // 노드 인터랙션 연결
+        SvgNodeHandler.attach(svgEl, this._positions, this._elements, ctx);
+      } else {
+        this._positions = {};
+        this._elements = {};
+        this._edgePaths = [];
+      }
 
       // 배경 클릭 시 선택 해제
       var self = this;
@@ -206,6 +228,7 @@ Vue.component('mermaid-preview', {
 
       // 배경 더블클릭 시 노드 추가
       svgEl.addEventListener('dblclick', function (e) {
+        if (!isFlowchart) return;
         var t = e.target;
         var isBackground = t === svgEl ||
           (t.tagName && t.tagName.toLowerCase() === 'svg') ||
@@ -603,8 +626,8 @@ Vue.component('mermaid-preview', {
       <div v-if="svgContent" ref="canvas" class="preview-area__canvas" v-html="svgContent"></div>\
       <div v-else class="preview-area__empty">\
         <div class="preview-area__empty-icon">◇</div>\
-        <div class="preview-area__empty-text">Add nodes or write Mermaid script</div>\
-        <div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">Double-click canvas to add a node</div>\
+        <div class="preview-area__empty-text">Mermaid 스크립트를 입력하면 여기에 렌더링됩니다</div>\
+        <div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">플로우차트와 시퀀스 다이어그램을 지원합니다</div>\
       </div>\
       \
       <!-- Node inline edit -->\

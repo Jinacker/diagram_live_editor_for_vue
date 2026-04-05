@@ -6,7 +6,8 @@
 Vue.component('mermaid-editor', {
   props: {
     value: { type: String, default: '' },
-    error: { type: String, default: '' }
+    error: { type: String, default: '' },
+    diagramType: { type: String, default: 'flowchart' }
   },
   data: function () {
     return {
@@ -28,6 +29,15 @@ Vue.component('mermaid-editor', {
     },
     charCount: function () {
       return this.localValue ? this.localValue.length : 0;
+    },
+    placeholderText: function () {
+      if (this.diagramType === 'sequenceDiagram') {
+        return 'sequenceDiagram\n    Alice->>+John: Hello John, how are you?\n    John-->>-Alice: Hi Alice, I can hear you!';
+      }
+      return 'flowchart TD\n    A[Start] --> B[Process]\n    B --> C[End]';
+    },
+    statusText: function () {
+      return this.diagramType === 'sequenceDiagram' ? 'Mermaid Sequence Diagram' : 'Mermaid Flowchart';
     }
   },
   methods: {
@@ -69,7 +79,7 @@ Vue.component('mermaid-editor', {
           :value="localValue"\
           @input="onInput"\
           @keydown="onKeyDown"\
-          placeholder="flowchart TD\n    A[Start] --> B[Process]\n    B --> C[End]"\
+          :placeholder="placeholderText"\
           spellcheck="false"\
         ></textarea>\
         <div v-if="error" class="code-editor__error">\
@@ -77,7 +87,7 @@ Vue.component('mermaid-editor', {
         </div>\
         <div class="code-editor__status">\
           <span>Lines: {{ lineCount }} | Chars: {{ charCount }}</span>\
-          <span>Mermaid Flowchart</span>\
+          <span>{{ statusText }}</span>\
         </div>\
       </div>\
     </div>\

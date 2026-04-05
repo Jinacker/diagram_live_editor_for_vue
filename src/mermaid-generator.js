@@ -56,6 +56,9 @@
    */
   function generateMermaid(model) {
     if (!model) return '';
+    if (model.type === 'sequenceDiagram' && global.SequenceGenerator) {
+      return global.SequenceGenerator.generate(model);
+    }
 
     var lines = [];
     var direction = model.direction || 'TD';

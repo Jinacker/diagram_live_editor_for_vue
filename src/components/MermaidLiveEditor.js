@@ -32,7 +32,10 @@ Vue.component('mermaid-live-editor', {
 
   computed: {
     canUndo: function () { return !!(this.history && this.history.canUndo()); },
-    canRedo: function () { return !!(this.history && this.history.canRedo()); }
+    canRedo: function () { return !!(this.history && this.history.canRedo()); },
+    isFlowchart: function () {
+      return !!this.model && this.model.type !== 'sequenceDiagram';
+    }
   },
 
   mounted: function () {
@@ -118,6 +121,7 @@ Vue.component('mermaid-live-editor', {
     // ── GUI 액션 ─────────────────────────────────────────────────
 
     addNode: function (shape) {
+      if (!this.isFlowchart) return;
       this._snapshot();
       if (!shape) shape = 'rect';
       // 새 노드 id는 단순 증가 방식으로 발급한다.
@@ -131,6 +135,7 @@ Vue.component('mermaid-live-editor', {
     },
 
     addEdge: function (data) {
+      if (!this.isFlowchart) return;
       this._snapshot();
       var edges = this.model.edges.slice();
       edges.push({ from: data.from, to: data.to, text: '', type: '-->' });
@@ -143,16 +148,18 @@ Vue.component('mermaid-live-editor', {
       this._snapshot();
 
       // node 삭제는 연결된 edge까지 같이 정리해야 모델이 깨지지 않는다.
-      if (data.nodeId) {
+      if (this.isFlowchart && data.nodeId) {
         var nodes = this.model.nodes.filter(function (n) { return n.id !== data.nodeId; });
         var edges = this.model.edges.filter(function (e) {
           return e.from !== data.nodeId && e.to !== data.nodeId;
         });
         this.model = Object.assign({}, this.model, { nodes: nodes, edges: edges });
-      } else if (data.edgeIndex !== null && data.edgeIndex !== undefined) {
+      } else if (this.isFlowchart && data.edgeIndex !== null && data.edgeIndex !== undefined) {
         var ec = this.model.edges.slice();
         ec.splice(data.edgeIndex, 1);
         this.model = Object.assign({}, this.model, { edges: ec });
+      } else {
+        return;
       }
 
       this.selectedNode = '';
@@ -161,6 +168,7 @@ Vue.component('mermaid-live-editor', {
     },
 
     updateNodeText: function (data) {
+      if (!this.isFlowchart) return;
       this._snapshot();
       var nodes = this.model.nodes.map(function (n) {
         return n.id === data.nodeId ? Object.assign({}, n, { text: data.text }) : n;
@@ -170,6 +178,7 @@ Vue.component('mermaid-live-editor', {
     },
 
     updateNodeShape: function (data) {
+      if (!this.isFlowchart) return;
       this._snapshot();
       var nodes = this.model.nodes.map(function (n) {
         return n.id === data.nodeId ? Object.assign({}, n, { shape: data.shape }) : n;
@@ -179,6 +188,7 @@ Vue.component('mermaid-live-editor', {
     },
 
     updateEdgeText: function (data) {
+      if (!this.isFlowchart) return;
       this._snapshot();
       var edges = this.model.edges.map(function (e, idx) {
         return idx === data.index ? Object.assign({}, e, { text: data.text }) : e;
@@ -188,6 +198,7 @@ Vue.component('mermaid-live-editor', {
     },
 
     changeDirection: function (dir) {
+      if (!this.isFlowchart) return;
       this._snapshot();
       this.model = Object.assign({}, this.model, { direction: dir });
       this.updateScriptFromModel();
@@ -327,6 +338,7 @@ Vue.component('mermaid-live-editor', {
         <mermaid-editor\
           :value="script"\
           :error="error"\
+          :diagram-type="model.type"\
           @input="onScriptChange"\
           :style="{ width: editorWidth + \'%\' }"\
         ></mermaid-editor>\
@@ -338,6 +350,7 @@ Vue.component('mermaid-live-editor', {
         <div class="panel panel--preview">\
           <!-- 상단 toolbar는 preview 네비게이션과 편집 액션을 묶는다. -->\
           <mermaid-toolbar\
+            :diagram-type="model.type"\
             :direction="model.direction"\
             :can-undo="canUndo"\
             :can-redo="canRedo"\

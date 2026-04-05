@@ -207,6 +207,11 @@
       return { type: 'flowchart', direction: 'TD', nodes: [], edges: [] };
     }
 
+    var trimmed = script.trim();
+    if (/^sequenceDiagram\b/i.test(trimmed) && global.SequenceParser) {
+      return global.SequenceParser.parse(script);
+    }
+
     var lines = script.split('\n');
     var model = {
       type: 'flowchart',
