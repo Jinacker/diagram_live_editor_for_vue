@@ -494,6 +494,13 @@ Vue.component('mermaid-preview', {
             if (textEl) textEl.classList.toggle('sequence-message-text-selected', val === messageIndex);
           }, { immediate: true });
         },
+        watchSequenceMessageHitSelection: function (messageIndex, hitEl) {
+          self.$watch('selectedSequenceMessageIndex', function (val) {
+            if (hitEl && hitEl.classList) {
+              hitEl.classList.toggle('sequence-hit-selected', val === messageIndex);
+            }
+          }, { immediate: true });
+        },
         focusEditInput: function () {
           self.$nextTick(function () {
             var el = self.$refs.editInput;
@@ -928,7 +935,6 @@ Vue.component('mermaid-preview', {
         @click.stop\
       >\
         <button class="edge-toolbar__btn" @click="sequenceToolbarEdit">✎ Edit</button>\
-        <button v-if="sequenceToolbar.type === \'participant\'" class="edge-toolbar__btn" @click="sequenceToolbarAddMessage">＋ Message</button>\
         <button v-if="sequenceToolbar.type === \'message\'" class="edge-toolbar__btn" @click="sequenceToolbarReverse">↔ Reverse</button>\
         <button v-if="sequenceToolbar.type === \'message\'" class="edge-toolbar__btn" @click="sequenceToolbarToggleLineType">⋯ Line</button>\
         <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="sequenceToolbarDelete">✕ Delete</button>\

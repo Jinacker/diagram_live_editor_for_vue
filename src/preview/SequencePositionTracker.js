@@ -45,10 +45,24 @@
     return results;
   }
 
+  function collectParticipantCandidateEls(svgEl) {
+    var raw = svgEl.querySelectorAll('.actor, .actor-top, .actor-bottom, g[class*="actor"]');
+    var results = [];
+    var seen = [];
+
+    for (var i = 0; i < raw.length; i++) {
+      if (seen.indexOf(raw[i]) !== -1) continue;
+      seen.push(raw[i]);
+      results.push(raw[i]);
+    }
+
+    return results;
+  }
+
   var SequencePositionTracker = {
     collectParticipants: function (svgEl, model) {
       var participants = model.participants || [];
-      var candidates = svgEl.querySelectorAll('.actor, .actor-top, g[class*="actor"]');
+      var candidates = collectParticipantCandidateEls(svgEl);
       var bottomCandidates = svgEl.querySelectorAll('.actor-bottom, g[class*="actor-bottom"]');
       var byId = {};
       var used = [];
@@ -122,6 +136,31 @@
       }
 
       return byId;
+    },
+
+    collectParticipantTargets: function (svgEl, model) {
+      var participants = model.participants || [];
+      var candidates = collectParticipantCandidateEls(svgEl);
+      var targets = [];
+
+      for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        var label = readLabel(el);
+        if (!label) continue;
+
+        for (var p = 0; p < participants.length; p++) {
+          var participant = participants[p];
+          if (normalizeText(participant.label || participant.id) !== label) continue;
+          targets.push({
+            id: participant.id,
+            label: participant.label || participant.id,
+            el: el
+          });
+          break;
+        }
+      }
+
+      return targets;
     },
 
     collectMessages: function (svgEl, model) {

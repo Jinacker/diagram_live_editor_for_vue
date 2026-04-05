@@ -13,20 +13,20 @@
   var SequenceSvgHandler = {
     attach: function (svgEl, model, ctx) {
       var participantMap = SequencePositionTracker.collectParticipants(svgEl, model);
+      var participantTargets = SequencePositionTracker.collectParticipantTargets(svgEl, model);
       var messages = SequencePositionTracker.collectMessages(svgEl, model);
       participantMap = SequencePositionTracker.refineParticipantLifelines(participantMap, messages);
       var insertSlots = SequencePositionTracker.collectInsertSlots(participantMap, messages);
 
       SequenceMessageDragHandler.initOverlay(svgEl);
       SequenceMessageDragHandler.attach(svgEl, participantMap, insertSlots, ctx);
-      SequenceSvgHandler._attachParticipants(participantMap, svgEl, ctx);
+      SequenceSvgHandler._attachParticipants(participantTargets, svgEl, ctx);
       SequenceSvgHandler._attachMessages(messages, svgEl, ctx);
     },
 
-    _attachParticipants: function (participantMap, svgEl, ctx) {
-      var ids = Object.keys(participantMap);
-      for (var i = 0; i < ids.length; i++) {
-        SequenceSvgHandler._attachParticipant(participantMap[ids[i]], svgEl, ctx);
+    _attachParticipants: function (participantTargets, svgEl, ctx) {
+      for (var i = 0; i < participantTargets.length; i++) {
+        SequenceSvgHandler._attachParticipant(participantTargets[i], svgEl, ctx);
       }
     },
 
@@ -113,6 +113,9 @@
       });
 
       ctx.watchSequenceMessageSelection(data.index, visualEl, textEl);
+      if (ctx.watchSequenceMessageHitSelection) {
+        ctx.watchSequenceMessageHitSelection(data.index, hitEl);
+      }
     },
 
     _makeMessageHit: function (svgEl, data) {
@@ -128,6 +131,7 @@
       try {
         if (data.hitBox && data.hitBox.width && data.hitBox.height) {
           var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('class', 'sequence-hit-rect');
           rect.setAttribute('x', data.hitBox.x);
           rect.setAttribute('y', data.hitBox.y);
           rect.setAttribute('width', data.hitBox.width);

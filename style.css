@@ -917,9 +917,9 @@ body {
 }
 
 .preview-area__canvas .sequence-message-selected {
-  stroke: #4338ca !important;
-  stroke-width: 3px !important;
-  filter: drop-shadow(0 0 10px rgba(79, 70, 229, 0.35));
+  stroke: #1d4ed8 !important;
+  stroke-width: 4px !important;
+  filter: drop-shadow(0 0 12px rgba(29, 78, 216, 0.55));
 }
 
 .preview-area__canvas .sequence-message-hovered {
@@ -931,6 +931,18 @@ body {
 .preview-area__canvas .sequence-message-text-hovered {
   fill: #1f2a6b !important;
   font-weight: 600 !important;
+}
+
+.preview-area__canvas .sequence-message-text-selected {
+  fill: #1d4ed8 !important;
+  font-weight: 700 !important;
+}
+
+#sequence-message-hit-overlay .sequence-hit-selected {
+  fill: rgba(29, 78, 216, 0.12) !important;
+  fill-opacity: 1 !important;
+  stroke: rgba(29, 78, 216, 0.35) !important;
+  stroke-width: 1.5px !important;
 }
 
 .sequence-toolbar {
