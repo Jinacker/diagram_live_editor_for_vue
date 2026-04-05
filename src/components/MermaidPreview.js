@@ -406,7 +406,8 @@ Vue.component('mermaid-preview', {
         target.closest('.sequence-toolbar') ||
         target.closest('#conn-port-overlay') ||
         target.closest('#edge-ghost-overlay') ||
-        target.closest('#sequence-message-hit-overlay')
+        target.closest('#sequence-message-hit-overlay') ||
+        target.closest('#sequence-drag-overlay')
       )) {
         return false;
       }
@@ -927,7 +928,7 @@ Vue.component('mermaid-preview', {
         @click.stop\
       >\
         <button class="edge-toolbar__btn" @click="sequenceToolbarEdit">✎ Edit</button>\
-        <button class="edge-toolbar__btn" @click="sequenceToolbarAddMessage">＋ Message</button>\
+        <button v-if="sequenceToolbar.type === \'participant\'" class="edge-toolbar__btn" @click="sequenceToolbarAddMessage">＋ Message</button>\
         <button v-if="sequenceToolbar.type === \'message\'" class="edge-toolbar__btn" @click="sequenceToolbarReverse">↔ Reverse</button>\
         <button v-if="sequenceToolbar.type === \'message\'" class="edge-toolbar__btn" @click="sequenceToolbarToggleLineType">⋯ Line</button>\
         <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="sequenceToolbarDelete">✕ Delete</button>\

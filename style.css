@@ -947,3 +947,42 @@ body {
   z-index: 550;
   animation: fadeScaleIn var(--transition-fast) both;
 }
+
+.sequence-plus-hit {
+  fill: #000;
+  fill-opacity: 0.001;
+  stroke: none;
+}
+
+.sequence-lifeline-hit {
+  fill: #000;
+  fill-opacity: 0.001;
+  stroke: none;
+}
+
+.sequence-plus-btn {
+  fill: #1d4ed8;
+  stroke: #fff;
+  stroke-width: 2px;
+  filter: drop-shadow(0 0 8px rgba(29, 78, 216, 0.35));
+}
+
+.sequence-plus-label {
+  fill: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  user-select: none;
+}
+
+.sequence-drag-line {
+  pointer-events: none;
+  animation: dashOffset 0.8s linear infinite;
+}
+
+.preview-area__canvas .sequence-participant-drag-target rect,
+.preview-area__canvas .sequence-participant-drag-target polygon,
+.preview-area__canvas .sequence-participant-drag-target path {
+  stroke: #1d4ed8 !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 10px rgba(29, 78, 216, 0.35));
+}

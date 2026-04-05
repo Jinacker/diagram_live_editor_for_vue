@@ -22,10 +22,34 @@
     }
   }
 
+  function collectUniqueMessageTextEls(svgEl) {
+    var raw = svgEl.querySelectorAll('.messageText, text[class*="messageText"]');
+    var results = [];
+    var seenTextNodes = [];
+
+    for (var i = 0; i < raw.length; i++) {
+      var candidate = raw[i];
+      var textEl = null;
+
+      if (candidate.tagName && /^(text|tspan)$/i.test(candidate.tagName)) {
+        textEl = candidate;
+      } else if (candidate.querySelector) {
+        textEl = candidate.querySelector('text, tspan');
+      }
+
+      if (!textEl || seenTextNodes.indexOf(textEl) !== -1) continue;
+      seenTextNodes.push(textEl);
+      results.push(textEl);
+    }
+
+    return results;
+  }
+
   var SequencePositionTracker = {
     collectParticipants: function (svgEl, model) {
       var participants = model.participants || [];
       var candidates = svgEl.querySelectorAll('.actor, .actor-top, g[class*="actor"]');
+      var bottomCandidates = svgEl.querySelectorAll('.actor-bottom, g[class*="actor-bottom"]');
       var byId = {};
       var used = [];
 
@@ -45,7 +69,11 @@
             id: participant.id,
             label: participant.label || participant.id,
             el: el,
-            bbox: bbox
+            bbox: bbox,
+            cx: bbox.x + bbox.width / 2,
+            handleY: bbox.y + bbox.height + 22,
+            lifelineTopY: bbox.y + bbox.height,
+            lifelineBottomY: bbox.y + bbox.height + 260
           };
           used.push(p);
           break;
@@ -70,8 +98,27 @@
           id: current.id,
           label: current.label || current.id,
           el: fallback,
-          bbox: fb
+          bbox: fb,
+          cx: fb.x + fb.width / 2,
+          handleY: fb.y + fb.height + 22,
+          lifelineTopY: fb.y + fb.height,
+          lifelineBottomY: fb.y + fb.height + 260
         };
+      }
+
+      // 아래 actor box가 있으면 lifeline 하단을 더 정확히 잡는다.
+      for (var b = 0; b < bottomCandidates.length; b++) {
+        var bottomEl = bottomCandidates[b];
+        var bottomLabel = readLabel(bottomEl);
+        if (!bottomLabel) continue;
+        for (var id in byId) {
+          if (normalizeText(byId[id].label) !== bottomLabel) continue;
+          try {
+            var bb = bottomEl.getBBox();
+            byId[id].lifelineBottomY = bb.y;
+          } catch (e3) {}
+          break;
+        }
       }
 
       return byId;
@@ -79,18 +126,36 @@
 
     collectMessages: function (svgEl, model) {
       var messages = model.messages || [];
-      var textEls = svgEl.querySelectorAll('.messageText, text[class*="messageText"]');
+      var textEls = collectUniqueMessageTextEls(svgEl);
       var lineCandidates = svgEl.querySelectorAll(
         '.messageLine0, .messageLine1, .messageLine2,' +
         'path[class*="messageLine"], line[class*="messageLine"]'
       );
       var results = [];
       var usedLineIdx = {};
+      var textOccurrences = {};
 
       for (var i = 0; i < messages.length; i++) {
-        var textEl = textEls[i] || null;
+        var messageText = normalizeText(messages[i].text);
+        var occurrence = textOccurrences[messageText] || 0;
+        var textEl = null;
         var lineEl = null;
         var bbox = null;
+        var hitBox = null;
+
+        for (var t = 0, seen = 0; t < textEls.length; t++) {
+          if (normalizeText(textEls[t].textContent) !== messageText) continue;
+          if (seen === occurrence) {
+            textEl = textEls[t];
+            break;
+          }
+          seen++;
+        }
+
+        if (!textEl) {
+          textEl = textEls[i] || null;
+        }
+        textOccurrences[messageText] = occurrence + 1;
 
         // Mermaid sequence SVG는 텍스트 순서는 비교적 안정적이지만,
         // 선(path/line) 순서는 activation 등과 섞여 흔들릴 수 있다.
@@ -130,24 +195,116 @@
             var maxX = Math.max(tb.x + tb.width, lb.x + lb.width);
             var maxY = Math.max(tb.y + tb.height, lb.y + lb.height);
             bbox = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+            hitBox = {
+              x: minX - 8,
+              y: (tb.y + tb.height / 2) - 12,
+              width: (maxX - minX) + 16,
+              height: 24
+            };
           } else if (textEl && textEl.getBBox) {
             bbox = textEl.getBBox();
+            hitBox = {
+              x: bbox.x - 8,
+              y: (bbox.y + bbox.height / 2) - 12,
+              width: bbox.width + 16,
+              height: 24
+            };
           } else if (lineEl && lineEl.getBBox) {
             bbox = lineEl.getBBox();
+            hitBox = {
+              x: bbox.x - 8,
+              y: (bbox.y + bbox.height / 2) - 12,
+              width: bbox.width + 16,
+              height: 24
+            };
           }
         } catch (e) {
           bbox = null;
+          hitBox = null;
         }
 
         results.push({
           index: i,
           textEl: textEl,
           lineEl: lineEl,
-          bbox: bbox
+          bbox: bbox,
+          hitBox: hitBox,
+          rowY: hitBox ? (hitBox.y + hitBox.height / 2) : (bbox ? (bbox.y + bbox.height / 2) : null)
         });
       }
 
       return results;
+    },
+
+    collectInsertSlots: function (participantMap, messages) {
+      var rows = [];
+      for (var i = 0; i < messages.length; i++) {
+        if (messages[i] && messages[i].rowY !== null && messages[i].rowY !== undefined) {
+          rows.push(messages[i].rowY);
+        }
+      }
+
+      rows.sort(function (a, b) { return a - b; });
+
+      var ids = Object.keys(participantMap);
+      if (!ids.length) return [];
+
+      var sample = participantMap[ids[0]];
+      if (!sample) return [];
+
+      var slots = [];
+      var topY = sample.lifelineTopY + 18;
+      var bottomY = sample.lifelineBottomY - 18;
+
+      if (!rows.length) {
+        slots.push({ y: topY + 28, insertIndex: 0 });
+        return slots;
+      }
+
+      slots.push({
+        y: (topY + rows[0]) / 2,
+        insertIndex: 0
+      });
+
+      for (var r = 0; r < rows.length - 1; r++) {
+        slots.push({
+          y: (rows[r] + rows[r + 1]) / 2,
+          insertIndex: r + 1
+        });
+      }
+
+      // 맨 아래보다는 중간 삽입을 우선하지만, 마지막 뒤에 추가할 슬롯도 유지한다.
+      slots.push({
+        y: (rows[rows.length - 1] + bottomY) / 2,
+        insertIndex: rows.length
+      });
+
+      return slots;
+    },
+
+    refineParticipantLifelines: function (participantMap, messages) {
+      var rows = [];
+      for (var i = 0; i < messages.length; i++) {
+        if (messages[i] && messages[i].rowY !== null && messages[i].rowY !== undefined) {
+          rows.push(messages[i].rowY);
+        }
+      }
+
+      if (!rows.length) return participantMap;
+
+      rows.sort(function (a, b) { return a - b; });
+      var topY = rows[0] - 26;
+      var bottomY = rows[rows.length - 1] + 26;
+
+      var ids = Object.keys(participantMap);
+      for (var j = 0; j < ids.length; j++) {
+        var participant = participantMap[ids[j]];
+        if (!participant) continue;
+        participant.lifelineTopY = topY;
+        participant.lifelineBottomY = bottomY;
+      }
+
+      return participantMap;
     }
   };
 

@@ -18,6 +18,7 @@
   function parseParticipantLine(line, model) {
     var match = line.match(/^(participant|actor)\s+([A-Za-z0-9_\u3131-\uD79D]+)(?:\s+as\s+(.+))?$/);
     if (!match) return false;
+    model.explicitParticipants = true;
     ensureParticipant(model, match[2], match[3] ? match[3].trim() : match[2]);
     return true;
   }
@@ -42,6 +43,7 @@
     if (!script || typeof script !== 'string') {
       return {
         type: 'sequenceDiagram',
+        explicitParticipants: false,
         participants: [],
         messages: [],
         nodes: [],
@@ -52,6 +54,7 @@
     var lines = script.split('\n');
     var model = {
       type: 'sequenceDiagram',
+      explicitParticipants: false,
       participants: [],
       messages: [],
       nodes: [],

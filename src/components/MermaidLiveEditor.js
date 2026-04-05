@@ -115,6 +115,7 @@ Vue.component('mermaid-live-editor', {
 
     _updateSequenceModel: function (patch) {
       var nextModel = Object.assign({}, this.model, patch);
+      nextModel.explicitParticipants = true;
       if (nextModel.messages) {
         nextModel.messages = this._normalizeSequenceMessages(nextModel.messages);
       }
@@ -228,8 +229,13 @@ Vue.component('mermaid-live-editor', {
       this._snapshot();
       var fromId = participants[0].id;
       var toId = participants[1].id;
+      var messageText = 'Message';
 
-      if (payload && payload.participantId) {
+      if (payload && payload.fromId) fromId = payload.fromId;
+      if (payload && payload.toId) toId = payload.toId;
+      if (payload && payload.text) messageText = payload.text;
+
+      if (payload && payload.participantId && !payload.fromId) {
         fromId = payload.participantId;
         for (var i = 0; i < participants.length; i++) {
           if (participants[i].id === payload.participantId) {
@@ -241,7 +247,9 @@ Vue.component('mermaid-live-editor', {
 
       var messages = (this.model.messages || []).slice();
       var insertAt = messages.length;
-      if (payload && payload.afterIndex !== null && payload.afterIndex !== undefined) {
+      if (payload && payload.insertIndex !== null && payload.insertIndex !== undefined) {
+        insertAt = Math.max(0, Math.min(messages.length, payload.insertIndex));
+      } else if (payload && payload.afterIndex !== null && payload.afterIndex !== undefined) {
         insertAt = Math.min(messages.length, payload.afterIndex + 1);
       }
 
@@ -249,7 +257,7 @@ Vue.component('mermaid-live-editor', {
         from: fromId,
         to: toId,
         operator: '->>',
-        text: 'Message'
+        text: messageText
       });
 
       this._updateSequenceModel({ messages: messages });

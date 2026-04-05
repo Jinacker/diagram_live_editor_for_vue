@@ -14,7 +14,11 @@
     attach: function (svgEl, model, ctx) {
       var participantMap = SequencePositionTracker.collectParticipants(svgEl, model);
       var messages = SequencePositionTracker.collectMessages(svgEl, model);
+      participantMap = SequencePositionTracker.refineParticipantLifelines(participantMap, messages);
+      var insertSlots = SequencePositionTracker.collectInsertSlots(participantMap, messages);
 
+      SequenceMessageDragHandler.initOverlay(svgEl);
+      SequenceMessageDragHandler.attach(svgEl, participantMap, insertSlots, ctx);
       SequenceSvgHandler._attachParticipants(participantMap, svgEl, ctx);
       SequenceSvgHandler._attachMessages(messages, svgEl, ctx);
     },
@@ -122,12 +126,12 @@
       }
 
       try {
-        if (data.bbox && data.bbox.width && data.bbox.height) {
+        if (data.hitBox && data.hitBox.width && data.hitBox.height) {
           var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-          rect.setAttribute('x', data.bbox.x - 8);
-          rect.setAttribute('y', data.bbox.y - 6);
-          rect.setAttribute('width', data.bbox.width + 16);
-          rect.setAttribute('height', Math.max(16, data.bbox.height + 12));
+          rect.setAttribute('x', data.hitBox.x);
+          rect.setAttribute('y', data.hitBox.y);
+          rect.setAttribute('width', data.hitBox.width);
+          rect.setAttribute('height', data.hitBox.height);
           rect.setAttribute('rx', '8');
           rect.setAttribute('fill', '#000');
           rect.setAttribute('fill-opacity', '0.003');

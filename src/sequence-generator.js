@@ -13,19 +13,21 @@
     var participants = model.participants || [];
     var messages = model.messages || [];
     var referenced = {};
-    var mustDeclare = false;
+    var mustDeclare = !!model.explicitParticipants;
 
     for (var r = 0; r < messages.length; r++) {
       if (messages[r].from) referenced[messages[r].from] = true;
       if (messages[r].to) referenced[messages[r].to] = true;
     }
 
-    for (var d = 0; d < participants.length; d++) {
-      var candidate = participants[d];
-      if (!candidate || !candidate.id) continue;
-      if ((candidate.label && candidate.label !== candidate.id) || !referenced[candidate.id]) {
-        mustDeclare = true;
-        break;
+    if (!mustDeclare) {
+      for (var d = 0; d < participants.length; d++) {
+        var candidate = participants[d];
+        if (!candidate || !candidate.id) continue;
+        if ((candidate.label && candidate.label !== candidate.id) || !referenced[candidate.id]) {
+          mustDeclare = true;
+          break;
+        }
       }
     }
 
