@@ -387,15 +387,7 @@ Vue.component('mermaid-preview', {
       }
 
       if (this.edgeToolbar && this.edgeToolbar.anchorType === 'edge') {
-        var edgeData = this._edgePaths && this._edgePaths[this.edgeToolbar.edgeIndex];
-        var edgeEl = edgeData && (edgeData.path || edgeData.el);
-        if (edgeEl && previewRect) {
-          var edgeRect = edgeEl.getBoundingClientRect();
-          this.edgeToolbar = Object.assign({}, this.edgeToolbar, {
-            x: Math.round(edgeRect.left - previewRect.left + edgeRect.width / 2),
-            y: Math.round(edgeRect.top - previewRect.top - 8)
-          });
-        }
+        return;
       }
     },
 
@@ -438,7 +430,7 @@ Vue.component('mermaid-preview', {
           }
           hitEl.setAttribute('stroke', isSelected ? '#2563eb' : '#000');
           hitEl.setAttribute('stroke-opacity', isSelected ? '0.18' : '0.003');
-          hitEl.setAttribute('stroke-width', isSelected ? '12' : '12');
+          hitEl.setAttribute('stroke-width', '12');
         }
       }
     },
@@ -922,31 +914,11 @@ Vue.component('mermaid-preview', {
     edgeToolbarEdit: function () {
       if (!this.edgeToolbar) return;
       var idx = this.edgeToolbar.edgeIndex;
+      var clickX = this.edgeToolbar.x;
+      var clickY = this.edgeToolbar.y;
       this.edgeToolbar = null;
-      var canvas = this.$refs.canvas;
-      var svgEl  = canvas ? canvas.querySelector('svg') : null;
-      var canvasRect = canvas && canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
       var edge = (this.model.edges || [])[idx];
-      if (!edge || !canvasRect) return;
-
-      var targetRect = null;
-      if (svgEl && edge.text) {
-        var labels = svgEl.querySelectorAll('.edgeLabel');
-        for (var i = 0; i < labels.length; i++) {
-          if (((labels[i].textContent || '').trim()) === ((edge.text || '').trim())) {
-            targetRect = labels[i].getBoundingClientRect();
-            break;
-          }
-        }
-      }
-      if (!targetRect) {
-        var edgeData = this._edgePaths && this._edgePaths[idx];
-        var pathEl = edgeData && (edgeData.path || edgeData.el);
-        if (pathEl && pathEl.getBoundingClientRect) {
-          targetRect = pathEl.getBoundingClientRect();
-        }
-      }
-      if (!targetRect) return;
+      if (!edge) return;
 
       this.selectedEdgeIndex = idx;
       this.editingEdgeIndex = idx;
@@ -954,8 +926,8 @@ Vue.component('mermaid-preview', {
       this.editingEdgeColor = edge.color || '#5c7ab0';
       this.edgeEditInputStyle = {
         position: 'absolute',
-        left: Math.max(8, targetRect.left - canvasRect.left + (targetRect.width / 2) - 80) + 'px',
-        top: Math.max(8, targetRect.top - canvasRect.top + (targetRect.height / 2) - 18) + 'px',
+        left: Math.max(8, clickX - 80) + 'px',
+        top: Math.max(8, clickY - 18) + 'px',
         zIndex: 1000,
         width: '160px'
       };

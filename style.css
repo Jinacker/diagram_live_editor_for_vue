@@ -1318,7 +1318,7 @@ mermaid-toolbar {
 }
 
 .preview-area__canvas .edgeLabel {
-  pointer-events: auto !important;
+  pointer-events: none !important;
 }
 
 /* ============================================
