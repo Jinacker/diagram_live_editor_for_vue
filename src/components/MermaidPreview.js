@@ -906,7 +906,10 @@ Vue.component('mermaid-preview', {
             class="context-menu__shape-btn"\
             :title="s.name"\
             @click="contextChangeShape(s.key)"\
-          >{{ s.label }}</button>\
+          >\
+            <span class="context-menu__shape-icon" :class="\'context-menu__shape-icon--\' + s.key"></span>\
+            <span class="context-menu__shape-text">{{ s.name }}</span>\
+          </button>\
         </div>\
         <div class="context-menu__separator"></div>\
         <div class="context-menu__item" @click="contextEditNode">\

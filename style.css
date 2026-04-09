@@ -819,12 +819,172 @@ mermaid-toolbar {
 
 .context-menu__shapes-grid .context-menu__shape-btn {
   flex: none;
-  font-size: 11px;
-  padding: 5px 4px;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-height: 58px;
+  padding: 7px 4px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: normal;
+  overflow: visible;
+}
+
+.context-menu__shape-icon {
+  width: 28px;
+  height: 20px;
+  position: relative;
+  display: inline-block;
+  border: 1.5px solid currentColor;
+  background: rgba(255, 255, 255, 0.9);
+  color: inherit;
+}
+
+.context-menu__shape-text {
+  font-size: 10px;
+  line-height: 1.1;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: inherit;
+  text-align: center;
+}
+
+.context-menu__shape-icon--rect {
+  border-radius: 2px;
+}
+
+.context-menu__shape-icon--round {
+  border-radius: 8px;
+}
+
+.context-menu__shape-icon--stadium {
+  border-radius: 999px;
+}
+
+.context-menu__shape-icon--subroutine::before,
+.context-menu__shape-icon--subroutine::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 1.5px;
+  background: currentColor;
+}
+
+.context-menu__shape-icon--subroutine::before {
+  left: 4px;
+}
+
+.context-menu__shape-icon--subroutine::after {
+  right: 4px;
+}
+
+.context-menu__shape-icon--cylinder {
+  border-radius: 999px / 6px;
+}
+
+.context-menu__shape-icon--cylinder::before,
+.context-menu__shape-icon--cylinder::after {
+  content: '';
+  position: absolute;
+  left: -1.5px;
+  right: -1.5px;
+  height: 6px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.context-menu__shape-icon--cylinder::before {
+  top: -3px;
+}
+
+.context-menu__shape-icon--cylinder::after {
+  bottom: -3px;
+  clip-path: inset(50% 0 0 0);
+}
+
+.context-menu__shape-icon--rhombus {
+  width: 20px;
+  height: 20px;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+.context-menu__shape-icon--hexagon {
+  border: none;
+  background: currentColor;
+  clip-path: polygon(20% 0, 80% 0, 100% 50%, 80% 100%, 20% 100%, 0 50%);
+}
+
+.context-menu__shape-icon--hexagon::before {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  background: rgba(255, 255, 255, 0.9);
+  clip-path: polygon(20% 0, 80% 0, 100% 50%, 80% 100%, 20% 100%, 0 50%);
+}
+
+.context-menu__shape-icon--parallelogram {
+  transform: skewX(-18deg);
+}
+
+.context-menu__shape-icon--parallelogram_alt {
+  transform: skewX(18deg);
+}
+
+.context-menu__shape-icon--trapezoid {
+  border: none;
+  background: currentColor;
+  clip-path: polygon(18% 0, 82% 0, 100% 100%, 0 100%);
+}
+
+.context-menu__shape-icon--trapezoid::before {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  background: rgba(255, 255, 255, 0.9);
+  clip-path: polygon(18% 0, 82% 0, 100% 100%, 0 100%);
+}
+
+.context-menu__shape-icon--trapezoid_alt {
+  border: none;
+  background: currentColor;
+  clip-path: polygon(0 0, 100% 0, 82% 100%, 18% 100%);
+}
+
+.context-menu__shape-icon--trapezoid_alt::before {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  background: rgba(255, 255, 255, 0.9);
+  clip-path: polygon(0 0, 100% 0, 82% 100%, 18% 100%);
+}
+
+.context-menu__shape-icon--double_circle {
+  border-radius: 50%;
+}
+
+.context-menu__shape-icon--double_circle::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.context-menu__shape-icon--asymmetric {
+  border: none;
+  background: currentColor;
+  clip-path: polygon(0 0, 78% 0, 100% 50%, 78% 100%, 0 100%, 12% 50%);
+}
+
+.context-menu__shape-icon--asymmetric::before {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  background: rgba(255, 255, 255, 0.9);
+  clip-path: polygon(0 0, 78% 0, 100% 50%, 78% 100%, 0 100%, 12% 50%);
 }
 
 /* ============================================
