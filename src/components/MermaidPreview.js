@@ -108,6 +108,14 @@ Vue.component('mermaid-preview', {
     };
     document.addEventListener('mousedown', this._pointerDownCommitHandler, true);
 
+    this._suppressClickAfterPanHandler = function (e) {
+      if (!self._suppressClickAfterPan) return;
+      self._suppressClickAfterPan = false;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    document.addEventListener('click', this._suppressClickAfterPanHandler, true);
+
     // 전역 키 입력: Delete, Escape, Ctrl+Z/Y
     document.addEventListener('keydown', function (e) {
       // input / textarea 포커스 중에는 가로채지 않는다.
@@ -163,6 +171,10 @@ Vue.component('mermaid-preview', {
     if (this._pointerDownCommitHandler) {
       document.removeEventListener('mousedown', this._pointerDownCommitHandler, true);
       this._pointerDownCommitHandler = null;
+    }
+    if (this._suppressClickAfterPanHandler) {
+      document.removeEventListener('click', this._suppressClickAfterPanHandler, true);
+      this._suppressClickAfterPanHandler = null;
     }
     if (this._windowResizeHandler) {
       window.removeEventListener('resize', this._windowResizeHandler);
@@ -392,13 +404,21 @@ Vue.component('mermaid-preview', {
       // 팬은 배경에서만 시작해서 node/edge interaction과 충돌하지 않게 한다.
       canvas.onmousedown = function (e) {
         if (e.button !== 0) return;
-        if (!self._canStartPan(e.target, svgEl)) return;
+        if (!self._canPreparePan(e.target, svgEl)) return;
         e.preventDefault();
-        self._panState = { startX: e.clientX, startY: e.clientY, panX: self.panX, panY: self.panY };
-        canvas.classList.add('preview-area__canvas--panning');
+        self._panCandidate = { startX: e.clientX, startY: e.clientY, panX: self.panX, panY: self.panY };
       };
 
       canvas.onmousemove = function (e) {
+        if (!self._panState && self._panCandidate) {
+          var dx = e.clientX - self._panCandidate.startX;
+          var dy = e.clientY - self._panCandidate.startY;
+          if (Math.abs(dx) + Math.abs(dy) >= 4) {
+            self._panState = self._panCandidate;
+            self._panCandidate = null;
+            canvas.classList.add('preview-area__canvas--panning');
+          }
+        }
         if (!self._panState) return;
         self.panX = self._panState.panX + (e.clientX - self._panState.startX);
         self.panY = self._panState.panY + (e.clientY - self._panState.startY);
@@ -412,28 +432,26 @@ Vue.component('mermaid-preview', {
       document.addEventListener('mouseup', this._panMouseUpHandler);
     },
 
-    _canStartPan: function (target, svgEl) {
+    _canPreparePan: function (target, svgEl) {
       if (!target || !svgEl) return false;
       if (target.closest && (
-        target.closest('.node') ||
-        target.closest('.edgeLabel') ||
         target.closest('.edge-toolbar') ||
         target.closest('.sequence-toolbar') ||
+        target.closest('.context-menu') ||
+        target.closest('.node-edit-overlay') ||
         target.closest('#conn-port-overlay') ||
-        target.closest('#edge-ghost-overlay') ||
-        target.closest('#sequence-message-hit-overlay') ||
         target.closest('#sequence-drag-overlay')
       )) {
         return false;
       }
-      return target === svgEl ||
-        (target.tagName && target.tagName.toLowerCase() === 'svg') ||
-        (target.tagName && target.tagName.toLowerCase() === 'rect' && !target.closest('.node'));
+      return true;
     },
 
     _endPan: function () {
       var canvas = this.$refs.canvas;
+      if (this._panState) this._suppressClickAfterPan = true;
       this._panState = null;
+      this._panCandidate = null;
       if (canvas) canvas.classList.remove('preview-area__canvas--panning');
     },
 
