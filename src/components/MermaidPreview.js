@@ -58,15 +58,17 @@ Vue.component('mermaid-preview', {
       portDragging:  false,
       hoveredNodeId: null,
 
-      viewportZoom: 1,
+      // CSS transform 줌/팬 상태
+      cfgZoom: 1.0,
+      panX: 0,
+      panY: 0,
 
       // SVG 내부 좌표/뷰포트 상태
       _positions: {},
       _elements:  {},
       _edgePaths: [],
       _svgEl: null,
-      _baseViewBox: null,
-      _currentViewBox: null,
+      _fitAfterRender: false,
       _panState: null,
       _panMouseUpHandler: null
     };
@@ -178,9 +180,9 @@ Vue.component('mermaid-preview', {
       if (!script || this._isScriptHeaderOnly(script)) {
         this.svgContent = '';
         this._svgEl = null;
-        this._baseViewBox = null;
-        this._currentViewBox = null;
-        this.viewportZoom = 1;
+        this.cfgZoom = 1.0;
+        this.panX = 0;
+        this.panY = 0;
         return;
       }
 
@@ -220,7 +222,6 @@ Vue.component('mermaid-preview', {
       if (!canvas) return;
       var svgEl = canvas.querySelector('svg');
       if (!svgEl) return;
-      this._svgEl = svgEl;
 
       var fitAfter = this._fitAfterRender;
       this._fitAfterRender = false;
@@ -274,42 +275,37 @@ Vue.component('mermaid-preview', {
       this._fitAfterRender = true;
     },
 
+    _applyTransform: function () {
+      if (!this._svgEl) return;
+      this._svgEl.style.transformOrigin = '0 0';
+      this._svgEl.style.transform =
+        'translate(' + this.panX + 'px, ' + this.panY + 'px) scale(' + this.cfgZoom + ')';
+    },
+
     _setupViewport: function (svgEl, canvas, forcefit) {
-      // 재렌더 후에도 기존 줌/팬 상태를 최대한 복원하기 위해 이전 viewBox를 보관한다.
-      var prevBase = this._baseViewBox ? Object.assign({}, this._baseViewBox) : null;
-      var prevCurrent = this._currentViewBox ? Object.assign({}, this._currentViewBox) : null;
-      var vb = svgEl.getAttribute('viewBox');
-      var parsed = this._parseViewBox(vb);
-      if (!parsed) {
-        var width = parseFloat(svgEl.getAttribute('width')) || 1000;
-        var height = parseFloat(svgEl.getAttribute('height')) || 800;
-        parsed = { x: 0, y: 0, width: width, height: height };
-      }
+      var prevZoom = this.cfgZoom;
+      var prevPanX = this.panX;
+      var prevPanY = this.panY;
+      var hadPrev  = !!this._svgEl;
 
-      this._baseViewBox = {
-        x: parsed.x,
-        y: parsed.y,
-        width: parsed.width,
-        height: parsed.height
-      };
-      this._currentViewBox = {
-        x: parsed.x,
-        y: parsed.y,
-        width: parsed.width,
-        height: parsed.height
-      };
-
-      svgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-      if (forcefit || !prevBase || !prevCurrent) {
-        this.fitView();
-      } else {
-        this._restoreViewport(prevBase, prevCurrent);
-      }
+      this._svgEl = svgEl;
+      svgEl.style.overflow = 'visible';
 
       var self = this;
+
+      if (forcefit || !hadPrev) {
+        // 브라우저 레이아웃이 완성된 후 fit 해야 canvas 크기를 정확히 읽을 수 있다.
+        requestAnimationFrame(function () { self.fitView(); });
+      } else {
+        this.cfgZoom = prevZoom;
+        this.panX    = prevPanX;
+        this.panY    = prevPanY;
+        this._applyTransform();
+      }
+
       canvas.onwheel = function (e) {
         e.preventDefault();
-        self._zoomAtClient(e.deltaY < 0 ? 0.9 : 1.1, e.clientX, e.clientY);
+        self._zoomAtClient(e.deltaY < 0 ? 1.1 : 0.9, e.clientX, e.clientY);
       };
 
       // 팬은 배경에서만 시작해서 node/edge interaction과 충돌하지 않게 한다.
@@ -317,23 +313,15 @@ Vue.component('mermaid-preview', {
         if (e.button !== 0) return;
         if (!self._canStartPan(e.target, svgEl)) return;
         e.preventDefault();
-        self._panState = {
-          startX: e.clientX,
-          startY: e.clientY,
-          viewBox: Object.assign({}, self._currentViewBox)
-        };
+        self._panState = { startX: e.clientX, startY: e.clientY, panX: self.panX, panY: self.panY };
         canvas.classList.add('preview-area__canvas--panning');
       };
 
       canvas.onmousemove = function (e) {
-        if (!self._panState || !self._currentViewBox || !self._svgEl) return;
-        var rect = self._svgEl.getBoundingClientRect();
-        if (!rect.width || !rect.height) return;
-        var dx = e.clientX - self._panState.startX;
-        var dy = e.clientY - self._panState.startY;
-        self._currentViewBox.x = self._panState.viewBox.x - (dx / rect.width) * self._panState.viewBox.width;
-        self._currentViewBox.y = self._panState.viewBox.y - (dy / rect.height) * self._panState.viewBox.height;
-        self._applyViewBox();
+        if (!self._panState) return;
+        self.panX = self._panState.panX + (e.clientX - self._panState.startX);
+        self.panY = self._panState.panY + (e.clientY - self._panState.startY);
+        self._applyTransform();
       };
 
       if (this._panMouseUpHandler) {
@@ -341,55 +329,6 @@ Vue.component('mermaid-preview', {
       }
       this._panMouseUpHandler = function () { self._endPan(); };
       document.addEventListener('mouseup', this._panMouseUpHandler);
-    },
-
-    _parseViewBox: function (viewBoxStr) {
-      if (!viewBoxStr) return null;
-      var parts = String(viewBoxStr).trim().split(/\s+/);
-      if (parts.length !== 4) return null;
-      return {
-        x: parseFloat(parts[0]),
-        y: parseFloat(parts[1]),
-        width: parseFloat(parts[2]),
-        height: parseFloat(parts[3])
-      };
-    },
-
-    _applyViewBox: function () {
-      if (!this._svgEl || !this._currentViewBox) return;
-      this._svgEl.setAttribute(
-        'viewBox',
-        [
-          this._currentViewBox.x,
-          this._currentViewBox.y,
-          this._currentViewBox.width,
-          this._currentViewBox.height
-        ].join(' ')
-      );
-      if (this._baseViewBox && this._currentViewBox.width) {
-        this.viewportZoom = this._baseViewBox.width / this._currentViewBox.width;
-      }
-    },
-
-    _restoreViewport: function (prevBase, prevCurrent) {
-      if (!prevBase || !prevCurrent || !this._baseViewBox) return;
-
-      var zoomScale = prevCurrent.width / prevBase.width;
-      var centerXRatio = (prevCurrent.x + prevCurrent.width / 2 - prevBase.x) / prevBase.width;
-      var centerYRatio = (prevCurrent.y + prevCurrent.height / 2 - prevBase.y) / prevBase.height;
-
-      var nextWidth = this._baseViewBox.width * zoomScale;
-      var nextHeight = this._baseViewBox.height * zoomScale;
-      var centerX = this._baseViewBox.x + this._baseViewBox.width * centerXRatio;
-      var centerY = this._baseViewBox.y + this._baseViewBox.height * centerYRatio;
-
-      this._currentViewBox = {
-        x: centerX - nextWidth / 2,
-        y: centerY - nextHeight / 2,
-        width: nextWidth,
-        height: nextHeight
-      };
-      this._applyViewBox();
     },
 
     _canStartPan: function (target, svgEl) {
@@ -418,26 +357,19 @@ Vue.component('mermaid-preview', {
     },
 
     _zoomAtClient: function (factor, clientX, clientY) {
-      if (!this._svgEl || !this._currentViewBox || !this._baseViewBox) return;
-      var rect = this._svgEl.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
+      var canvas = this.$refs.canvas;
+      if (!canvas) return;
+      var rect = canvas.getBoundingClientRect();
+      var cx = clientX - rect.left;
+      var cy = clientY - rect.top;
 
-      var nextWidth = this._currentViewBox.width * factor;
-      var minWidth = this._baseViewBox.width * 0.2;
-      var maxWidth = this._baseViewBox.width * 3;
-      nextWidth = Math.max(minWidth, Math.min(maxWidth, nextWidth));
-      factor = nextWidth / this._currentViewBox.width;
+      var newZoom = Math.max(0.2, Math.min(5.0, this.cfgZoom * factor));
+      var ratio   = newZoom / this.cfgZoom;
 
-      var nextHeight = this._currentViewBox.height * factor;
-      var px = (clientX - rect.left) / rect.width;
-      var py = (clientY - rect.top) / rect.height;
-      if (!isFinite(px) || !isFinite(py)) { px = 0.5; py = 0.5; }
-
-      this._currentViewBox.x += (this._currentViewBox.width - nextWidth) * px;
-      this._currentViewBox.y += (this._currentViewBox.height - nextHeight) * py;
-      this._currentViewBox.width = nextWidth;
-      this._currentViewBox.height = nextHeight;
-      this._applyViewBox();
+      this.panX    = cx - (cx - this.panX) * ratio;
+      this.panY    = cy - (cy - this.panY) * ratio;
+      this.cfgZoom = newZoom;
+      this._applyTransform();
     },
 
     _buildCtx: function (svgEl) {
@@ -625,6 +557,15 @@ Vue.component('mermaid-preview', {
       this.selectedNodeId = null;
     },
 
+    contextChangeShape: function (shape) {
+      if (!this.contextMenu) return;
+      this.$emit('update-node-shape', {
+        nodeId: this.contextMenu.nodeId,
+        shape:  shape
+      });
+      this.contextMenu = null;
+    },
+
     extractNodeId: function (nodeEl) {
       if (!nodeEl) return null;
       var dataId = nodeEl.getAttribute('data-id');
@@ -783,48 +724,49 @@ Vue.component('mermaid-preview', {
     },
 
     fitView: function () {
-      if (!this._baseViewBox || !this._svgEl) return;
-      var rect = this._svgEl.getBoundingClientRect();
-      var canvasAspect = rect.width && rect.height ? rect.width / rect.height : 1;
-      var box = this._baseViewBox;
-      // fit은 꽉 채우기보다 "전체가 잘리지 않게 여유 있게 보이기"에 맞춘다.
-      var padX = Math.max(120, box.width * 0.22);
-      var padY = Math.max(120, box.height * 0.28);
-      var width = box.width + padX * 2;
-      var height = box.height + padY * 2;
-      var x = box.x - padX;
-      var y = box.y - padY;
-      var boxAspect = width / height;
+      var canvas = this.$refs.canvas;
+      if (!canvas || !this._svgEl) return;
 
-      if (canvasAspect > boxAspect) {
-        var targetWidth = height * canvasAspect;
-        x -= (targetWidth - width) / 2;
-        width = targetWidth;
-      } else {
-        var targetHeight = width / canvasAspect;
-        y -= (targetHeight - height) / 2;
-        height = targetHeight;
+      var canvasW = canvas.clientWidth  || canvas.offsetWidth;
+      var canvasH = canvas.clientHeight || canvas.offsetHeight;
+
+      if (!canvasW || !canvasH) {
+        var self = this;
+        requestAnimationFrame(function () { self.fitView(); });
+        return;
       }
 
-      this._currentViewBox = {
-        x: x,
-        y: y,
-        width: width,
-        height: height
-      };
-      this._applyViewBox();
+      // SVG 논리적 크기: viewBox 우선, 없으면 getBBox() (실제 컨텐츠 바운딩박스)
+      var vb   = this._svgEl.viewBox && this._svgEl.viewBox.baseVal;
+      var svgW = (vb && vb.width)  ? vb.width  : this._svgEl.getBBox().width;
+      var svgH = (vb && vb.height) ? vb.height : this._svgEl.getBBox().height;
+
+      if (!svgW || !svgH) return;
+
+      var pad    = 20;
+      var scaleX = (canvasW - pad * 2) / svgW;
+      var scaleY = (canvasH - pad * 2) / svgH;
+      var scale  = Math.min(scaleX, scaleY);   // 비율 유지하면서 전체가 보이게
+      scale = Math.max(0.1, Math.min(5.0, scale));
+
+      this.cfgZoom = scale;
+      this.panX    = (canvasW - svgW * scale) / 2;
+      this.panY    = (canvasH - svgH * scale) / 2;
+      this._applyTransform();
     },
 
     zoomIn: function () {
-      var rect = this._svgEl ? this._svgEl.getBoundingClientRect() : null;
-      if (!rect) return;
-      this._zoomAtClient(0.85, rect.left + rect.width / 2, rect.top + rect.height / 2);
+      var canvas = this.$refs.canvas;
+      if (!canvas) return;
+      var rect = canvas.getBoundingClientRect();
+      this._zoomAtClient(1.2, rect.left + rect.width / 2, rect.top + rect.height / 2);
     },
 
     zoomOut: function () {
-      var rect = this._svgEl ? this._svgEl.getBoundingClientRect() : null;
-      if (!rect) return;
-      this._zoomAtClient(1.15, rect.left + rect.width / 2, rect.top + rect.height / 2);
+      var canvas = this.$refs.canvas;
+      if (!canvas) return;
+      var rect = canvas.getBoundingClientRect();
+      this._zoomAtClient(0.8, rect.left + rect.width / 2, rect.top + rect.height / 2);
     }
   },
 
