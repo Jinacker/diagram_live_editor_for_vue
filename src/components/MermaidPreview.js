@@ -438,7 +438,7 @@ Vue.component('mermaid-preview', {
           }
           hitEl.setAttribute('stroke', isSelected ? '#2563eb' : '#000');
           hitEl.setAttribute('stroke-opacity', isSelected ? '0.18' : '0.003');
-          hitEl.setAttribute('stroke-width', isSelected ? '16' : '16');
+          hitEl.setAttribute('stroke-width', isSelected ? '12' : '12');
         }
       }
     },
@@ -477,7 +477,7 @@ Vue.component('mermaid-preview', {
         if (hitEl && hitEl.setAttribute) {
           hitEl.setAttribute('stroke', '#000');
           hitEl.setAttribute('stroke-opacity', '0.003');
-          hitEl.setAttribute('stroke-width', '16');
+          hitEl.setAttribute('stroke-width', '12');
         }
       }
     },
@@ -855,7 +855,7 @@ Vue.component('mermaid-preview', {
           break;
         }
       }
-      var width = Math.max(140, targetRect.width + 28, (((node && (node.text || node.id)) || '').length * 9) + 36);
+      var width = 240;
       var left = canvasRect ? (targetRect.left - canvasRect.left + (targetRect.width / 2) - (width / 2)) : 0;
       var top = canvasRect ? (targetRect.top - canvasRect.top + (targetRect.height / 2) - 18) : 0;
       this.editingNodeId = nodeId;

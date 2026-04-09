@@ -116,7 +116,7 @@
       // 그래서 거의 보이지 않는 실색상 + 낮은 opacity 조합을 사용한다.
       el.setAttribute('stroke', '#000');
       el.setAttribute('stroke-opacity', '0.003');
-      el.setAttribute('stroke-width', '16');
+      el.setAttribute('stroke-width', '12');
       el.setAttribute('stroke-linecap', 'round');
       el.setAttribute('stroke-linejoin', 'round');
       el.setAttribute('fill', 'none');

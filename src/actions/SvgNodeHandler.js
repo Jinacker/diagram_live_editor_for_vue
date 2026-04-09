@@ -133,7 +133,7 @@
           left:  (localLeft + rect.width  / 2 - 70) + 'px',
           top:   (localTop  + rect.height / 2 - 16) + 'px',
           zIndex: 1000,
-          width: Math.max(140, rect.width + 24) + 'px'
+          width: '240px'
         }
       });
       ctx.focusEditInput();
