@@ -222,8 +222,11 @@ Vue.component('mermaid-preview', {
       if (!svgEl) return;
       this._svgEl = svgEl;
 
+      var fitAfter = this._fitAfterRender;
+      this._fitAfterRender = false;
+
       // overlay와 interaction이 모두 같은 좌표계를 쓰도록 viewBox를 먼저 맞춘다.
-      this._setupViewport(svgEl, canvas);
+      this._setupViewport(svgEl, canvas, fitAfter);
 
       // 노드 위치와 SVG 요소 수집
       var isFlowchart = this.model && this.model.type !== 'sequenceDiagram';
@@ -265,20 +268,13 @@ Vue.component('mermaid-preview', {
         }
       });
 
-      // 배경 더블클릭 시 노드 추가
-      svgEl.addEventListener('dblclick', function (e) {
-        if (!isFlowchart) return;
-        var t = e.target;
-        var isBackground = t === svgEl ||
-          (t.tagName && t.tagName.toLowerCase() === 'svg') ||
-          (t.tagName && t.tagName.toLowerCase() === 'rect' && !t.closest('.node'));
-        if (isBackground) {
-          self.$emit('add-node');
-        }
-      });
     },
 
-    _setupViewport: function (svgEl, canvas) {
+    scheduleFit: function () {
+      this._fitAfterRender = true;
+    },
+
+    _setupViewport: function (svgEl, canvas, forcefit) {
       // 재렌더 후에도 기존 줌/팬 상태를 최대한 복원하기 위해 이전 viewBox를 보관한다.
       var prevBase = this._baseViewBox ? Object.assign({}, this._baseViewBox) : null;
       var prevCurrent = this._currentViewBox ? Object.assign({}, this._currentViewBox) : null;
@@ -304,10 +300,10 @@ Vue.component('mermaid-preview', {
       };
 
       svgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-      if (prevBase && prevCurrent) {
-        this._restoreViewport(prevBase, prevCurrent);
-      } else {
+      if (forcefit || !prevBase || !prevCurrent) {
         this.fitView();
+      } else {
+        this._restoreViewport(prevBase, prevCurrent);
       }
 
       var self = this;

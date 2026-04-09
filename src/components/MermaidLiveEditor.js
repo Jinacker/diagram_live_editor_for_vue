@@ -192,7 +192,6 @@ Vue.component('mermaid-live-editor', {
       if (!this.isFlowchart) return;
       this._snapshot();
       if (!shape) shape = 'rect';
-      // 새 노드 id는 단순 증가 방식으로 발급한다.
       this.nodeCounter++;
       var newId   = 'N' + this.nodeCounter;
       var newNode = { id: newId, text: 'Node', shape: shape };
@@ -200,6 +199,7 @@ Vue.component('mermaid-live-editor', {
       nodes.push(newNode);
       this.model = Object.assign({}, this.model, { nodes: nodes });
       this.updateScriptFromModel();
+      if (this.$refs.preview) this.$refs.preview.scheduleFit();
     },
 
     addEdge: function (data) {
