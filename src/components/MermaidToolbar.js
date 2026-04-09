@@ -5,6 +5,14 @@
 
 Vue.component('mermaid-toolbar', {
   SHAPES: SvgNodeHandler.SHAPES,
+  COLOR_PALETTE: [
+    { key: 'red',    value: '#ef4444' },
+    { key: 'orange', value: '#f97316' },
+    { key: 'yellow', value: '#facc15' },
+    { key: 'green',  value: '#22c55e' },
+    { key: 'blue',   value: '#3b82f6' },
+    { key: 'violet', value: '#a855f7' }
+  ],
   props: {
     diagramType: { type: String,  default: 'flowchart' },
     direction: { type: String,  default: 'TD' },
@@ -14,7 +22,8 @@ Vue.component('mermaid-toolbar', {
   data: function () {
     return {
       showShapePicker: false,
-      pendingNodeText: 'Node'
+      pendingNodeText: 'Node',
+      pendingNodeColor: ''
     };
   },
   computed: {
@@ -28,13 +37,17 @@ Vue.component('mermaid-toolbar', {
   methods: {
     toggleShapePicker: function () {
       this.showShapePicker = !this.showShapePicker;
-      if (this.showShapePicker) this.pendingNodeText = 'Node';
+      if (this.showShapePicker) {
+        this.pendingNodeText = 'Node';
+        this.pendingNodeColor = '';
+      }
     },
     addNode: function (shape) {
       this.showShapePicker = false;
       this.$emit('add-node', {
         shape: shape,
-        text: (this.pendingNodeText || '').trim() || 'Node'
+        text: (this.pendingNodeText || '').trim() || 'Node',
+        fill: this.pendingNodeColor || ''
       });
     },
     addSequenceParticipant: function () { this.$emit('add-sequence-participant'); },
@@ -82,6 +95,24 @@ Vue.component('mermaid-toolbar', {
                 placeholder="Node name"\
                 @keydown.enter.prevent="addNode(\'rect\')"\
               />\
+              <div class="toolbar__shape-picker-title toolbar__shape-picker-title--compact">Color</div>\
+              <div class="context-menu__color-row toolbar__shape-color-row">\
+                <button\
+                  class="context-menu__color-btn context-menu__color-btn--clear"\
+                  :class="{ \'context-menu__color-btn--selected\': !pendingNodeColor }"\
+                  title="default"\
+                  @click="pendingNodeColor = \'\'"\
+                >x</button>\
+                <button\
+                  v-for="color in $options.COLOR_PALETTE"\
+                  :key="color.key"\
+                  class="context-menu__color-btn"\
+                  :class="{ \'context-menu__color-btn--selected\': pendingNodeColor === color.value }"\
+                  :style="{ backgroundColor: color.value }"\
+                  :title="color.key"\
+                  @click="pendingNodeColor = color.value"\
+                ></button>\
+              </div>\
               <div class="toolbar__shape-picker-grid">\
                 <button\
                   v-for="s in $options.SHAPES"\

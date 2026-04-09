@@ -18,6 +18,14 @@ Vue.component('mermaid-preview', {
 
   // 템플릿에서 사용하는 전체 shape 목록
   SHAPES: SvgNodeHandler.SHAPES,
+  COLOR_PALETTE: [
+    { key: 'red',    value: '#ef4444' },
+    { key: 'orange', value: '#f97316' },
+    { key: 'yellow', value: '#facc15' },
+    { key: 'green',  value: '#22c55e' },
+    { key: 'blue',   value: '#3b82f6' },
+    { key: 'violet', value: '#a855f7' }
+  ],
 
   data: function () {
     return {
@@ -34,11 +42,13 @@ Vue.component('mermaid-preview', {
       // 노드 인라인 편집
       editingNodeId:  null,
       editingText:    '',
+      editingNodeColor: '#e2e8f0',
       editInputStyle: {},
 
       // 엣지 인라인 편집
       editingEdgeIndex:    null,
       editingEdgeText:     '',
+      editingEdgeColor:    '#5c7ab0',
       edgeEditInputStyle:  {},
 
       // 시퀀스 인라인 편집
@@ -584,11 +594,13 @@ Vue.component('mermaid-preview', {
       }
       this.editingNodeId = null;
       this.editingText   = '';
+      this.editingNodeColor = '#e2e8f0';
     },
 
     cancelNodeEdit: function () {
       this.editingNodeId = null;
       this.editingText   = '';
+      this.editingNodeColor = '#e2e8f0';
     },
 
     onNodeEditKeyDown: function (e) {
@@ -607,11 +619,13 @@ Vue.component('mermaid-preview', {
       }
       this.editingEdgeIndex = null;
       this.editingEdgeText  = '';
+      this.editingEdgeColor = '#5c7ab0';
     },
 
     cancelEdgeEdit: function () {
       this.editingEdgeIndex = null;
       this.editingEdgeText  = '';
+      this.editingEdgeColor = '#5c7ab0';
     },
 
     onEdgeEditKeyDown: function (e) {
@@ -686,6 +700,14 @@ Vue.component('mermaid-preview', {
         nodeId: this.contextMenu.nodeId,
         shape:  shape
       });
+    },
+
+    contextChangeNodeColor: function (fill) {
+      if (!this.contextMenu) return;
+      this.$emit('update-node-fill', {
+        nodeId: this.contextMenu.nodeId,
+        fill: fill || ''
+      });
       this.contextMenu = null;
     },
 
@@ -729,6 +751,15 @@ Vue.component('mermaid-preview', {
       this.$emit('delete-selected', { nodeId: null, edgeIndex: this.edgeToolbar.edgeIndex });
       this.edgeToolbar       = null;
       this.selectedEdgeIndex = null;
+    },
+
+    edgeToolbarChangeColor: function (color) {
+      if (!this.edgeToolbar) return;
+      this.$emit('update-edge-color', {
+        index: this.edgeToolbar.edgeIndex,
+        color: color || ''
+      });
+      this.edgeToolbar = null;
     },
 
     // ── 시퀀스 툴바 액션 ────────────────────────────────────────
@@ -971,6 +1002,22 @@ Vue.component('mermaid-preview', {
             <span class="context-menu__shape-text">{{ s.name }}</span>\
           </button>\
         </div>\
+        <div class="context-menu__section-title">Color</div>\
+        <div class="context-menu__color-row">\
+          <button\
+            class="context-menu__color-btn context-menu__color-btn--clear"\
+            title="default"\
+            @click="contextChangeNodeColor(\'\')"\
+          >×</button>\
+          <button\
+            v-for="color in $options.COLOR_PALETTE"\
+            :key="color.key"\
+            class="context-menu__color-btn"\
+            :style="{ backgroundColor: color.value }"\
+            :title="color.key"\
+            @click="contextChangeNodeColor(color.value)"\
+          ></button>\
+        </div>\
         <div class="context-menu__separator"></div>\
         <div class="context-menu__item" @click="contextEditNode">\
           <span class="context-menu__item-icon">✎</span> Edit Text\
@@ -990,6 +1037,21 @@ Vue.component('mermaid-preview', {
         <button class="edge-toolbar__btn" @click="edgeToolbarEdit" title="Edit label">\
           ✎ Label\
         </button>\
+        <div class="edge-toolbar__palette">\
+          <button\
+            class="context-menu__color-btn context-menu__color-btn--clear"\
+            title="default"\
+            @click="edgeToolbarChangeColor(\'\')"\
+          >×</button>\
+          <button\
+            v-for="color in $options.COLOR_PALETTE"\
+            :key="color.key"\
+            class="context-menu__color-btn"\
+            :style="{ backgroundColor: color.value }"\
+            :title="color.key"\
+            @click="edgeToolbarChangeColor(color.value)"\
+          ></button>\
+        </div>\
         <div class="edge-toolbar__sep"></div>\
         <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="edgeToolbarDelete" title="Delete edge">\
           ✕ Delete\

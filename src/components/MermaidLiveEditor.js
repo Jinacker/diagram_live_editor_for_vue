@@ -198,16 +198,19 @@ Vue.component('mermaid-live-editor', {
       this._snapshot();
       var nodeShape = shape;
       var nodeText = 'Node';
+      var nodeFill = '';
 
       if (shape && typeof shape === 'object') {
         nodeShape = shape.shape;
         nodeText = shape.text || nodeText;
+        nodeFill = shape.fill || '';
       }
 
       if (!nodeShape) nodeShape = 'rect';
       this.nodeCounter++;
       var newId   = 'N' + this.nodeCounter;
       var newNode = { id: newId, text: nodeText, shape: nodeShape };
+      if (nodeFill) newNode.fill = nodeFill;
       var nodes   = this.model.nodes.slice();
       nodes.push(newNode);
       this.model = Object.assign({}, this.model, { nodes: nodes });
@@ -341,11 +344,61 @@ Vue.component('mermaid-live-editor', {
       this.updateScriptFromModel();
     },
 
+    updateNodeStyle: function (data) {
+      if (!this.isFlowchart) return;
+      this._snapshot();
+      var nodes = this.model.nodes.map(function (n) {
+        if (n.id !== data.nodeId) return n;
+        return Object.assign({}, n, {
+          text: data.text,
+          fill: data.fill
+        });
+      });
+      this.model = Object.assign({}, this.model, { nodes: nodes });
+      this.updateScriptFromModel();
+    },
+
+    updateNodeFill: function (data) {
+      if (!this.isFlowchart) return;
+      this._snapshot();
+      var nodes = this.model.nodes.map(function (n) {
+        if (n.id !== data.nodeId) return n;
+        return Object.assign({}, n, { fill: data.fill });
+      });
+      this.model = Object.assign({}, this.model, { nodes: nodes });
+      this.updateScriptFromModel();
+    },
+
     updateEdgeText: function (data) {
       if (!this.isFlowchart) return;
       this._snapshot();
       var edges = this.model.edges.map(function (e, idx) {
         return idx === data.index ? Object.assign({}, e, { text: data.text }) : e;
+      });
+      this.model = Object.assign({}, this.model, { edges: edges });
+      this.updateScriptFromModel();
+    },
+
+    updateEdgeStyle: function (data) {
+      if (!this.isFlowchart) return;
+      this._snapshot();
+      var edges = this.model.edges.map(function (e, idx) {
+        if (idx !== data.index) return e;
+        return Object.assign({}, e, {
+          text: data.text,
+          color: data.color
+        });
+      });
+      this.model = Object.assign({}, this.model, { edges: edges });
+      this.updateScriptFromModel();
+    },
+
+    updateEdgeColor: function (data) {
+      if (!this.isFlowchart) return;
+      this._snapshot();
+      var edges = this.model.edges.map(function (e, idx) {
+        if (idx !== data.index) return e;
+        return Object.assign({}, e, { color: data.color });
       });
       this.model = Object.assign({}, this.model, { edges: edges });
       this.updateScriptFromModel();
@@ -581,6 +634,10 @@ Vue.component('mermaid-live-editor', {
             @update-node-text="updateNodeText"\
             @update-node-shape="updateNodeShape"\
             @update-edge-text="updateEdgeText"\
+            @update-node-style="updateNodeStyle"\
+            @update-edge-style="updateEdgeStyle"\
+            @update-node-fill="updateNodeFill"\
+            @update-edge-color="updateEdgeColor"\
             @update-sequence-participant-text="updateSequenceParticipantText"\
             @update-sequence-message-text="updateSequenceMessageText"\
             @reverse-sequence-message="reverseSequenceMessage"\

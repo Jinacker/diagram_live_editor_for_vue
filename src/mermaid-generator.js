@@ -30,6 +30,48 @@
       .replace(/"/g, '\\"');
   }
 
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function normalizeHex(color) {
+    if (!color) return '';
+    var trimmed = String(color).trim();
+    if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(trimmed)) return '';
+    if (trimmed.length === 4) {
+      return '#' + trimmed.charAt(1) + trimmed.charAt(1) +
+        trimmed.charAt(2) + trimmed.charAt(2) +
+        trimmed.charAt(3) + trimmed.charAt(3);
+    }
+    return trimmed.toLowerCase();
+  }
+
+  function darkenHex(color, amount) {
+    var hex = normalizeHex(color);
+    if (!hex) return '';
+    var ratio = clamp(amount, 0, 1);
+    var r = parseInt(hex.substr(1, 2), 16);
+    var g = parseInt(hex.substr(3, 2), 16);
+    var b = parseInt(hex.substr(5, 2), 16);
+    r = Math.round(r * (1 - ratio));
+    g = Math.round(g * (1 - ratio));
+    b = Math.round(b * (1 - ratio));
+    return '#' + [r, g, b].map(function (v) {
+      var s = v.toString(16);
+      return s.length === 1 ? '0' + s : s;
+    }).join('');
+  }
+
+  function contrastText(color) {
+    var hex = normalizeHex(color);
+    if (!hex) return '';
+    var r = parseInt(hex.substr(1, 2), 16);
+    var g = parseInt(hex.substr(3, 2), 16);
+    var b = parseInt(hex.substr(5, 2), 16);
+    var luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.68 ? '#1b2a4a' : '#ffffff';
+  }
+
   /**
    * 노드 정의 문자열 생성
    */
@@ -84,6 +126,33 @@
           edgeStr = edge.type || '-->';
         }
         lines.push('    ' + edge.from + ' ' + edgeStr + ' ' + edge.to);
+      }
+    }
+
+    if (model.nodes && model.nodes.length > 0) {
+      for (var n = 0; n < model.nodes.length; n++) {
+        var node = model.nodes[n];
+        var fill = normalizeHex(node.fill);
+        if (!fill) continue;
+        lines.push(
+          '    style ' + node.id +
+          ' fill:' + fill +
+          ',stroke:' + darkenHex(fill, 0.22) +
+          ',color:' + contrastText(fill)
+        );
+      }
+    }
+
+    if (model.edges && model.edges.length > 0) {
+      for (var e = 0; e < model.edges.length; e++) {
+        var edgeColor = normalizeHex(model.edges[e].color);
+        if (!edgeColor) continue;
+        lines.push(
+          '    linkStyle ' + e +
+          ' stroke:' + edgeColor +
+          ',color:' + edgeColor +
+          ',stroke-width:2px'
+        );
       }
     }
 

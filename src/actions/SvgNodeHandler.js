@@ -110,6 +110,7 @@
       ctx.setState({
         editingNodeId:  nodeId,
         editingText:    node.text || node.id,
+        editingNodeColor: node.fill || '#e2e8f0',
         editInputStyle: {
           position: 'fixed',
           left:  (rect.left + rect.width  / 2 - 70) + 'px',

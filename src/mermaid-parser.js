@@ -136,6 +136,35 @@
     return null;
   }
 
+  function parseStyleLine(line, model) {
+    var match = line.match(/^style\s+([A-Za-z_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D]*)\s+(.+)$/);
+    if (!match || !model._nodeMap[match[1]]) return;
+    var node = model._nodeMap[match[1]];
+    var declarations = match[2].split(',');
+    for (var i = 0; i < declarations.length; i++) {
+      var parts = declarations[i].split(':');
+      if (parts.length < 2) continue;
+      var key = parts[0].trim();
+      var value = parts.slice(1).join(':').trim();
+      if (key === 'fill') node.fill = value;
+    }
+  }
+
+  function parseLinkStyleLine(line, model) {
+    var match = line.match(/^linkStyle\s+(\d+)\s+(.+)$/);
+    if (!match) return;
+    var edge = model.edges[parseInt(match[1], 10)];
+    if (!edge) return;
+    var declarations = match[2].split(',');
+    for (var i = 0; i < declarations.length; i++) {
+      var parts = declarations[i].split(':');
+      if (parts.length < 2) continue;
+      var key = parts[0].trim();
+      var value = parts.slice(1).join(':').trim();
+      if (key === 'stroke') edge.color = value;
+    }
+  }
+
   /**
    * node-edge-node가 연쇄된 한 줄을 파싱한다.
    * 예: A[Start] --> B[Process] --> C[End]
@@ -233,8 +262,15 @@
       // classDef / class 라인은 현재 모델에 반영하지 않는다.
       if (line.indexOf('classDef') === 0 || line.indexOf('class ') === 0) continue;
       
-      // style 라인도 현재는 무시한다.
-      if (line.indexOf('style ') === 0) continue;
+      if (line.indexOf('style ') === 0) {
+        parseStyleLine(line, model);
+        continue;
+      }
+
+      if (line.indexOf('linkStyle ') === 0) {
+        parseLinkStyleLine(line, model);
+        continue;
+      }
 
       // 헤더(flowchart/graph + direction) 파싱
       if (!started) {

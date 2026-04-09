@@ -469,6 +469,10 @@ mermaid-toolbar {
   padding: 4px 6px 8px;
 }
 
+.toolbar__shape-picker-title--compact {
+  padding-top: 0;
+}
+
 .toolbar__shape-input {
   width: 100%;
   height: 34px;
@@ -492,6 +496,10 @@ mermaid-toolbar {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
+}
+
+.toolbar__shape-color-row {
+  padding: 0 2px 10px;
 }
 
 .toolbar__shape-picker-btn {
@@ -920,6 +928,53 @@ mermaid-toolbar {
   font-weight: 600;
   color: inherit;
   text-align: center;
+}
+
+.context-menu__color-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 12px 10px;
+  flex-wrap: wrap;
+}
+
+.context-menu__color-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(27, 42, 74, 0.18);
+  background: transparent;
+  cursor: pointer;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.context-menu__color-btn:hover {
+  transform: scale(1.08);
+  box-shadow: 0 0 0 2px rgba(21, 101, 192, 0.18);
+}
+
+.context-menu__color-btn--selected {
+  transform: scale(1.08);
+  box-shadow: 0 0 0 2px rgba(21, 101, 192, 0.22), 0 0 0 4px rgba(21, 101, 192, 0.08);
+}
+
+.context-menu__color-btn--clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  font-size: 0;
+  background: #fff;
+  border-color: rgba(27, 42, 74, 0.18);
+  position: relative;
+}
+
+.context-menu__color-btn--clear::before {
+  content: 'x';
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .context-menu__shape-icon--rect {
@@ -1406,6 +1461,13 @@ mermaid-toolbar {
 /* Mermaid SVG 폰트 오버라이드 */
 .preview-area__canvas .mermaid-output .label {
   font-family: var(--font-sans) !important;
+}
+
+.edge-toolbar__palette {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
 }
 
 @media (max-width: 1080px) {

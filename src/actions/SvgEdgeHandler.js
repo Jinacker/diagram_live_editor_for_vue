@@ -205,6 +205,7 @@
         edgeToolbar:         null,
         editingEdgeIndex:    index,
         editingEdgeText:     edge.text || '',
+        editingEdgeColor:    edge.color || '#5c7ab0',
         edgeEditInputStyle: {
           position: 'fixed',
           left:  x + 'px',
