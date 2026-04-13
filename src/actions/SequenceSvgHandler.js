@@ -200,13 +200,16 @@
       ctx.focusSequenceMessageInput();
     },
 
+    // solid(단일 dash) ↔ dotted(이중 dash) 토글
     toggleMessageLineType: function (message) {
       var parts = getMessageOperatorBase(message.operator || '->>');
-      var nextBase = parts.base;
-      if (parts.base === '->>') nextBase = '-->>';
-      else if (parts.base === '-->>') nextBase = '->>';
-      else if (parts.base === '->') nextBase = '-->';
-      else if (parts.base === '-->') nextBase = '->';
+      var TOGGLE = {
+        '->>': '-->>',  '-->>': '->>',
+        '->':  '-->',   '-->':  '->',
+        '-x':  '--x',   '--x':  '-x',
+        '-)':  '--)',   '--)':  '-)'
+      };
+      var nextBase = TOGGLE[parts.base] !== undefined ? TOGGLE[parts.base] : parts.base;
       return nextBase + parts.suffix;
     }
   };

@@ -6,7 +6,8 @@
 (function (global) {
   'use strict';
 
-  var MESSAGE_RE = /^([A-Za-z0-9_\u3131-\uD79D]+)\s*([-.]+>{1,2}[+-]?)\s*([A-Za-z0-9_\u3131-\uD79D]+)\s*:(.*)$/;
+  // 지원 operator: ->>, -->>, ->, -->, -x, --x, -), --)  (각각 +/- activation suffix 선택)
+  var MESSAGE_RE = /^([A-Za-z0-9_\u3131-\uD79D]+)\s*((?:-->>|--x|--\)|-->|->>|-x|-\)|->)[+-]?)\s*([A-Za-z0-9_\u3131-\uD79D]+)\s*:(.*)$/;
 
   function ensureParticipant(model, id, label) {
     if (!id || model._participantMap[id]) return;
