@@ -10,6 +10,7 @@
     if (!model) return '';
 
     var lines = ['sequenceDiagram'];
+    if (model.autonumber) lines.push('    autonumber');
     var participants = model.participants || [];
     var messages = model.messages || [];
     var referenced = {};

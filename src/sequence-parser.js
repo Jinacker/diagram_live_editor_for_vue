@@ -85,6 +85,7 @@
         continue;
       }
 
+      if (line === 'autonumber') { model.autonumber = true; continue; }
       if (parseParticipantLine(line, model)) continue;
       if (parseMessageLine(line, model)) continue;
     }

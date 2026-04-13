@@ -467,6 +467,12 @@ Vue.component('mermaid-live-editor', {
       this._updateSequenceModel({ messages: messages });
     },
 
+    toggleAutonumber: function () {
+      if (this.isFlowchart) return;
+      this._snapshot();
+      this._updateSequenceModel({ autonumber: !this.model.autonumber });
+    },
+
     toggleSequenceMessageLineType: function (index) {
       if (this.isFlowchart) return;
       this._snapshot();
@@ -640,10 +646,12 @@ Vue.component('mermaid-live-editor', {
             :direction="model.direction"\
             :can-undo="canUndo"\
             :can-redo="canRedo"\
+            :autonumber="!!model.autonumber"\
             @add-node="addNode"\
             @add-sequence-participant="addSequenceParticipant"\
             @add-sequence-actor="addSequenceActor"\
             @add-sequence-message="addSequenceMessage"\
+            @toggle-autonumber="toggleAutonumber"\
             @undo="undo"\
             @redo="redo"\
             @change-direction="changeDirection"\

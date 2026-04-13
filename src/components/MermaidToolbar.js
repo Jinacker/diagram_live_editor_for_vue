@@ -14,10 +14,11 @@ Vue.component('mermaid-toolbar', {
     { key: 'violet', value: '#a855f7' }
   ],
   props: {
-    diagramType: { type: String,  default: 'flowchart' },
-    direction: { type: String,  default: 'TD' },
-    canUndo:   { type: Boolean, default: false },
-    canRedo:   { type: Boolean, default: false }
+    diagramType:  { type: String,  default: 'flowchart' },
+    direction:    { type: String,  default: 'TD' },
+    canUndo:      { type: Boolean, default: false },
+    canRedo:      { type: Boolean, default: false },
+    autonumber:   { type: Boolean, default: false }
   },
   data: function () {
     return {
@@ -53,6 +54,7 @@ Vue.component('mermaid-toolbar', {
     addSequenceParticipant: function () { this.$emit('add-sequence-participant'); },
     addSequenceActor: function () { this.$emit('add-sequence-actor'); },
     addSequenceMessage: function () { this.$emit('add-sequence-message'); },
+    toggleAutonumber: function () { this.$emit('toggle-autonumber'); },
     undo: function () { this.$emit('undo'); },
     redo: function () { this.$emit('redo'); },
     changeDirection: function (e) { this.$emit('change-direction', e.target.value); },
@@ -131,11 +133,8 @@ Vue.component('mermaid-toolbar', {
           <button v-else class="toolbar__btn toolbar__btn--active" @click="addSequenceParticipant" title="Add participant">\
             <span class="toolbar__btn-icon">+</span> Participant\
           </button>\
-          <button v-if="!isFlowchart" class="toolbar__btn" @click="addSequenceActor" title="Add actor">\
-            <span class="toolbar__btn-icon">+</span> Actor\
-          </button>\
-          <button v-if="!isFlowchart" class="toolbar__btn" @click="addSequenceMessage" title="Add message">\
-            <span class="toolbar__btn-icon">+</span> Message\
+          <button v-if="!isFlowchart" class="toolbar__btn" :class="{ \'toolbar__btn--active\': autonumber }" @click="toggleAutonumber" title="Toggle autonumber">\
+            AutoNumber\
           </button>\
         </div>\
         <div class="toolbar__group">\
