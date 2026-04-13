@@ -396,8 +396,8 @@ mermaid-toolbar {
 .toolbar {
   display: flex;
   flex-direction: column;
-  padding: 14px 16px 12px;
-  gap: 12px;
+  padding: 10px 16px 12px;
+  gap: 8px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
@@ -416,6 +416,10 @@ mermaid-toolbar {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.toolbar__main {
+  display: none;
 }
 
 .toolbar__title-block {
