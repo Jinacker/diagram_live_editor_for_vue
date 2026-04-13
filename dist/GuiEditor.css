@@ -1,0 +1,914 @@
+/* ============================================
+   GUI Editor — Acst 임베드용
+   원본(gui-editor/style.css)에서 불필요한 부분 제거:
+   - body, #app, .live-editor-shell (전체 페이지 레이아웃)
+   - .app-header* (헤더)
+   - .editor-container, .panel*, .code-editor* (텍스트 에디터 패널)
+   - .resize-handle (에디터/프리뷰 구분선)
+   CSS 변수를 :root 대신 .gui-editor-shell 에 스코프하여 전역 충돌 방지.
+   .toast → .gui-editor-toast 로 rename (Acst common.css의 .toast와 충돌 방지).
+   ============================================ */
+
+/* ---- CSS 커스텀 속성 (.gui-editor-shell 스코프) ---- */
+.gui-editor-shell {
+  --bg-main:         #f4f6fb;
+  --bg-surface:      #ffffff;
+  --bg-toolbar:      #eef1f8;
+  --bg-light-hover:  #e6eaf5;
+  --bg-editor:       #ffffff;
+
+  --text-primary:       #1b2a4a;
+  --text-secondary:     #4a5e80;
+  --text-muted:         #8e9db8;
+
+  --accent-blue:        #1565c0;
+  --accent-blue-mid:    #1976d2;
+  --accent-blue-light:  #42a5f5;
+  --accent-blue-glow:   rgba(21, 101, 192, 0.18);
+
+  --success:  #16a34a;
+  --error:    #dc2626;
+
+  --border-dark:  #dde3ef;
+  --border-mid:   #c5cedf;
+  --border-light: #dde3ef;
+  --border-focus: #1565c0;
+
+  --shadow-sm:   0 1px 4px rgba(27, 42, 74, 0.08);
+  --shadow-md:   0 4px 14px rgba(27, 42, 74, 0.12);
+  --shadow-lg:   0 8px 28px rgba(27, 42, 74, 0.16);
+  --shadow-glow: 0 0 16px var(--accent-blue-glow);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 16px;
+
+  --transition-fast:   140ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 240ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Consolas', 'Fira Code', monospace;
+
+  /* 레이아웃 */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+}
+
+/* custom element 기본 display */
+.gui-editor-shell mermaid-preview {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.gui-editor-shell mermaid-toolbar {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* ============================================
+   텍스트 에디터 패널 (MermaidEditor)
+   ============================================ */
+.gui-editor-shell .panel--editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xl);
+  background: var(--bg-editor);
+  box-shadow: var(--shadow-md);
+}
+
+.gui-editor-shell .panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  min-height: 54px;
+  background: #fbfcfe;
+  border-bottom: 1px solid var(--border-dark);
+  flex-shrink: 0;
+}
+
+.gui-editor-shell .panel__title {
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-secondary);
+}
+
+.gui-editor-shell .panel__meta {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.gui-editor-shell .code-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.gui-editor-shell .code-editor__textarea {
+  flex: 1;
+  width: 100%;
+  background: var(--bg-editor);
+  color: var(--text-primary);
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 16px 20px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.75;
+  letter-spacing: 0.2px;
+  tab-size: 4;
+  white-space: pre;
+  overflow: auto;
+}
+
+.gui-editor-shell .code-editor__textarea:focus {
+  background: #f8faff;
+}
+
+.gui-editor-shell .code-editor__error {
+  padding: 7px 14px;
+  font-size: 12px;
+  color: #f87171;
+  background: rgba(220, 38, 38, 0.1);
+  border-top: 1px solid rgba(220, 38, 38, 0.2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.gui-editor-shell .code-editor__status {
+  padding: 5px 16px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: #f4f6fb;
+  border-top: 1px solid var(--border-dark);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+/* ============================================
+   툴바
+   ============================================ */
+.gui-editor-shell .toolbar {
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 12px;
+  gap: 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.gui-editor-shell .toolbar__main {
+  display: none;
+}
+
+.gui-editor-shell .toolbar {
+  padding-top: 10px;
+  gap: 8px;
+}
+
+.gui-editor-shell .toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gui-editor-shell .toolbar__main,
+.gui-editor-shell .toolbar__sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.gui-editor-shell .toolbar__title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gui-editor-shell .toolbar__eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.gui-editor-shell .toolbar__title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.gui-editor-shell .toolbar__group--zoom {
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+.gui-editor-shell .toolbar__add-node-wrap {
+  position: relative;
+}
+
+.gui-editor-shell .toolbar__shape-picker {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 260px;
+  padding: 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  z-index: 300;
+}
+
+.gui-editor-shell .toolbar__shape-picker-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 4px 6px 8px;
+}
+
+.gui-editor-shell .toolbar__shape-picker-title--compact { padding-top: 0; }
+
+.gui-editor-shell .toolbar__shape-input {
+  width: 100%;
+  height: 34px;
+  margin-bottom: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.gui-editor-shell .toolbar__shape-input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--accent-blue-glow);
+}
+
+.gui-editor-shell .toolbar__shape-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.gui-editor-shell .toolbar__shape-color-row {
+  padding: 0 2px 10px;
+}
+
+.gui-editor-shell .toolbar__shape-picker-btn {
+  min-height: 58px;
+  padding: 7px 4px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-toolbar);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.gui-editor-shell .toolbar__shape-picker-btn:hover {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+  color: #fff;
+}
+
+.gui-editor-shell .toolbar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+  height: 30px;
+}
+
+.gui-editor-shell .toolbar__icon-btn {
+  height: 32px;
+  min-width: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: #f6f8fc;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.gui-editor-shell .toolbar__icon-btn:hover {
+  background: var(--bg-light-hover);
+  color: var(--text-primary);
+  border-color: #b8c4dc;
+}
+
+.gui-editor-shell .toolbar__icon-btn--wide { min-width: 54px; }
+
+.gui-editor-shell .toolbar__btn:hover {
+  background: var(--bg-light-hover);
+  color: var(--text-primary);
+  border-color: #b8c4dc;
+  box-shadow: var(--shadow-sm);
+}
+
+.gui-editor-shell .toolbar__btn:active { transform: translateY(1px); box-shadow: none; }
+
+.gui-editor-shell .toolbar__btn--active {
+  background: var(--accent-blue);
+  color: #fff;
+  border-color: var(--accent-blue);
+}
+
+.gui-editor-shell .toolbar__btn--active:hover {
+  background: var(--accent-blue-mid);
+  border-color: var(--accent-blue-mid);
+  color: #fff;
+}
+
+.gui-editor-shell .toolbar__btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.gui-editor-shell .toolbar__btn-icon { font-size: 13px; line-height: 1; }
+
+.gui-editor-shell .toolbar__select {
+  padding: 4px 9px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  outline: none;
+  height: 30px;
+  transition: all var(--transition-fast);
+}
+
+.gui-editor-shell .toolbar__select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--accent-blue-glow);
+}
+
+.gui-editor-shell .toolbar__select:hover { border-color: #b8c4dc; }
+
+/* ============================================
+   프리뷰 영역
+   ============================================ */
+.gui-editor-shell .preview-area {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  min-height: 0;
+  padding: 16px;
+  background:
+    linear-gradient(180deg, rgba(245, 248, 252, 0.92), rgba(237, 242, 249, 0.92)),
+    repeating-linear-gradient(0deg, rgba(27,42,74,0.028) 0, rgba(27,42,74,0.028) 1px, transparent 1px, transparent 28px),
+    repeating-linear-gradient(90deg, rgba(27,42,74,0.028) 0, rgba(27,42,74,0.028) 1px, transparent 1px, transparent 28px);
+}
+
+.gui-editor-shell .preview-area__canvas {
+  position: absolute;
+  inset: 16px;
+  background: #ffffff;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+  min-width: 0;
+  min-height: 0;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  display: block;
+  transition: box-shadow var(--transition-normal);
+}
+
+.gui-editor-shell .preview-area__svg-host {
+  position: absolute;
+  inset: 0;
+}
+
+.gui-editor-shell .preview-area__canvas:hover { box-shadow: var(--shadow-lg); }
+.gui-editor-shell .preview-area__canvas--panning { cursor: grabbing; }
+
+.gui-editor-shell .preview-area__canvas svg {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  will-change: transform;
+}
+
+.gui-editor-shell .preview-area__canvas svg text,
+.gui-editor-shell .preview-area__canvas svg tspan {
+  text-rendering: geometricPrecision;
+  paint-order: stroke fill;
+}
+
+.gui-editor-shell .preview-area__empty {
+  position: absolute;
+  inset: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+  padding: 40px;
+  text-align: center;
+  border: 1px dashed rgba(21, 101, 192, 0.24);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.gui-editor-shell .preview-area__empty-icon { font-size: 44px; opacity: 0.25; }
+.gui-editor-shell .preview-area__empty-text { font-size: 13.5px; font-weight: 500; }
+
+/* ============================================
+   SVG 노드 인터랙션
+   ============================================ */
+.gui-editor-shell .preview-area__canvas .node {
+  cursor: grab;
+  transition: filter var(--transition-fast);
+}
+
+.gui-editor-shell .preview-area__canvas .node:hover {
+  filter: brightness(0.93) drop-shadow(0 2px 6px rgba(21, 101, 192, 0.22));
+}
+
+.gui-editor-shell .preview-area__canvas .node.selected {
+  filter: brightness(0.9) drop-shadow(0 0 10px rgba(21, 101, 192, 0.35));
+}
+
+.gui-editor-shell .preview-area__canvas .node.dragging {
+  cursor: grabbing !important;
+  filter: brightness(0.88) drop-shadow(0 0 12px rgba(21, 101, 192, 0.3));
+}
+
+/* ============================================
+   노드 인라인 편집
+   ============================================ */
+.gui-editor-shell .node-edit-overlay {
+  position: absolute;
+  z-index: 1000;
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: none;
+  overflow: visible;
+  background: transparent;
+}
+
+.gui-editor-shell .node-edit-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 2px solid var(--accent-blue);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: center;
+  outline: none;
+  box-shadow: var(--shadow-glow), var(--shadow-md);
+  min-width: 100px;
+}
+
+/* ============================================
+   엣지 생성 모드 오버레이
+   ============================================ */
+.gui-editor-shell .edge-mode-overlay {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 18px;
+  background: var(--accent-blue);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 20px;
+  box-shadow: var(--shadow-md);
+  z-index: 50;
+  animation: guiEditorFadeSlideDown 0.3s ease;
+  pointer-events: none;
+}
+
+@keyframes guiEditorFadeSlideDown {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ============================================
+   컨텍스트 메뉴
+   ============================================ */
+.gui-editor-shell .context-menu {
+  position: absolute;
+  z-index: 2000;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 5px 0;
+  min-width: 180px;
+  animation: guiEditorFadeScaleIn 0.14s ease;
+}
+
+@keyframes guiEditorFadeScaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.gui-editor-shell .context-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.gui-editor-shell .context-menu__item:hover {
+  background: var(--bg-light-hover);
+  color: var(--text-primary);
+}
+
+.gui-editor-shell .context-menu__item--danger { color: var(--error); }
+
+.gui-editor-shell .context-menu__item--danger:hover {
+  background: rgba(220, 38, 38, 0.05);
+}
+
+.gui-editor-shell .context-menu__separator {
+  height: 1px;
+  background: var(--border-light);
+  margin: 4px 0;
+}
+
+.gui-editor-shell .context-menu__item-icon { width: 18px; text-align: center; font-size: 14px; }
+
+.gui-editor-shell .context-menu__section-title {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 4px 12px 6px;
+  margin-top: 4px;
+}
+
+.gui-editor-shell .context-menu__shapes {
+  display: flex;
+  gap: 4px;
+  padding: 0 12px 8px;
+  justify-content: space-between;
+}
+
+.gui-editor-shell .context-menu__shape-btn {
+  background: var(--bg-toolbar);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex: 1;
+  text-align: center;
+}
+
+.gui-editor-shell .context-menu__shape-btn:hover {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+  color: #fff;
+}
+
+.gui-editor-shell .context-menu__shapes-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px 10px 10px;
+}
+
+.gui-editor-shell .context-menu__shapes-grid .context-menu__shape-btn {
+  flex: none;
+  min-height: 58px;
+  padding: 7px 4px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: normal;
+  overflow: visible;
+}
+
+.gui-editor-shell .context-menu__shape-icon {
+  width: 28px;
+  height: 20px;
+  position: relative;
+  display: inline-block;
+  border: 1.5px solid currentColor;
+  background: rgba(255, 255, 255, 0.9);
+  color: inherit;
+}
+
+.gui-editor-shell .context-menu__shape-text {
+  font-size: 10px;
+  line-height: 1.1;
+  font-weight: 600;
+  color: inherit;
+  text-align: center;
+}
+
+.gui-editor-shell .context-menu__color-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 12px 10px;
+  flex-wrap: wrap;
+}
+
+.gui-editor-shell .context-menu__color-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(27, 42, 74, 0.18);
+  background: transparent;
+  cursor: pointer;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.gui-editor-shell .context-menu__color-btn:hover { transform: scale(1.08); box-shadow: 0 0 0 2px rgba(21,101,192,0.18); }
+.gui-editor-shell .context-menu__color-btn--selected { transform: scale(1.08); box-shadow: 0 0 0 2px rgba(21,101,192,0.22), 0 0 0 4px rgba(21,101,192,0.08); }
+
+.gui-editor-shell .context-menu__color-btn--clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  font-size: 0;
+  background: #fff;
+  border-color: rgba(27, 42, 74, 0.18);
+  position: relative;
+}
+
+.gui-editor-shell .context-menu__color-btn--clear::before {
+  content: 'x';
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Shape icon variants */
+.gui-editor-shell .context-menu__shape-icon--rect       { border-radius: 2px; }
+.gui-editor-shell .context-menu__shape-icon--round      { border-radius: 8px; }
+.gui-editor-shell .context-menu__shape-icon--stadium    { border-radius: 999px; }
+
+.gui-editor-shell .context-menu__shape-icon--subroutine::before,
+.gui-editor-shell .context-menu__shape-icon--subroutine::after {
+  content: ''; position: absolute; top: 2px; bottom: 2px; width: 1.5px; background: currentColor;
+}
+.gui-editor-shell .context-menu__shape-icon--subroutine::before { left: 4px; }
+.gui-editor-shell .context-menu__shape-icon--subroutine::after  { right: 4px; }
+
+.gui-editor-shell .context-menu__shape-icon--cylinder   { border-radius: 999px / 6px; }
+.gui-editor-shell .context-menu__shape-icon--cylinder::before,
+.gui-editor-shell .context-menu__shape-icon--cylinder::after {
+  content: ''; position: absolute; left: -1.5px; right: -1.5px; height: 6px;
+  border: 1.5px solid currentColor; border-radius: 50%; background: rgba(255,255,255,0.9);
+}
+.gui-editor-shell .context-menu__shape-icon--cylinder::before { top: -3px; }
+.gui-editor-shell .context-menu__shape-icon--cylinder::after  { bottom: -3px; clip-path: inset(50% 0 0 0); }
+
+.gui-editor-shell .context-menu__shape-icon--rhombus    { width: 20px; height: 20px; transform: rotate(45deg); border-radius: 2px; }
+.gui-editor-shell .context-menu__shape-icon--hexagon    { border: none; background: currentColor; clip-path: polygon(20% 0, 80% 0, 100% 50%, 80% 100%, 20% 100%, 0 50%); }
+.gui-editor-shell .context-menu__shape-icon--hexagon::before {
+  content: ''; position: absolute; inset: 1.5px; background: rgba(255,255,255,0.9);
+  clip-path: polygon(20% 0, 80% 0, 100% 50%, 80% 100%, 20% 100%, 0 50%);
+}
+.gui-editor-shell .context-menu__shape-icon--parallelogram     { transform: skewX(-18deg); }
+.gui-editor-shell .context-menu__shape-icon--parallelogram_alt { transform: skewX(18deg); }
+
+.gui-editor-shell .context-menu__shape-icon--trapezoid { border: none; background: currentColor; clip-path: polygon(18% 0, 82% 0, 100% 100%, 0 100%); }
+.gui-editor-shell .context-menu__shape-icon--trapezoid::before {
+  content: ''; position: absolute; inset: 1.5px; background: rgba(255,255,255,0.9); clip-path: polygon(18% 0, 82% 0, 100% 100%, 0 100%);
+}
+.gui-editor-shell .context-menu__shape-icon--trapezoid_alt { border: none; background: currentColor; clip-path: polygon(0 0, 100% 0, 82% 100%, 18% 100%); }
+.gui-editor-shell .context-menu__shape-icon--trapezoid_alt::before {
+  content: ''; position: absolute; inset: 1.5px; background: rgba(255,255,255,0.9); clip-path: polygon(0 0, 100% 0, 82% 100%, 18% 100%);
+}
+.gui-editor-shell .context-menu__shape-icon--double_circle { border-radius: 50%; }
+.gui-editor-shell .context-menu__shape-icon--double_circle::before {
+  content: ''; position: absolute; inset: 3px; border: 1.5px solid currentColor; border-radius: 50%;
+}
+.gui-editor-shell .context-menu__shape-icon--asymmetric { border: none; background: currentColor; clip-path: polygon(0 0, 78% 0, 100% 50%, 78% 100%, 0 100%, 12% 50%); }
+.gui-editor-shell .context-menu__shape-icon--asymmetric::before {
+  content: ''; position: absolute; inset: 1.5px; background: rgba(255,255,255,0.9); clip-path: polygon(0 0, 78% 0, 100% 50%, 78% 100%, 0 100%, 12% 50%);
+}
+
+/* ============================================
+   토스트 알림 (rename: .toast → .gui-editor-toast)
+   ============================================ */
+.gui-editor-shell .gui-editor-toast {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 9px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  pointer-events: none;
+  transition: all var(--transition-normal);
+  z-index: 9999;
+  white-space: nowrap;
+}
+
+.gui-editor-shell .gui-editor-toast.gui-editor-toast--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ============================================
+   연결 포트
+   ============================================ */
+.gui-editor-shell .conn-port {
+  fill: var(--accent-blue-mid);
+  stroke: white;
+  stroke-width: 1.5px;
+  transition: r 120ms ease, opacity 0.15s ease;
+  opacity: 0.9;
+  filter: drop-shadow(0 0 4px rgba(21, 101, 192, 0.5));
+}
+
+.gui-editor-shell .conn-port:hover,
+.gui-editor-shell .conn-port.port-hovered { r: 7; opacity: 1; filter: drop-shadow(0 0 8px rgba(21, 101, 192, 0.8)); }
+
+.gui-editor-shell .conn-port-glow {
+  fill: var(--accent-blue-glow);
+  stroke: none;
+  pointer-events: none;
+  opacity: 0;
+  animation: guiEditorPortGlowPulse 1.5s ease-in-out infinite;
+}
+
+.gui-editor-shell .conn-port-hit { fill: #fff; fill-opacity: 0.001; stroke: none; }
+
+@keyframes guiEditorPortGlowPulse {
+  0%, 100% { opacity: 0; }
+  50%       { opacity: 0.4; }
+}
+
+/* ============================================
+   드래그 엣지
+   ============================================ */
+.gui-editor-shell .drag-edge-line {
+  pointer-events: none;
+  animation: guiEditorDashOffset 0.8s linear infinite;
+}
+
+@keyframes guiEditorDashOffset {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: 20; }
+}
+
+/* ============================================
+   엣지 인터랙션
+   ============================================ */
+.gui-editor-shell .preview-area__canvas .edgePath path { transition: all 0.2s ease; }
+
+.gui-editor-shell .preview-area__canvas .edgePath.edge-hovered path,
+.gui-editor-shell .preview-area__canvas .edgePath.edge-selected path {
+  filter: drop-shadow(0 0 8px rgba(21, 101, 192, 0.28));
+}
+
+.gui-editor-shell .preview-area__canvas .edgePaths,
+.gui-editor-shell .preview-area__canvas .edgePath { pointer-events: all !important; }
+
+.gui-editor-shell .preview-area__canvas .edgePaths > path.edge-click-area {
+  pointer-events: stroke !important;
+  stroke-width: 16px !important;
+  stroke: transparent !important;
+  fill: none !important;
+}
+
+.gui-editor-shell .preview-area__canvas #edge-ghost-overlay .edge-hit-selected {
+  stroke: #2563eb !important;
+  stroke-opacity: 0.18 !important;
+  stroke-width: 16px !important;
+  stroke-linecap: round !important;
+  fill: none !important;
+}
+
+.gui-editor-shell .preview-area__canvas .edgePath path:not(.edge-click-area) { pointer-events: none !important; }
+.gui-editor-shell .preview-area__canvas .edgeLabels,
+.gui-editor-shell .preview-area__canvas .edgeLabel { pointer-events: none !important; }
+
+/* ============================================
+   엣지 플로팅 툴바
+   ============================================ */
+.gui-editor-shell .edge-toolbar {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 10px));
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 4px 8px;
+  box-shadow: var(--shadow-md);
+  z-index: 500;
+  animation: guiEditorFadeScaleIn var(--transition-fast) both;
+  pointer-events: all;
+  max-width: calc(100% - 16px);
+}
+
+.gui-editor-shell .edge-toolbar__btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.gui-editor-shell .edge-toolbar__btn:hover { background: var(--bg-light-hover); color: var(--text-primary); }
+.gui-editor-shell .edge-toolbar__btn--danger:hover { background: rgba(220,38,38,0.07); color: var(--error); }
+.gui-editor-shell .edge-toolbar__sep { width: 1px; height: 18px; background: var(--border-light); margin: 0 2px; }
+.gui-editor-shell .edge-toolbar__btn--active { background: var(--bg-light-hover); color: var(--text-primary); }
+.gui-editor-shell .edge-toolbar__btn--line-opt { font-family: var(--font-mono); font-size: 11.5px; }
+
+/* ============================================
+   시퀀스 다이어그램
+   ============================================ */
+.gui-editor-shell .preview-area__canvas .sequence-participant-selected rect,
+.gui-editor-shell .preview-area__canvas .sequence-participant-selected polygon,
+.gui-editor-shell .preview-area__canvas .sequence-participant-selected path {
+  stroke: #1565c0 !important;
+  stroke-width: 2.5px !important;
+  filter: drop-shadow(0 0 8px rgba(21, 101, 192, 0.28));
+}
+
+.gui-editor-shell .preview-area__canvas .sequence-message-selected {
+  stroke: #1565c0 !important;
+  stroke-width: 2px !important;
+  filter: drop-shadow(0 0 6px rgba(21, 101, 192, 0.3));
+}

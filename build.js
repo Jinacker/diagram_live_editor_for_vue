@@ -27,6 +27,10 @@ const files = [
   'src/components/MermaidFullEditor.js',
 ];
 
+const assetFiles = [
+  'GuiEditor.css',
+];
+
 const banner = `/**
  * gui-editor.bundle.js
  * Built: ${new Date().toISOString()}
@@ -57,3 +61,15 @@ const bundle = parts.join('\n\n');
 const outPath = path.join(__dirname, 'dist', 'gui-editor.bundle.js');
 fs.writeFileSync(outPath, bundle, 'utf8');
 console.log(`\nBundle written: ${outPath} (${(bundle.length / 1024).toFixed(1)} KB)`);
+
+for (const assetFile of assetFiles) {
+  const assetSrc = path.join(__dirname, assetFile);
+  if (!fs.existsSync(assetSrc)) {
+    console.error('Missing asset:', assetSrc);
+    process.exit(1);
+  }
+
+  const assetOut = path.join(__dirname, 'dist', path.basename(assetFile));
+  fs.copyFileSync(assetSrc, assetOut);
+  console.log(`Asset copied: ${assetOut}`);
+}

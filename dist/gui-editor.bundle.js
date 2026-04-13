@@ -1,6 +1,6 @@
 /**
  * gui-editor.bundle.js
- * Built: 2026-04-13T05:41:50.773Z
+ * Built: 2026-04-13T07:49:34.945Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires: Vue 2, Mermaid (loaded separately before this bundle).
