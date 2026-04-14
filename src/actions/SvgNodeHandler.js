@@ -1,10 +1,9 @@
 (function (global) {
   'use strict';
 
-  // 파서가 지원하는 13개 shape 목록
+  // UI에서 노출하는 shape 목록
   var SHAPES = [
     { key: 'rect',              label: '[ ]',     name: 'Rectangle' },
-    { key: 'round',             label: '( )',     name: 'Rounded' },
     { key: 'stadium',           label: '([ ])',   name: 'Stadium' },
     { key: 'subroutine',        label: '[[ ]]',   name: 'Subroutine' },
     { key: 'cylinder',          label: '[( )]',   name: 'Cylinder' },

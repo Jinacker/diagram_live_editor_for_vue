@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-14T02:55:40.110Z
+ * Built: 2026-04-14T04:16:19.030Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -971,10 +971,9 @@
 (function (global) {
   'use strict';
 
-  // 파서가 지원하는 13개 shape 목록
+  // UI에서 노출하는 shape 목록
   var SHAPES = [
     { key: 'rect',              label: '[ ]',     name: 'Rectangle' },
-    { key: 'round',             label: '( )',     name: 'Rounded' },
     { key: 'stadium',           label: '([ ])',   name: 'Stadium' },
     { key: 'subroutine',        label: '[[ ]]',   name: 'Subroutine' },
     { key: 'cylinder',          label: '[( )]',   name: 'Cylinder' },
