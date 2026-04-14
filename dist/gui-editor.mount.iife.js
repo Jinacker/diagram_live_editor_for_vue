@@ -1,6 +1,6 @@
 /**
  * gui-editor.mount.iife.js
- * Built: 2026-04-14T01:46:25.452Z
+ * Built: 2026-04-14T01:57:17.458Z
  *
  * Browser mount bundle for gui-editor (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
