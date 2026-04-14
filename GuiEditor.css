@@ -733,16 +733,20 @@
   color: transparent;
   font-size: 0;
   background: #fff;
-  border-color: rgba(27, 42, 74, 0.18);
+  border-color: #94a3b8;
+  border-width: 2px;
   position: relative;
+  overflow: hidden;
 }
 
 .gui-editor-shell .context-menu__color-btn--clear::before {
-  content: 'x';
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 2px;
+  background: #94a3b8;
+  border-radius: 999px;
+  transform: rotate(-45deg);
 }
 
 /* Shape icon variants */
@@ -913,6 +917,13 @@
   animation: guiEditorFadeScaleIn var(--transition-fast) both;
   pointer-events: all;
   max-width: calc(100% - 16px);
+}
+
+.gui-editor-shell .edge-toolbar__palette {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
 }
 
 .gui-editor-shell .edge-toolbar__btn {

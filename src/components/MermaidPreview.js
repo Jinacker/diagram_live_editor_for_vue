@@ -1184,7 +1184,7 @@ Vue.component('mermaid-preview', {
           </div>\
           <div class="context-menu__section-title">Color</div>\
           <div class="context-menu__color-row">\
-            <button class="context-menu__color-btn context-menu__color-btn--clear" title="default" @click="contextChangeNodeColor(&quot;&quot;)">x</button>\
+            <button class="context-menu__color-btn context-menu__color-btn--clear" aria-label="Clear color" @click="contextChangeNodeColor(&quot;&quot;)"></button>\
             <button v-for="color in $options.COLOR_PALETTE" :key="color.key" class="context-menu__color-btn" :style="{ backgroundColor: color.value }" :title="color.key" @click="contextChangeNodeColor(color.value)"></button>\
           </div>\
           <div class="context-menu__separator"></div>\
@@ -1194,7 +1194,7 @@ Vue.component('mermaid-preview', {
         <div v-if="edgeToolbar" class="edge-toolbar" :style="{ left: edgeToolbar.x + &quot;px&quot;, top: edgeToolbar.y + &quot;px&quot; }" @click.stop>\
           <button class="edge-toolbar__btn" @click="edgeToolbarEdit" title="Edit label">Label ✎</button>\
           <div class="edge-toolbar__palette">\
-            <button class="context-menu__color-btn context-menu__color-btn--clear" title="default" @click="edgeToolbarChangeColor(&quot;&quot;)">x</button>\
+            <button class="context-menu__color-btn context-menu__color-btn--clear" aria-label="Clear color" @click="edgeToolbarChangeColor(&quot;&quot;)"></button>\
             <button v-for="color in $options.COLOR_PALETTE" :key="color.key" class="context-menu__color-btn" :style="{ backgroundColor: color.value }" :title="color.key" @click="edgeToolbarChangeColor(color.value)"></button>\
           </div>\
           <div class="edge-toolbar__sep"></div>\
