@@ -692,6 +692,13 @@ Vue.component('mermaid-preview', {
             ? self.$refs.canvas.getBoundingClientRect()
             : (self.$el && self.$el.getBoundingClientRect ? self.$el.getBoundingClientRect() : null);
         },
+        panPreviewBy: function (dx, dy) {
+          if (!self._svgEl) return;
+          if (!dx && !dy) return;
+          self.panX += dx || 0;
+          self.panY += dy || 0;
+          self._applyTransform();
+        },
         watchSequenceParticipantSelection: function (participantId, el) {
           self.$watch('selectedSequenceParticipantId', function (val) {
             el.classList.toggle('sequence-participant-selected', val === participantId);

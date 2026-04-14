@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-14T02:15:49.323Z
+ * Built: 2026-04-14T02:55:40.110Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -1427,9 +1427,12 @@
       self._dragLine.style.display = '';
 
       var currentTarget = null;
+      var pointerClientX = 0;
+      var pointerClientY = 0;
+      var autoPanFrame = null;
 
-      var onMove = function (me) {
-        var svgPt = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
+      var updateDragAtClient = function (clientX, clientY) {
+        var svgPt = SvgPositionTracker.getSVGPoint(svgEl, clientX, clientY);
         self._dragLine.setAttribute('x2', svgPt.x);
         self._dragLine.setAttribute('y2', svgPt.y);
 
@@ -1441,10 +1444,79 @@
         }
       };
 
+      var getAutoPanDelta = function (clientX, clientY) {
+        var rect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+        var threshold = 56;
+        var maxStep = 8;
+        var dx = 0;
+        var dy = 0;
+        var progress = 0;
+
+        if (!rect) return { dx: 0, dy: 0 };
+
+        if (clientX <= rect.left + threshold) {
+          progress = Math.min(1, (rect.left + threshold - clientX) / threshold);
+          dx = Math.ceil(progress * maxStep);
+        } else if (clientX >= rect.right - threshold) {
+          progress = Math.min(1, (clientX - (rect.right - threshold)) / threshold);
+          dx = -Math.ceil(progress * maxStep);
+        }
+
+        if (clientY <= rect.top + threshold) {
+          progress = Math.min(1, (rect.top + threshold - clientY) / threshold);
+          dy = Math.ceil(progress * maxStep);
+        } else if (clientY >= rect.bottom - threshold) {
+          progress = Math.min(1, (clientY - (rect.bottom - threshold)) / threshold);
+          dy = -Math.ceil(progress * maxStep);
+        }
+
+        return { dx: dx, dy: dy };
+      };
+
+      var stopAutoPan = function () {
+        if (!autoPanFrame) return;
+        cancelAnimationFrame(autoPanFrame);
+        autoPanFrame = null;
+      };
+
+      var autoPanTick = function () {
+        autoPanFrame = null;
+        if (!ctx.getState().portDragging) return;
+
+        var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+        if (!delta.dx && !delta.dy) return;
+
+        if (ctx.panPreviewBy) {
+          ctx.panPreviewBy(delta.dx, delta.dy);
+          updateDragAtClient(pointerClientX, pointerClientY);
+        }
+
+        autoPanFrame = requestAnimationFrame(autoPanTick);
+      };
+
+      var scheduleAutoPan = function () {
+        if (autoPanFrame) return;
+        var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+        if (!delta.dx && !delta.dy) return;
+        autoPanFrame = requestAnimationFrame(autoPanTick);
+      };
+
+      var startScreenPt = SvgPositionTracker.svgToScreen(svgEl, fromPt.x, fromPt.y);
+      pointerClientX = startScreenPt.x;
+      pointerClientY = startScreenPt.y;
+
+      var onMove = function (me) {
+        pointerClientX = me.clientX;
+        pointerClientY = me.clientY;
+        updateDragAtClient(pointerClientX, pointerClientY);
+        scheduleAutoPan();
+      };
+
       var onUp = function (me) {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
 
+        stopAutoPan();
         self._dragLine.style.display = 'none';
         if (currentTarget) self._clearTargetHighlight(svgEl, currentTarget);
         ctx.setState({ portDragging: false });
@@ -3425,6 +3497,13 @@ Vue.component('mermaid-preview', {
           return self.$refs.canvas && self.$refs.canvas.getBoundingClientRect
             ? self.$refs.canvas.getBoundingClientRect()
             : (self.$el && self.$el.getBoundingClientRect ? self.$el.getBoundingClientRect() : null);
+        },
+        panPreviewBy: function (dx, dy) {
+          if (!self._svgEl) return;
+          if (!dx && !dy) return;
+          self.panX += dx || 0;
+          self.panY += dy || 0;
+          self._applyTransform();
         },
         watchSequenceParticipantSelection: function (participantId, el) {
           self.$watch('selectedSequenceParticipantId', function (val) {
