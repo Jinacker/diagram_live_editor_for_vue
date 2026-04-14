@@ -1,6 +1,6 @@
 /**
  * gui-editor.mount.iife.js
- * Built: 2026-04-14T00:52:47.009Z
+ * Built: 2026-04-14T01:46:25.452Z
  *
  * Browser mount bundle for gui-editor (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -2432,8 +2432,8 @@ if (!global.Vue || !/^2\./.test(String(global.Vue.version || ''))) {
 
 /* ===== src/components/MermaidEditor.js ===== */
 /**
- * MermaidEditor 컴포넌트
- * 왼쪽 패널의 Mermaid 스크립트 textarea와 상태 바를 담당한다.
+ * MermaidEditor component
+ * Handles the raw Mermaid script textarea for the left editor pane.
  */
 
 Vue.component('mermaid-editor', {
@@ -2450,27 +2450,17 @@ Vue.component('mermaid-editor', {
   },
   watch: {
     value: function (newVal) {
-      // 외부(model -> script) 갱신이 들어오면 textarea 로컬 상태도 따라간다.
       if (newVal !== this.localValue) {
         this.localValue = newVal;
       }
     }
   },
   computed: {
-    lineCount: function () {
-      return this.localValue ? this.localValue.split('\n').length : 0;
-    },
-    charCount: function () {
-      return this.localValue ? this.localValue.length : 0;
-    },
     placeholderText: function () {
       if (this.diagramType === 'sequenceDiagram') {
         return 'sequenceDiagram\n    Alice->>+John: Hello John, how are you?\n    John-->>-Alice: Hi Alice, I can hear you!';
       }
       return 'flowchart TD\n    A[Start] --> B[Process]\n    B --> C[End]';
-    },
-    statusText: function () {
-      return this.diagramType === 'sequenceDiagram' ? 'Mermaid Sequence Diagram' : 'Mermaid Flowchart';
     }
   },
   methods: {
@@ -2482,14 +2472,12 @@ Vue.component('mermaid-editor', {
         this.$emit('input', this.localValue);
         return;
       }
-      // 매 타이핑마다 바로 parse하지 않고 짧게 debounce해서 editor 입력감을 유지한다.
       clearTimeout(this.debounceTimer);
       this.debounceTimer = setTimeout(function () {
         self.$emit('input', self.localValue);
       }, 300);
     },
     onKeyDown: function (e) {
-      // Tab 키 입력 시 실제 공백 4칸을 넣는다.
       if (e.key === 'Tab') {
         e.preventDefault();
         var textarea = e.target;
@@ -2505,10 +2493,6 @@ Vue.component('mermaid-editor', {
   },
   template: '\
     <div class="panel panel--editor">\
-      <div class="panel__header">\
-        <span class="panel__title">Mermaid Code</span>\
-        <span class="panel__meta">{{ statusText }}</span>\
-      </div>\
       <div class="code-editor">\
         <textarea\
           class="code-editor__textarea"\
@@ -2519,11 +2503,7 @@ Vue.component('mermaid-editor', {
           spellcheck="false"\
         ></textarea>\
         <div v-if="error" class="code-editor__error">\
-          <span>⚠</span> {{ error }}\
-        </div>\
-        <div class="code-editor__status">\
-          <span>Lines: {{ lineCount }} | Chars: {{ charCount }}</span>\
-          <span>{{ statusText }}</span>\
+          <span>!</span><span>{{ error }}</span>\
         </div>\
       </div>\
     </div>\
@@ -2548,11 +2528,11 @@ Vue.component('mermaid-toolbar', {
     { key: 'violet', value: '#a855f7' }
   ],
   props: {
-    diagramType:  { type: String,  default: 'flowchart' },
-    direction:    { type: String,  default: 'TD' },
-    canUndo:      { type: Boolean, default: false },
-    canRedo:      { type: Boolean, default: false },
-    autonumber:   { type: Boolean, default: false }
+    diagramType: { type: String, default: 'flowchart' },
+    direction: { type: String, default: 'TD' },
+    canUndo: { type: Boolean, default: false },
+    canRedo: { type: Boolean, default: false },
+    autonumber: { type: Boolean, default: false }
   },
   data: function () {
     return {
@@ -2564,9 +2544,6 @@ Vue.component('mermaid-toolbar', {
   computed: {
     isFlowchart: function () {
       return this.diagramType !== 'sequenceDiagram';
-    },
-    titleText: function () {
-      return this.isFlowchart ? 'Mermaid Preview' : 'Sequence Preview';
     }
   },
   methods: {
@@ -2611,12 +2588,6 @@ Vue.component('mermaid-toolbar', {
   },
   template: '\
     <div class="toolbar">\
-      <div class="toolbar__main">\
-        <div class="toolbar__title-block">\
-          <div class="toolbar__eyebrow">Viewport</div>\
-          <div class="toolbar__title">{{ titleText }}</div>\
-        </div>\
-      </div>\
       <div class="toolbar__sub">\
         <div class="toolbar__group">\
           <div v-if="isFlowchart" class="toolbar__add-node-wrap">\
@@ -2676,19 +2647,19 @@ Vue.component('mermaid-toolbar', {
           <button class="toolbar__btn" @click="undo" :disabled="!canUndo" title="Undo (Ctrl+Z)">Undo</button>\
           <button class="toolbar__btn" @click="redo" :disabled="!canRedo" title="Redo (Ctrl+Y)">Redo</button>\
         </div>\
+        <div v-if="isFlowchart" class="toolbar__group">\
+          <select class="toolbar__select" :value="direction" @change="changeDirection" title="Layout direction">\
+            <option value="TD">Top Down</option>\
+            <option value="LR">Left Right</option>\
+            <option value="BT">Bottom Top</option>\
+            <option value="RL">Right Left</option>\
+          </select>\
+        </div>\
         <div class="toolbar__group toolbar__group--zoom">\
           <button class="toolbar__icon-btn" @click="zoomOut" title="Zoom Out">-</button>\
           <button class="toolbar__icon-btn" @click="zoomIn" title="Zoom In">+</button>\
           <button class="toolbar__icon-btn toolbar__icon-btn--wide" @click="fitView" title="Fit to View">Fit</button>\
-          <button class="toolbar__icon-btn toolbar__icon-btn--wide" @click="exportPng" title="Export PNG">Export</button>\
-        </div>\
-        <div v-if="isFlowchart" class="toolbar__group">\
-          <select class="toolbar__select" :value="direction" @change="changeDirection" title="Layout direction">\
-            <option value="TD">↓ Top Down</option>\
-            <option value="LR">→ Left Right</option>\
-            <option value="BT">↑ Bottom Top</option>\
-            <option value="RL">← Right Left</option>\
-          </select>\
+          <button class="toolbar__icon-btn toolbar__icon-btn--wide" @click="exportPng" title="Export PNG">PNG</button>\
         </div>\
       </div>\
     </div>\
@@ -4271,14 +4242,16 @@ Vue.component('mermaid-full-editor', {
   },
 
   template: '\
-    <div class="gui-editor-shell" style="display:flex; flex-direction:row; height:100%;">\
-      <mermaid-editor\
-        :value="script"\
-        :error="error"\
-        :diagram-type="model.type"\
-        @input="onScriptChange"\
-      ></mermaid-editor>\
-      <div style="flex:1; display:flex; flex-direction:column; min-width:0;">\
+    <div class="gui-editor-shell">\
+      <div class="gui-editor-shell__editor-pane">\
+        <mermaid-editor\
+          :value="script"\
+          :error="error"\
+          :diagram-type="model.type"\
+          @input="onScriptChange"\
+        ></mermaid-editor>\
+      </div>\
+      <div class="gui-editor-shell__preview-pane">\
         <mermaid-toolbar\
           :diagram-type="model.type"\
           :direction="model.direction"\

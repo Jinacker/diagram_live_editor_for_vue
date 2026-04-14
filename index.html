@@ -3,46 +3,91 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Mermaid Live Editor - Vue 2 based diagram editor with bidirectional script and GUI editing">
-  <title>Mermaid Live Editor</title>
-  <link rel="stylesheet" href="style.css">
+  <meta name="description" content="GUI Editor embed preview">
+  <title>GUI Editor Embed Preview</title>
+  <link rel="stylesheet" href="GuiEditor.css">
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #f5f6f8;
+      color: #222;
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    #app {
+      min-height: 100%;
+      padding: 24px;
+    }
+
+    .demo-modal {
+      width: min(1400px, 100%);
+      margin: 0 auto;
+      background: #ffffff;
+      border: 1px solid #d9dfe8;
+    }
+
+    .demo-modal__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 44px;
+      padding: 0 18px;
+      border-bottom: 1px solid #d9dfe8;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .demo-modal__close {
+      border: none;
+      background: transparent;
+      color: #8a94a3;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .demo-modal__tabs {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 18px 16px 10px;
+    }
+
+    .demo-modal__tab {
+      height: 28px;
+      padding: 0 14px;
+      border: none;
+      border-radius: 14px;
+      background: transparent;
+      color: #666;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: default;
+    }
+
+    .demo-modal__tab--active {
+      background: #d6d6d6;
+      color: #222;
+    }
+
+    .demo-modal__body {
+      padding: 0 16px 16px;
+      height: 720px;
+    }
+  </style>
 </head>
 <body>
-
   <div id="app"></div>
 
-  <!-- Vue 2 -->
   <script src="https://cdn.jsdelivr.net/npm/vue@2.7.16/dist/vue.min.js"></script>
-  <!-- Mermaid.js -->
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-
-  <!-- Core modules -->
-  <script src="src/sequence-parser.js"></script>
-  <script src="src/sequence-generator.js"></script>
-  <script src="src/mermaid-parser.js"></script>
-  <script src="src/mermaid-generator.js"></script>
-
-  <!-- Services -->
-  <script src="src/services/HistoryManager.js"></script>
-  <script src="src/services/StorageManager.js"></script>
-
-  <!-- Action modules (SvgPositionTracker must come first) -->
-  <script src="src/actions/SvgPositionTracker.js"></script>
-  <script src="src/actions/SvgNodeHandler.js"></script>
-  <script src="src/actions/SvgEdgeHandler.js"></script>
-  <script src="src/actions/PortDragHandler.js"></script>
-  <script src="src/actions/SequencePositionTracker.js"></script>
-  <script src="src/actions/SequenceMessageDragHandler.js"></script>
-  <script src="src/actions/SequenceSvgHandler.js"></script>
-
-  <!-- Vue Components (order matters: children first) -->
-  <script src="src/components/MermaidEditor.js"></script>
-  <script src="src/components/MermaidToolbar.js"></script>
-  <script src="src/components/MermaidPreview.js"></script>
-  <script src="src/components/MermaidLiveEditor.js"></script>
-
-  <!-- App Entry -->
+  <script src="dist/gui-editor.component.js"></script>
   <script src="src/app.js"></script>
-
 </body>
 </html>

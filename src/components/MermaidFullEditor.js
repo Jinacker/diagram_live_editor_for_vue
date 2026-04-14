@@ -344,14 +344,16 @@ Vue.component('mermaid-full-editor', {
   },
 
   template: '\
-    <div class="gui-editor-shell" style="display:flex; flex-direction:row; height:100%;">\
-      <mermaid-editor\
-        :value="script"\
-        :error="error"\
-        :diagram-type="model.type"\
-        @input="onScriptChange"\
-      ></mermaid-editor>\
-      <div style="flex:1; display:flex; flex-direction:column; min-width:0;">\
+    <div class="gui-editor-shell">\
+      <div class="gui-editor-shell__editor-pane">\
+        <mermaid-editor\
+          :value="script"\
+          :error="error"\
+          :diagram-type="model.type"\
+          @input="onScriptChange"\
+        ></mermaid-editor>\
+      </div>\
+      <div class="gui-editor-shell__preview-pane">\
         <mermaid-toolbar\
           :diagram-type="model.type"\
           :direction="model.direction"\

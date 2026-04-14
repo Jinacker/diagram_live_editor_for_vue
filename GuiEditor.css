@@ -912,3 +912,188 @@
   stroke-width: 2px !important;
   filter: drop-shadow(0 0 6px rgba(21, 101, 192, 0.3));
 }
+
+/* ============================================
+   Minimal V-SPICE-style overrides
+   ============================================ */
+.gui-editor-shell {
+  flex-direction: row;
+  gap: 8px;
+  background: transparent;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --bg-toolbar: #ffffff;
+  --bg-light-hover: #f3f5f8;
+  --text-primary: #1f2937;
+  --text-secondary: #54657d;
+  --text-muted: #8a97ab;
+  --border-dark: #d6dde8;
+  --border-mid: #c7d1de;
+  --border-light: #d9e0ea;
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+}
+
+.gui-editor-shell__editor-pane {
+  flex: 0 0 45%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.gui-editor-shell__preview-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-radius: 0;
+  background: var(--bg-surface);
+  box-shadow: none;
+}
+
+.gui-editor-shell .panel--editor {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.gui-editor-shell .panel__header {
+  display: none;
+}
+
+.gui-editor-shell .code-editor__textarea {
+  padding: 12px 14px;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.gui-editor-shell .code-editor__textarea:focus {
+  background: #ffffff;
+}
+
+.gui-editor-shell .code-editor__error {
+  padding: 4px 10px;
+  font-size: 11.5px;
+  background: #fff4f4;
+  border-top: 1px solid #f2d6d6;
+}
+
+.gui-editor-shell .code-editor__status {
+  display: none;
+}
+
+.gui-editor-shell .toolbar {
+  flex-direction: row;
+  align-items: center;
+  padding: 6px 8px;
+  gap: 6px;
+  background: #ffffff;
+}
+
+.gui-editor-shell .toolbar__main {
+  display: none !important;
+}
+
+.gui-editor-shell .toolbar__sub {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.gui-editor-shell .toolbar__group {
+  gap: 4px;
+}
+
+.gui-editor-shell .toolbar__shape-picker {
+  top: calc(100% + 4px);
+  border-radius: 0;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+.gui-editor-shell .toolbar__btn {
+  padding: 4px 10px;
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 500;
+  height: 26px;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.gui-editor-shell .toolbar__icon-btn {
+  height: 26px;
+  min-width: 26px;
+  padding: 0 8px;
+  border-radius: 0;
+  background: #ffffff;
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.gui-editor-shell .toolbar__icon-btn--wide {
+  min-width: 42px;
+}
+
+.gui-editor-shell .toolbar__btn--active {
+  background: var(--accent-blue);
+  color: #ffffff;
+  border-color: var(--accent-blue);
+}
+
+.gui-editor-shell .toolbar__btn--active:hover {
+  background: var(--accent-blue-mid);
+  border-color: var(--accent-blue-mid);
+  color: #ffffff;
+}
+
+.gui-editor-shell .toolbar__select {
+  background: #ffffff;
+  font-size: 12px;
+  height: 26px;
+  border-radius: 0;
+  padding: 3px 8px;
+}
+
+.gui-editor-shell .toolbar__group--zoom {
+  margin-left: auto;
+}
+
+.gui-editor-shell .preview-area {
+  padding: 0;
+  background: #ffffff;
+}
+
+.gui-editor-shell .preview-area__canvas {
+  inset: 0;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+}
+
+.gui-editor-shell .preview-area__canvas:hover {
+  box-shadow: none;
+}
+
+.gui-editor-shell .preview-area__empty {
+  inset: 0;
+  border-radius: 0;
+  border: none;
+  background: #ffffff;
+}
+
+.gui-editor-shell .context-menu,
+.gui-editor-shell .edge-toolbar,
+.gui-editor-shell .node-edit-input,
+.gui-editor-shell .gui-editor-toast {
+  border-radius: 0;
+}
+
+.gui-editor-shell .edge-toolbar,
+.gui-editor-shell .context-menu {
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+}

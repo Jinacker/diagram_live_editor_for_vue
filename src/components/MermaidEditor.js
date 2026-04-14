@@ -1,6 +1,6 @@
 /**
- * MermaidEditor 컴포넌트
- * 왼쪽 패널의 Mermaid 스크립트 textarea와 상태 바를 담당한다.
+ * MermaidEditor component
+ * Handles the raw Mermaid script textarea for the left editor pane.
  */
 
 Vue.component('mermaid-editor', {
@@ -17,27 +17,17 @@ Vue.component('mermaid-editor', {
   },
   watch: {
     value: function (newVal) {
-      // 외부(model -> script) 갱신이 들어오면 textarea 로컬 상태도 따라간다.
       if (newVal !== this.localValue) {
         this.localValue = newVal;
       }
     }
   },
   computed: {
-    lineCount: function () {
-      return this.localValue ? this.localValue.split('\n').length : 0;
-    },
-    charCount: function () {
-      return this.localValue ? this.localValue.length : 0;
-    },
     placeholderText: function () {
       if (this.diagramType === 'sequenceDiagram') {
         return 'sequenceDiagram\n    Alice->>+John: Hello John, how are you?\n    John-->>-Alice: Hi Alice, I can hear you!';
       }
       return 'flowchart TD\n    A[Start] --> B[Process]\n    B --> C[End]';
-    },
-    statusText: function () {
-      return this.diagramType === 'sequenceDiagram' ? 'Mermaid Sequence Diagram' : 'Mermaid Flowchart';
     }
   },
   methods: {
@@ -49,14 +39,12 @@ Vue.component('mermaid-editor', {
         this.$emit('input', this.localValue);
         return;
       }
-      // 매 타이핑마다 바로 parse하지 않고 짧게 debounce해서 editor 입력감을 유지한다.
       clearTimeout(this.debounceTimer);
       this.debounceTimer = setTimeout(function () {
         self.$emit('input', self.localValue);
       }, 300);
     },
     onKeyDown: function (e) {
-      // Tab 키 입력 시 실제 공백 4칸을 넣는다.
       if (e.key === 'Tab') {
         e.preventDefault();
         var textarea = e.target;
@@ -72,10 +60,6 @@ Vue.component('mermaid-editor', {
   },
   template: '\
     <div class="panel panel--editor">\
-      <div class="panel__header">\
-        <span class="panel__title">Mermaid Code</span>\
-        <span class="panel__meta">{{ statusText }}</span>\
-      </div>\
       <div class="code-editor">\
         <textarea\
           class="code-editor__textarea"\
@@ -86,11 +70,7 @@ Vue.component('mermaid-editor', {
           spellcheck="false"\
         ></textarea>\
         <div v-if="error" class="code-editor__error">\
-          <span>⚠</span> {{ error }}\
-        </div>\
-        <div class="code-editor__status">\
-          <span>Lines: {{ lineCount }} | Chars: {{ charCount }}</span>\
-          <span>{{ statusText }}</span>\
+          <span>!</span><span>{{ error }}</span>\
         </div>\
       </div>\
     </div>\
