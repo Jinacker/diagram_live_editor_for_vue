@@ -1,6 +1,8 @@
 (function (global) {
   'use strict';
 
+  var FlowEdgeCodec = global.FlowEdgeCodec;
+
   var SHAPE_MAP = [
     { open: '((', close: '))', shape: 'double_circle' },
     { open: '([', close: '])', shape: 'stadium' },
@@ -17,23 +19,13 @@
     { open: '[', close: ']', shape: 'rect' }
   ];
 
-  var EDGE_PATTERNS = [
-    { regex: /^==\s+(.+?)\s*==>/, type: '==>', hasLabel: true },
-    { regex: /^--\s+(.+?)\s*-->/, type: '-->', hasLabel: true },
-    { regex: /^--\s+(.+?)\s*-\.->/, type: '-.->', hasLabel: true },
-    { regex: /^--\s+(.+?)\s*---/, type: '---', hasLabel: true },
-    { regex: /^==>\|([^|]*)\|/, type: '==>', hasLabel: true },
-    { regex: /^==>\s*/, type: '==>', hasLabel: false },
-    { regex: /^-->\|([^|]*)\|/, type: '-->', hasLabel: true },
-    { regex: /^-->\s*/, type: '-->', hasLabel: false },
-    { regex: /^-\.->\|([^|]*)\|/, type: '-.->', hasLabel: true },
-    { regex: /^-\.->\s*/, type: '-.->', hasLabel: false },
-    { regex: /^---\|([^|]*)\|/, type: '---', hasLabel: true },
-    { regex: /^---\s*/, type: '---', hasLabel: false },
-    { regex: /^-\.-\|([^|]*)\|/, type: '-.-', hasLabel: true },
-    { regex: /^-\.-\s*/, type: '-.-', hasLabel: false },
-    { regex: /^===\|([^|]*)\|/, type: '===', hasLabel: true },
-    { regex: /^===\s*/, type: '===', hasLabel: false }
+  var LEGACY_EDGE_PATTERNS = [
+    { regex: /^==\s+(.+?)\s*==>/, type: '==>' },
+    { regex: /^--\s+(.+?)\s*-->/, type: '-->' },
+    { regex: /^--\s+(.+?)\s*-\.->/, type: '-.->' },
+    { regex: /^--\s+(.+?)\s*---/, type: '---' },
+    { regex: /^--\s+(.+?)\s*-\.-/, type: '-.-' },
+    { regex: /^==\s+(.+?)\s*===/, type: '===' }
   ];
 
   function getShapeCandidates(rest) {
@@ -55,6 +47,18 @@
     return candidates;
   }
 
+  function getEdgeCandidates(rest) {
+    var candidates = [];
+    var operatorCandidates = (FlowEdgeCodec && FlowEdgeCodec.OPERATOR_CANDIDATES) || [];
+    for (var i = 0; i < operatorCandidates.length; i++) {
+      if (rest.indexOf(operatorCandidates[i]) === 0) {
+        candidates.push(operatorCandidates[i]);
+      }
+    }
+    candidates.sort(function (a, b) { return b.length - a.length; });
+    return candidates;
+  }
+
   function isEscapedChar(text, index) {
     var slashCount = 0;
     for (var i = index - 1; i >= 0 && text.charAt(i) === '\\'; i--) {
@@ -63,8 +67,6 @@
     return (slashCount % 2) === 1;
   }
 
-  // quoted label 안의 ] ) } 같은 문자를 종료 토큰으로 오인하지 않도록
-  // escape를 건너뛰며 실제 닫는 quote 위치를 찾는다.
   function findQuotedClose(rest, openLen, closeToken) {
     for (var i = openLen + 1; i < rest.length; i++) {
       if (rest.charAt(i) !== '"' || isEscapedChar(rest, i)) continue;
@@ -75,8 +77,16 @@
     return -1;
   }
 
-  // generator가 넣은 최소 escape(\" \\)만 복원한다.
-  function decodeQuotedLabel(text) {
+  function findPipeClose(rest, startIndex) {
+    for (var i = startIndex; i < rest.length; i++) {
+      if (rest.charAt(i) === '|' && !isEscapedChar(rest, i)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function decodeEscapedText(text) {
     var out = '';
     for (var i = 0; i < text.length; i++) {
       var ch = text.charAt(i);
@@ -104,8 +114,8 @@
       return { id: id, text: id, shape: 'rect', endIndex: id.length, raw: id };
     }
 
-    // 겹치는 bracket 문법({{ }}/{} , [/] 계열 등)은
-    // 긴 토큰을 우선 보는 쪽이 오인식 위험이 적다.
+    // Overlapping bracket syntaxes like {{ }} and { } are resolved by
+    // checking only matching candidates and preferring the longer tokens first.
     var candidates = getShapeCandidates(rest);
     for (var i = 0; i < candidates.length; i++) {
       var shapeDef = candidates[i].def;
@@ -118,7 +128,7 @@
       if (innerStart.charAt(0) === '"') {
         var quoteIdx = findQuotedClose(rest, openLen, shapeDef.close);
         if (quoteIdx !== -1) {
-          text = decodeQuotedLabel(rest.substring(openLen + 1, quoteIdx));
+          text = decodeEscapedText(rest.substring(openLen + 1, quoteIdx));
           totalLen = id.length + quoteIdx + 1 + shapeDef.close.length;
           return {
             id: id,
@@ -147,20 +157,51 @@
     return { id: id, text: id, shape: 'rect', endIndex: id.length, raw: id };
   }
 
-  function parseEdge(str) {
-    str = str.trim();
-    for (var i = 0; i < EDGE_PATTERNS.length; i++) {
-      var pattern = EDGE_PATTERNS[i];
-      var match = str.match(pattern.regex);
-      if (match) {
-        return {
-          type: pattern.type,
-          label: pattern.hasLabel ? match[1].trim() : '',
-          endIndex: match[0].length
-        };
-      }
+  function parsePipeLabelEdge(str) {
+    var candidates = getEdgeCandidates(str);
+    for (var i = 0; i < candidates.length; i++) {
+      var operator = candidates[i];
+      var remainder = str.substring(operator.length);
+      var leadMatch = remainder.match(/^\s*\|/);
+      if (!leadMatch) continue;
+      var labelStart = operator.length + leadMatch[0].length;
+      var pipeEnd = findPipeClose(str, labelStart);
+      if (pipeEnd === -1) continue;
+      return {
+        type: operator,
+        label: decodeEscapedText(str.substring(labelStart, pipeEnd)).trim(),
+        endIndex: pipeEnd + 1
+      };
     }
     return null;
+  }
+
+  function parseLegacyLabelEdge(str) {
+    for (var i = 0; i < LEGACY_EDGE_PATTERNS.length; i++) {
+      var match = str.match(LEGACY_EDGE_PATTERNS[i].regex);
+      if (!match) continue;
+      return {
+        type: LEGACY_EDGE_PATTERNS[i].type,
+        label: match[1].trim(),
+        endIndex: match[0].length
+      };
+    }
+    return null;
+  }
+
+  function parsePlainEdge(str) {
+    var candidates = getEdgeCandidates(str);
+    if (!candidates.length) return null;
+    return {
+      type: candidates[0],
+      label: '',
+      endIndex: candidates[0].length
+    };
+  }
+
+  function parseEdge(str) {
+    str = str.trim();
+    return parsePipeLabelEdge(str) || parseLegacyLabelEdge(str) || parsePlainEdge(str);
   }
 
   function parseStyleLine(line, model) {
@@ -206,6 +247,18 @@
       var node = parseNodeDef(remaining);
       if (!node) break;
 
+      var restAfterNode = remaining.substring(node.endIndex).trim();
+      // Mermaid allows a left-side x/o head to sit right next to the source node.
+      if ((node.id.slice(-1) === 'x' || node.id.slice(-1) === 'o') && restAfterNode) {
+        var trailingHead = node.id.slice(-1);
+        var rescuedEdge = parseEdge(trailingHead + restAfterNode);
+        if (rescuedEdge && node.id.length > 1) {
+          if (node.text === node.id) node.text = node.id.slice(0, -1);
+          node.id = node.id.slice(0, -1);
+          restAfterNode = trailingHead + restAfterNode;
+        }
+      }
+
       if (!model._nodeMap[node.id]) {
         var nodeObj = { id: node.id, text: node.text, shape: node.shape };
         model.nodes.push(nodeObj);
@@ -215,7 +268,7 @@
         model._nodeMap[node.id].shape = node.shape;
       }
 
-      remaining = remaining.substring(node.endIndex).trim();
+      remaining = restAfterNode;
 
       if (prevNodeId !== null && model._pendingEdge) {
         model.edges.push({
@@ -291,10 +344,10 @@
         }
       }
 
-      if (started) {
-        if (line.indexOf('subgraph') === 0 || line === 'end') continue;
-        parseFlowLine(line, model);
-      }
+      if (!started) continue;
+      if (line.indexOf('subgraph') === 0 || line === 'end') continue;
+
+      parseFlowLine(line, model);
     }
 
     delete model._nodeMap;

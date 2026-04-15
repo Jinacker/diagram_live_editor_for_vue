@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-15T02:07:07.021Z
+ * Built: 2026-04-15T06:20:11.102Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -189,9 +189,181 @@
 })(typeof window !== 'undefined' ? window : this);
 
 
+/* ===== src/services/FlowEdgeCodec.js ===== */
+(function (global) {
+  'use strict';
+
+  var BODY_OPTIONS = [
+    { key: 'solid', label: '──' },
+    { key: 'dotted', label: '┄┄' },
+    { key: 'thick', label: '━━' }
+  ];
+
+  var HEAD_OPTIONS = [
+    { key: 'none', label: '─' },
+    { key: 'x', label: '─x' },
+    { key: 'both-x', label: 'x─x' },
+    { key: 'arrow', label: '→' },
+    { key: 'both-arrow', label: '↔' },
+    { key: 'circle', label: '─○' },
+    { key: 'both-circle', label: '○─○' }
+  ];
+
+  // Parser는 exact 후보 문자열을 먼저 찾고, semantics는 아래 regex 규칙으로 해석한다.
+  var OPERATOR_CANDIDATES = [
+    'x===x',
+    'o===o',
+    'x--x',
+    'o--o',
+    '<==>',
+    'x-.-x',
+    'o-.-o',
+    '<-.->',
+    '<---->',
+    '<--->',
+    '<-->',
+    '===o',
+    '===x',
+    '----o',
+    '---o',
+    '--o',
+    '--x',
+    '-.-o',
+    '-.-x',
+    '-.->',
+    '-...-',
+    '-..-',
+    '-.-',
+    '===>',
+    '==>',
+    '=====',
+    '====',
+    '===',
+    '-----',
+    '----',
+    '-->',
+    '---'
+  ];
+
+  var PARSE_RULES = [
+    { regex: /^x===x$/, body: 'thick', head: 'both-x' },
+    { regex: /^o===o$/, body: 'thick', head: 'both-circle' },
+    { regex: /^x--+x$/, body: 'solid', head: 'both-x' },
+    { regex: /^o--+o$/, body: 'solid', head: 'both-circle' },
+    { regex: /^<==+>$/, body: 'thick', head: 'both-arrow' },
+    { regex: /^x-\.-x$/, body: 'dotted', head: 'both-x' },
+    { regex: /^o-\.-o$/, body: 'dotted', head: 'both-circle' },
+    { regex: /^<-\.{1,}->$/, body: 'dotted', head: 'both-arrow' },
+    { regex: /^<--+>$/, body: 'solid', head: 'both-arrow' },
+    { regex: /^===x$/, body: 'thick', head: 'x' },
+    { regex: /^===o$/, body: 'thick', head: 'circle' },
+    { regex: /^--+x$/, body: 'solid', head: 'x' },
+    { regex: /^--+o$/, body: 'solid', head: 'circle' },
+    { regex: /^-\.-x$/, body: 'dotted', head: 'x' },
+    { regex: /^-\.-o$/, body: 'dotted', head: 'circle' },
+    { regex: /^-\.{1,}->$/, body: 'dotted', head: 'arrow' },
+    { regex: /^-\.{1,}-$/, body: 'dotted', head: 'none' },
+    { regex: /^==+>$/, body: 'thick', head: 'arrow' },
+    { regex: /^=+$/, body: 'thick', head: 'none' },
+    { regex: /^--+>$/, body: 'solid', head: 'arrow' }
+  ];
+
+  var LEGACY_LEFT_HEAD_ALIASES = {
+    '<--': '-->',
+    'o--': '--o',
+    'x--': '--x'
+  };
+
+  function parseType(type) {
+    var operator = String(type || '---');
+    for (var i = 0; i < PARSE_RULES.length; i++) {
+      if (PARSE_RULES[i].regex.test(operator)) {
+        return {
+          body: PARSE_RULES[i].body,
+          head: PARSE_RULES[i].head
+        };
+      }
+    }
+    return { body: 'solid', head: 'none' };
+  }
+
+  function composeType(body, head) {
+    body = body || 'solid';
+    head = head || 'none';
+
+    if (body === 'dotted') {
+      if (head === 'both-x') return 'x-.-x';
+      if (head === 'x') return '-.-x';
+      if (head === 'both-circle') return 'o-.-o';
+      if (head === 'circle') return '-.-o';
+      if (head === 'both-arrow') return '<-.->';
+      return head === 'arrow' ? '-.->' : '-.-';
+    }
+
+    if (body === 'thick') {
+      if (head === 'both-x') return 'x===x';
+      if (head === 'x') return '===x';
+      if (head === 'both-circle') return 'o===o';
+      if (head === 'circle') return '===o';
+      if (head === 'both-arrow') return '<==>';
+      return head === 'arrow' ? '==>' : '===';
+    }
+
+    if (head === 'both-arrow') return '<-->';
+    if (head === 'arrow') return '-->';
+    if (head === 'both-circle') return 'o--o';
+    if (head === 'circle') return '--o';
+    if (head === 'both-x') return 'x--x';
+    if (head === 'x') return '--x';
+    return '---';
+  }
+
+  function getBodyType(type) {
+    return parseType(type).body;
+  }
+
+  // 현재 UI는 left-only head를 만들지 않지만, 과거 저장 데이터나 수동 model 수정값은
+  // 아직 들어올 수 있어 generator 출력 직전에만 안전한 canonical 형태로 바꿔준다.
+  function normalizeEdgeForOutput(edge) {
+    var source = edge || {};
+    var type = source.type || '-->';
+    var alias = LEGACY_LEFT_HEAD_ALIASES[type];
+    if (!alias) {
+      return {
+        from: source.from,
+        to: source.to,
+        type: type,
+        text: source.text || '',
+        color: source.color || ''
+      };
+    }
+
+    return {
+      from: source.to,
+      to: source.from,
+      type: alias,
+      text: source.text || '',
+      color: source.color || ''
+    };
+  }
+
+  global.FlowEdgeCodec = {
+    BODY_OPTIONS: BODY_OPTIONS,
+    HEAD_OPTIONS: HEAD_OPTIONS,
+    OPERATOR_CANDIDATES: OPERATOR_CANDIDATES,
+    parseType: parseType,
+    composeType: composeType,
+    getBodyType: getBodyType,
+    normalizeEdgeForOutput: normalizeEdgeForOutput
+  };
+})(typeof window !== 'undefined' ? window : this);
+
+
 /* ===== src/mermaid-parser.js ===== */
 (function (global) {
   'use strict';
+
+  var FlowEdgeCodec = global.FlowEdgeCodec;
 
   var SHAPE_MAP = [
     { open: '((', close: '))', shape: 'double_circle' },
@@ -209,23 +381,13 @@
     { open: '[', close: ']', shape: 'rect' }
   ];
 
-  var EDGE_PATTERNS = [
-    { regex: /^==\s+(.+?)\s*==>/, type: '==>', hasLabel: true },
-    { regex: /^--\s+(.+?)\s*-->/, type: '-->', hasLabel: true },
-    { regex: /^--\s+(.+?)\s*-\.->/, type: '-.->', hasLabel: true },
-    { regex: /^--\s+(.+?)\s*---/, type: '---', hasLabel: true },
-    { regex: /^==>\|([^|]*)\|/, type: '==>', hasLabel: true },
-    { regex: /^==>\s*/, type: '==>', hasLabel: false },
-    { regex: /^-->\|([^|]*)\|/, type: '-->', hasLabel: true },
-    { regex: /^-->\s*/, type: '-->', hasLabel: false },
-    { regex: /^-\.->\|([^|]*)\|/, type: '-.->', hasLabel: true },
-    { regex: /^-\.->\s*/, type: '-.->', hasLabel: false },
-    { regex: /^---\|([^|]*)\|/, type: '---', hasLabel: true },
-    { regex: /^---\s*/, type: '---', hasLabel: false },
-    { regex: /^-\.-\|([^|]*)\|/, type: '-.-', hasLabel: true },
-    { regex: /^-\.-\s*/, type: '-.-', hasLabel: false },
-    { regex: /^===\|([^|]*)\|/, type: '===', hasLabel: true },
-    { regex: /^===\s*/, type: '===', hasLabel: false }
+  var LEGACY_EDGE_PATTERNS = [
+    { regex: /^==\s+(.+?)\s*==>/, type: '==>' },
+    { regex: /^--\s+(.+?)\s*-->/, type: '-->' },
+    { regex: /^--\s+(.+?)\s*-\.->/, type: '-.->' },
+    { regex: /^--\s+(.+?)\s*---/, type: '---' },
+    { regex: /^--\s+(.+?)\s*-\.-/, type: '-.-' },
+    { regex: /^==\s+(.+?)\s*===/, type: '===' }
   ];
 
   function getShapeCandidates(rest) {
@@ -247,6 +409,18 @@
     return candidates;
   }
 
+  function getEdgeCandidates(rest) {
+    var candidates = [];
+    var operatorCandidates = (FlowEdgeCodec && FlowEdgeCodec.OPERATOR_CANDIDATES) || [];
+    for (var i = 0; i < operatorCandidates.length; i++) {
+      if (rest.indexOf(operatorCandidates[i]) === 0) {
+        candidates.push(operatorCandidates[i]);
+      }
+    }
+    candidates.sort(function (a, b) { return b.length - a.length; });
+    return candidates;
+  }
+
   function isEscapedChar(text, index) {
     var slashCount = 0;
     for (var i = index - 1; i >= 0 && text.charAt(i) === '\\'; i--) {
@@ -255,8 +429,6 @@
     return (slashCount % 2) === 1;
   }
 
-  // quoted label 안의 ] ) } 같은 문자를 종료 토큰으로 오인하지 않도록
-  // escape를 건너뛰며 실제 닫는 quote 위치를 찾는다.
   function findQuotedClose(rest, openLen, closeToken) {
     for (var i = openLen + 1; i < rest.length; i++) {
       if (rest.charAt(i) !== '"' || isEscapedChar(rest, i)) continue;
@@ -267,8 +439,16 @@
     return -1;
   }
 
-  // generator가 넣은 최소 escape(\" \\)만 복원한다.
-  function decodeQuotedLabel(text) {
+  function findPipeClose(rest, startIndex) {
+    for (var i = startIndex; i < rest.length; i++) {
+      if (rest.charAt(i) === '|' && !isEscapedChar(rest, i)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function decodeEscapedText(text) {
     var out = '';
     for (var i = 0; i < text.length; i++) {
       var ch = text.charAt(i);
@@ -296,8 +476,8 @@
       return { id: id, text: id, shape: 'rect', endIndex: id.length, raw: id };
     }
 
-    // 겹치는 bracket 문법({{ }}/{} , [/] 계열 등)은
-    // 긴 토큰을 우선 보는 쪽이 오인식 위험이 적다.
+    // Overlapping bracket syntaxes like {{ }} and { } are resolved by
+    // checking only matching candidates and preferring the longer tokens first.
     var candidates = getShapeCandidates(rest);
     for (var i = 0; i < candidates.length; i++) {
       var shapeDef = candidates[i].def;
@@ -310,7 +490,7 @@
       if (innerStart.charAt(0) === '"') {
         var quoteIdx = findQuotedClose(rest, openLen, shapeDef.close);
         if (quoteIdx !== -1) {
-          text = decodeQuotedLabel(rest.substring(openLen + 1, quoteIdx));
+          text = decodeEscapedText(rest.substring(openLen + 1, quoteIdx));
           totalLen = id.length + quoteIdx + 1 + shapeDef.close.length;
           return {
             id: id,
@@ -339,20 +519,51 @@
     return { id: id, text: id, shape: 'rect', endIndex: id.length, raw: id };
   }
 
-  function parseEdge(str) {
-    str = str.trim();
-    for (var i = 0; i < EDGE_PATTERNS.length; i++) {
-      var pattern = EDGE_PATTERNS[i];
-      var match = str.match(pattern.regex);
-      if (match) {
-        return {
-          type: pattern.type,
-          label: pattern.hasLabel ? match[1].trim() : '',
-          endIndex: match[0].length
-        };
-      }
+  function parsePipeLabelEdge(str) {
+    var candidates = getEdgeCandidates(str);
+    for (var i = 0; i < candidates.length; i++) {
+      var operator = candidates[i];
+      var remainder = str.substring(operator.length);
+      var leadMatch = remainder.match(/^\s*\|/);
+      if (!leadMatch) continue;
+      var labelStart = operator.length + leadMatch[0].length;
+      var pipeEnd = findPipeClose(str, labelStart);
+      if (pipeEnd === -1) continue;
+      return {
+        type: operator,
+        label: decodeEscapedText(str.substring(labelStart, pipeEnd)).trim(),
+        endIndex: pipeEnd + 1
+      };
     }
     return null;
+  }
+
+  function parseLegacyLabelEdge(str) {
+    for (var i = 0; i < LEGACY_EDGE_PATTERNS.length; i++) {
+      var match = str.match(LEGACY_EDGE_PATTERNS[i].regex);
+      if (!match) continue;
+      return {
+        type: LEGACY_EDGE_PATTERNS[i].type,
+        label: match[1].trim(),
+        endIndex: match[0].length
+      };
+    }
+    return null;
+  }
+
+  function parsePlainEdge(str) {
+    var candidates = getEdgeCandidates(str);
+    if (!candidates.length) return null;
+    return {
+      type: candidates[0],
+      label: '',
+      endIndex: candidates[0].length
+    };
+  }
+
+  function parseEdge(str) {
+    str = str.trim();
+    return parsePipeLabelEdge(str) || parseLegacyLabelEdge(str) || parsePlainEdge(str);
   }
 
   function parseStyleLine(line, model) {
@@ -398,6 +609,18 @@
       var node = parseNodeDef(remaining);
       if (!node) break;
 
+      var restAfterNode = remaining.substring(node.endIndex).trim();
+      // Mermaid allows a left-side x/o head to sit right next to the source node.
+      if ((node.id.slice(-1) === 'x' || node.id.slice(-1) === 'o') && restAfterNode) {
+        var trailingHead = node.id.slice(-1);
+        var rescuedEdge = parseEdge(trailingHead + restAfterNode);
+        if (rescuedEdge && node.id.length > 1) {
+          if (node.text === node.id) node.text = node.id.slice(0, -1);
+          node.id = node.id.slice(0, -1);
+          restAfterNode = trailingHead + restAfterNode;
+        }
+      }
+
       if (!model._nodeMap[node.id]) {
         var nodeObj = { id: node.id, text: node.text, shape: node.shape };
         model.nodes.push(nodeObj);
@@ -407,7 +630,7 @@
         model._nodeMap[node.id].shape = node.shape;
       }
 
-      remaining = remaining.substring(node.endIndex).trim();
+      remaining = restAfterNode;
 
       if (prevNodeId !== null && model._pendingEdge) {
         model.edges.push({
@@ -483,10 +706,10 @@
         }
       }
 
-      if (started) {
-        if (line.indexOf('subgraph') === 0 || line === 'end') continue;
-        parseFlowLine(line, model);
-      }
+      if (!started) continue;
+      if (line.indexOf('subgraph') === 0 || line === 'end') continue;
+
+      parseFlowLine(line, model);
     }
 
     delete model._nodeMap;
@@ -502,15 +725,11 @@
 
 
 /* ===== src/mermaid-generator.js ===== */
-/**
- * Mermaid 플로우차트 생성기
- * 내부 모델을 다시 Mermaid 스크립트 문자열로 직렬화한다.
- */
-
 (function (global) {
   'use strict';
 
-  // shape -> bracket 매핑
+  var FlowEdgeCodec = global.FlowEdgeCodec;
+
   var SHAPE_BRACKETS = {
     rect: ['[', ']'],
     round: ['(', ')'],
@@ -524,14 +743,19 @@
     trapezoid: ['[/', '\\]'],
     trapezoid_alt: ['[\\', '/]'],
     double_circle: ['((', '))'],
-    asymmetric: ['>', ']'],
+    asymmetric: ['>', ']']
   };
 
   function escapeLabel(text) {
-    // generator는 항상 quoted label을 쓰므로, 최소 escape만 여기서 처리한다.
     return String(text)
       .replace(/\\/g, '\\\\')
       .replace(/"/g, '\\"');
+  }
+
+  function escapeEdgeLabel(text) {
+    return String(text)
+      .replace(/\|/g, '\\|')
+      .trim();
   }
 
   function clamp(value, min, max) {
@@ -576,30 +800,50 @@
     return luminance > 0.68 ? '#1b2a4a' : '#ffffff';
   }
 
-  /**
-   * 노드 정의 문자열 생성
-   */
   function generateNode(node) {
     var brackets = SHAPE_BRACKETS[node.shape] || SHAPE_BRACKETS.rect;
     var text = node.text || node.id;
-    // 텍스트가 id와 같고 기본 사각형이면 bare id만 출력한다.
+
     if (text === node.id && node.shape === 'rect') {
       return node.id;
     }
-    // bare id가 아닌 노드는 항상 quote해서
-    // 특수문자/공백/대괄호가 있어도 다시 parser가 안전하게 읽을 수 있게 한다.
+
     return node.id + brackets[0] + '"' + escapeLabel(text) + '"' + brackets[1];
   }
 
-  /**
-   * 내부 모델에서 전체 Mermaid 스크립트 생성
-   * 형식:
-   *   flowchart TD
-   *   A["label"]          ← 노드 정의 먼저
-   *   B["label"]
-   *   A --> B             ← 그 다음 엣지
-   *   C -- text --> D     ← 레이블 엣지는 "-- text -->" 형식 사용
-   */
+  function generateEdgeOperator(edge) {
+    var type = edge.type || '-->';
+    var text = edge.text || '';
+
+    if (!text || !text.trim()) return type;
+
+    // Flowchart edge labels are serialized as operator|label| so the
+    // parser can keep the operator itself in edge.type.
+    return type + '|' + escapeEdgeLabel(text) + '|';
+  }
+
+  function buildLinkStyle(index, edge) {
+    var edgeColor = normalizeHex(edge && edge.color);
+    if (!edgeColor) return '';
+
+    var body = FlowEdgeCodec ? FlowEdgeCodec.getBodyType(edge.type || '-->') : 'solid';
+    var parts = [
+      'stroke:' + edgeColor,
+      'color:' + edgeColor
+    ];
+
+    if (body === 'thick') {
+      parts.push('stroke-width:4px');
+    } else if (body === 'dotted') {
+      parts.push('stroke-width:2px');
+      parts.push('stroke-dasharray:3\\,3');
+    } else {
+      parts.push('stroke-width:2px');
+    }
+
+    return '    linkStyle ' + index + ' ' + parts.join(',');
+  }
+
   function generateMermaid(model) {
     if (!model) return '';
     if (model.type === 'sequenceDiagram' && global.SequenceGenerator) {
@@ -610,26 +854,18 @@
     var direction = model.direction || 'TD';
     lines.push('flowchart ' + direction);
 
-    // 1. 노드 정의를 먼저 모두 출력한다.
-    // inline node definition을 edge line에 섞지 않아서 사람이 읽기 쉽고 diff도 안정적이다.
     if (model.nodes && model.nodes.length > 0) {
       for (var i = 0; i < model.nodes.length; i++) {
         lines.push('    ' + generateNode(model.nodes[i]));
       }
     }
 
-    // 2. 엣지는 node id만 사용해서 별도로 출력한다.
     if (model.edges && model.edges.length > 0) {
       for (var j = 0; j < model.edges.length; j++) {
-        var edge = model.edges[j];
-        var edgeStr;
-        if (edge.text) {
-          // "-- label -->" 형식
-          edgeStr = '-- ' + edge.text.trim() + ' ' + (edge.type || '-->');
-        } else {
-          edgeStr = edge.type || '-->';
-        }
-        lines.push('    ' + edge.from + ' ' + edgeStr + ' ' + edge.to);
+        var edge = FlowEdgeCodec
+          ? FlowEdgeCodec.normalizeEdgeForOutput(model.edges[j])
+          : model.edges[j];
+        lines.push('    ' + edge.from + ' ' + generateEdgeOperator(edge) + ' ' + edge.to);
       }
     }
 
@@ -649,23 +885,14 @@
 
     if (model.edges && model.edges.length > 0) {
       for (var e = 0; e < model.edges.length; e++) {
-        var edgeColor = normalizeHex(model.edges[e].color);
-        if (!edgeColor) continue;
-        lines.push(
-          '    linkStyle ' + e +
-          ' stroke:' + edgeColor +
-          ',color:' + edgeColor +
-          ',stroke-width:2px'
-        );
+        var linkStyle = buildLinkStyle(e, model.edges[e]);
+        if (linkStyle) lines.push(linkStyle);
       }
     }
 
     return lines.join('\n');
   }
 
-  /**
-   * nodes 배열에서 id로 노드 찾기
-   */
   function findNode(nodes, id) {
     if (!nodes) return null;
     for (var i = 0; i < nodes.length; i++) {
@@ -674,12 +901,11 @@
     return null;
   }
 
-  // 전역 노출
   global.MermaidGenerator = {
     generate: generateMermaid,
-    generateNode: generateNode
+    generateNode: generateNode,
+    findNode: findNode
   };
-
 })(typeof window !== 'undefined' ? window : this);
 
 
@@ -1579,6 +1805,9 @@
           selectedEdgeIndex: idx,
           selectedNodeId: null,
           contextMenu: null,
+          flowEdgeColorPicker: false,
+          flowEdgeBodyPicker: false,
+          flowEdgeHeadPicker: false,
           edgeToolbar: {
             x: localX,
             y: localY,
@@ -3152,6 +3381,8 @@ Vue.component('mermaid-toolbar', {
  * - SvgEdgeHandler     : 엣지 클릭 / 라벨 / 편집
  */
 
+var FlowEdgeCodec = window.FlowEdgeCodec;
+
 Vue.component('mermaid-preview', {
   props: {
     model: {
@@ -3180,8 +3411,11 @@ Vue.component('mermaid-preview', {
     { key: 'yellow', value: '#facc15' },
     { key: 'green',  value: '#22c55e' },
     { key: 'blue',   value: '#3b82f6' },
+    { key: 'indigo', value: '#4f46e5' },
     { key: 'violet', value: '#a855f7' }
   ],
+  FLOW_EDGE_BODY_OPTIONS: FlowEdgeCodec ? FlowEdgeCodec.BODY_OPTIONS : [],
+  FLOW_EDGE_HEAD_OPTIONS: FlowEdgeCodec ? FlowEdgeCodec.HEAD_OPTIONS : [],
 
   data: function () {
     return {
@@ -3218,6 +3452,9 @@ Vue.component('mermaid-preview', {
       // 컨텍스트 UI 상태
       contextMenu:  null,   // { nodeId, x, y }
       edgeToolbar:  null,   // { edgeIndex, x, y } - 플로우차트 엣지 액션 바
+      flowEdgeColorPicker: false,
+      flowEdgeBodyPicker: false,
+      flowEdgeHeadPicker: false,
       sequenceToolbar: null, // { type, id|index, x, y }
       lineTypePicker: false,      // sequence message line type 선택 모드
 
@@ -3268,15 +3505,18 @@ Vue.component('mermaid-preview', {
     window.addEventListener('resize', this._windowResizeHandler);
 
     // 전역 클릭 시 컨텍스트 메뉴와 엣지 툴바 닫기
-    document.addEventListener('click', function () {
-      var hadEdgeToolbar = !!self.edgeToolbar;
-      self.contextMenu = null;
-      self.edgeToolbar = null;
-      self.sequenceToolbar = null;
-      if (hadEdgeToolbar && self.editingEdgeIndex === null) {
-        self.selectedEdgeIndex = null;
-        self._clearEdgeVisualState();
-      }
+      document.addEventListener('click', function () {
+        var hadEdgeToolbar = !!self.edgeToolbar;
+        self.contextMenu = null;
+        self.edgeToolbar = null;
+        self.flowEdgeColorPicker = false;
+        self.flowEdgeBodyPicker = false;
+        self.flowEdgeHeadPicker = false;
+        self.sequenceToolbar = null;
+        if (hadEdgeToolbar && self.editingEdgeIndex === null) {
+          self.selectedEdgeIndex = null;
+          self._clearEdgeVisualState();
+        }
     });
 
     this._pointerDownCommitHandler = function (e) {
@@ -3330,6 +3570,9 @@ Vue.component('mermaid-preview', {
         self.selectedSequenceMessageIndex = null;
         self.contextMenu       = null;
         self.edgeToolbar       = null;
+        self.flowEdgeColorPicker = false;
+        self.flowEdgeBodyPicker = false;
+        self.flowEdgeHeadPicker = false;
         self.sequenceToolbar   = null;
         self.portDragging      = false;
       }
@@ -4076,6 +4319,97 @@ Vue.component('mermaid-preview', {
       return baseId;
     },
 
+    getFlowEdgeParts: function (type) {
+      return FlowEdgeCodec ? FlowEdgeCodec.parseType(type) : { body: 'solid', head: 'none' };
+    },
+
+    getFlowEdgeType: function () {
+      if (!this.edgeToolbar) return '---';
+      var edge = (this.model.edges || [])[this.edgeToolbar.edgeIndex];
+      return edge && edge.type ? edge.type : '---';
+    },
+
+    getFlowEdgeBodyLabel: function () {
+      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
+      var options = this.$options.FLOW_EDGE_BODY_OPTIONS || [];
+      for (var i = 0; i < options.length; i++) {
+        if (options[i].key === parts.body) return options[i].label;
+      }
+      return '──';
+    },
+
+    getFlowEdgeHeadLabel: function () {
+      var head = this.getFlowEdgeParts(this.getFlowEdgeType()).head;
+      var options = this.$options.FLOW_EDGE_HEAD_OPTIONS || [];
+      for (var i = 0; i < options.length; i++) {
+        if (options[i].key === head) return options[i].label;
+      }
+      return '─';
+    },
+
+    getFlowEdgeColorValue: function () {
+      if (!this.edgeToolbar) return '';
+      var edge = (this.model.edges || [])[this.edgeToolbar.edgeIndex];
+      return edge && edge.color ? edge.color : '';
+    },
+
+    getAvailableFlowEdgeHeadOptions: function () {
+      return this.$options.FLOW_EDGE_HEAD_OPTIONS || [];
+    },
+
+    composeFlowEdgeType: function (body, head) {
+      return FlowEdgeCodec ? FlowEdgeCodec.composeType(body, head) : '---';
+    },
+
+    toggleFlowEdgeColorPicker: function () {
+      if (!this.edgeToolbar) return;
+      this.flowEdgeColorPicker = !this.flowEdgeColorPicker;
+      if (this.flowEdgeColorPicker) {
+        this.flowEdgeBodyPicker = false;
+        this.flowEdgeHeadPicker = false;
+      }
+    },
+
+    toggleFlowEdgeBodyPicker: function () {
+      if (!this.edgeToolbar) return;
+      this.flowEdgeBodyPicker = !this.flowEdgeBodyPicker;
+      if (this.flowEdgeBodyPicker) {
+        this.flowEdgeColorPicker = false;
+        this.flowEdgeHeadPicker = false;
+      }
+    },
+
+    toggleFlowEdgeHeadPicker: function () {
+      if (!this.edgeToolbar) return;
+      this.flowEdgeHeadPicker = !this.flowEdgeHeadPicker;
+      if (this.flowEdgeHeadPicker) {
+        this.flowEdgeColorPicker = false;
+        this.flowEdgeBodyPicker = false;
+      }
+    },
+
+    edgeToolbarSetType: function (type) {
+      if (!this.edgeToolbar) return;
+      this.$emit('update-edge-type', {
+        index: this.edgeToolbar.edgeIndex,
+        type: type
+      });
+    },
+
+    edgeToolbarSelectLineBody: function (body) {
+      if (!this.edgeToolbar) return;
+      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
+      this.edgeToolbarSetType(this.composeFlowEdgeType(body, parts.head));
+      this.flowEdgeBodyPicker = false;
+    },
+
+    edgeToolbarSelectLineHead: function (head) {
+      if (!this.edgeToolbar) return;
+      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
+      this.edgeToolbarSetType(this.composeFlowEdgeType(parts.body, head));
+      this.flowEdgeHeadPicker = false;
+    },
+
     // 공통 엣지 툴바 액션 유틸
 
     edgeToolbarEdit: function () {
@@ -4098,6 +4432,9 @@ Vue.component('mermaid-preview', {
         zIndex: 1000,
         width: '160px'
       };
+      this.flowEdgeColorPicker = false;
+      this.flowEdgeBodyPicker = false;
+      this.flowEdgeHeadPicker = false;
       this.$nextTick(this._buildCtxLite().focusEdgeEditInput);
     },
 
@@ -4105,6 +4442,9 @@ Vue.component('mermaid-preview', {
       if (!this.edgeToolbar) return;
       this.$emit('delete-selected', { nodeId: null, edgeIndex: this.edgeToolbar.edgeIndex });
       this.edgeToolbar       = null;
+      this.flowEdgeColorPicker = false;
+      this.flowEdgeBodyPicker = false;
+      this.flowEdgeHeadPicker = false;
       this.selectedEdgeIndex = null;
     },
 
@@ -4114,9 +4454,7 @@ Vue.component('mermaid-preview', {
         index: this.edgeToolbar.edgeIndex,
         color: color || ''
       });
-      this.edgeToolbar = null;
-      this.selectedEdgeIndex = null;
-      this._clearEdgeVisualState();
+      this.flowEdgeColorPicker = false;
     },
 
     // 공통 시퀀스 툴바 액션 유틸
@@ -4339,9 +4677,49 @@ Vue.component('mermaid-preview', {
         </div>\
         <div v-if="edgeToolbar" class="edge-toolbar" :style="{ left: edgeToolbar.x + &quot;px&quot;, top: edgeToolbar.y + &quot;px&quot; }" @click.stop>\
           <button class="edge-toolbar__btn" @click="edgeToolbarEdit" title="Edit label">Label ✎</button>\
-          <div class="edge-toolbar__palette">\
-            <button class="context-menu__color-btn context-menu__color-btn--clear" aria-label="Clear color" @click="edgeToolbarChangeColor(&quot;&quot;)"></button>\
-            <button v-for="color in $options.COLOR_PALETTE" :key="color.key" class="context-menu__color-btn" :style="{ backgroundColor: color.value }" :title="color.key" @click="edgeToolbarChangeColor(color.value)"></button>\
+          <div class="edge-toolbar__sep"></div>\
+          <div class="edge-toolbar__type-group edge-toolbar__type-group--color">\
+            <button class="edge-toolbar__type-trigger edge-toolbar__type-trigger--color" :class="{ \'edge-toolbar__type-trigger--open\': flowEdgeColorPicker }" @click="toggleFlowEdgeColorPicker" title="Line color">\
+              <span class="edge-toolbar__color-swatch" :class="{ \'edge-toolbar__color-swatch--empty\': !getFlowEdgeColorValue() }" :style="getFlowEdgeColorValue() ? { backgroundColor: getFlowEdgeColorValue() } : {}"></span>\
+              <span class="edge-toolbar__type-caret">⌄</span>\
+            </button>\
+            <div v-if="flowEdgeColorPicker" class="edge-toolbar__type-menu edge-toolbar__type-menu--color">\
+              <button class="context-menu__color-btn context-menu__color-btn--clear" aria-label="Clear color" @click="edgeToolbarChangeColor(&quot;&quot;)"></button>\
+              <button v-for="color in $options.COLOR_PALETTE" :key="color.key" class="context-menu__color-btn" :class="{ \'context-menu__color-btn--selected\': getFlowEdgeColorValue() === color.value }" :style="{ backgroundColor: color.value }" :title="color.key" @click="edgeToolbarChangeColor(color.value)"></button>\
+            </div>\
+          </div>\
+          <div class="edge-toolbar__sep"></div>\
+          <div class="edge-toolbar__type-row">\
+            <div class="edge-toolbar__type-group">\
+              <button class="edge-toolbar__type-trigger" :class="{ \'edge-toolbar__type-trigger--open\': flowEdgeBodyPicker }" @click="toggleFlowEdgeBodyPicker" title="Line body">\
+                <span class="edge-toolbar__type-glyph edge-toolbar__type-glyph--body">{{ getFlowEdgeBodyLabel() }}</span>\
+                <span class="edge-toolbar__type-caret">⌄</span>\
+              </button>\
+              <div v-if="flowEdgeBodyPicker" class="edge-toolbar__type-menu edge-toolbar__type-menu--body">\
+                <button\
+                  v-for="opt in $options.FLOW_EDGE_BODY_OPTIONS"\
+                  :key="opt.key"\
+                  class="edge-toolbar__type-option"\
+                  :class="{ \'edge-toolbar__type-option--selected\': getFlowEdgeParts(getFlowEdgeType()).body === opt.key }"\
+                  @click="edgeToolbarSelectLineBody(opt.key)"\
+                >{{ opt.label }}</button>\
+              </div>\
+            </div>\
+            <div class="edge-toolbar__type-group">\
+              <button class="edge-toolbar__type-trigger" :class="{ \'edge-toolbar__type-trigger--open\': flowEdgeHeadPicker }" @click="toggleFlowEdgeHeadPicker" title="Arrow head">\
+                <span class="edge-toolbar__type-glyph edge-toolbar__type-glyph--head">{{ getFlowEdgeHeadLabel() }}</span>\
+                <span class="edge-toolbar__type-caret">⌄</span>\
+              </button>\
+              <div v-if="flowEdgeHeadPicker" class="edge-toolbar__type-menu edge-toolbar__type-menu--head">\
+                <button\
+                  v-for="opt in getAvailableFlowEdgeHeadOptions()"\
+                  :key="opt.key"\
+                  class="edge-toolbar__type-option"\
+                  :class="{ \'edge-toolbar__type-option--selected\': getFlowEdgeParts(getFlowEdgeType()).head === opt.key }"\
+                  @click="edgeToolbarSelectLineHead(opt.key)"\
+                >{{ opt.label }}</button>\
+              </div>\
+            </div>\
           </div>\
           <div class="edge-toolbar__sep"></div>\
           <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="edgeToolbarDelete" title="Delete edge">Delete</button>\
@@ -4751,6 +5129,7 @@ Vue.component('mermaid-full-editor', {
     updateNodeStyle: function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { nodes: this.model.nodes.map(function (n) { return n.id !== data.nodeId ? n : Object.assign({}, n, { text: data.text, fill: data.fill }); }) }); this.updateScriptFromModel(); },
     updateNodeFill:  function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { nodes: this.model.nodes.map(function (n) { return n.id !== data.nodeId ? n : Object.assign({}, n, { fill: data.fill }); }) }); this.updateScriptFromModel(); },
     updateEdgeText:  function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i === data.index ? Object.assign({}, e, { text: data.text }) : e; }) }); this.updateScriptFromModel(); },
+    updateEdgeType:  function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i !== data.index ? e : Object.assign({}, e, { type: data.type }); }) }); this.updateScriptFromModel(); },
     updateEdgeStyle: function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i !== data.index ? e : Object.assign({}, e, { text: data.text, color: data.color }); }) }); this.updateScriptFromModel(); },
     updateEdgeColor: function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i !== data.index ? e : Object.assign({}, e, { color: data.color }); }) }); this.updateScriptFromModel(); },
 
@@ -4910,6 +5289,7 @@ Vue.component('mermaid-full-editor', {
           @update-node-text="updateNodeText"\
           @update-node-shape="updateNodeShape"\
           @update-edge-text="updateEdgeText"\
+          @update-edge-type="updateEdgeType"\
           @update-node-style="updateNodeStyle"\
           @update-edge-style="updateEdgeStyle"\
           @update-node-fill="updateNodeFill"\

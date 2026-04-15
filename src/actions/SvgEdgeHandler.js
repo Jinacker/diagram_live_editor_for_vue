@@ -142,6 +142,9 @@
           selectedEdgeIndex: idx,
           selectedNodeId: null,
           contextMenu: null,
+          flowEdgeColorPicker: false,
+          flowEdgeBodyPicker: false,
+          flowEdgeHeadPicker: false,
           edgeToolbar: {
             x: localX,
             y: localY,

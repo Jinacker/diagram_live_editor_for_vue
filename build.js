@@ -15,6 +15,7 @@ const path = require('path');
 const coreFiles = [
   'src/sequence-parser.js',
   'src/sequence-generator.js',
+  'src/services/FlowEdgeCodec.js',
   'src/mermaid-parser.js',
   'src/mermaid-generator.js',
   'src/services/HistoryManager.js',

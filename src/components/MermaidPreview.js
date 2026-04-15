@@ -6,6 +6,8 @@
  * - SvgEdgeHandler     : 엣지 클릭 / 라벨 / 편집
  */
 
+var FlowEdgeCodec = window.FlowEdgeCodec;
+
 Vue.component('mermaid-preview', {
   props: {
     model: {
@@ -34,8 +36,11 @@ Vue.component('mermaid-preview', {
     { key: 'yellow', value: '#facc15' },
     { key: 'green',  value: '#22c55e' },
     { key: 'blue',   value: '#3b82f6' },
+    { key: 'indigo', value: '#4f46e5' },
     { key: 'violet', value: '#a855f7' }
   ],
+  FLOW_EDGE_BODY_OPTIONS: FlowEdgeCodec ? FlowEdgeCodec.BODY_OPTIONS : [],
+  FLOW_EDGE_HEAD_OPTIONS: FlowEdgeCodec ? FlowEdgeCodec.HEAD_OPTIONS : [],
 
   data: function () {
     return {
@@ -72,6 +77,9 @@ Vue.component('mermaid-preview', {
       // 컨텍스트 UI 상태
       contextMenu:  null,   // { nodeId, x, y }
       edgeToolbar:  null,   // { edgeIndex, x, y } - 플로우차트 엣지 액션 바
+      flowEdgeColorPicker: false,
+      flowEdgeBodyPicker: false,
+      flowEdgeHeadPicker: false,
       sequenceToolbar: null, // { type, id|index, x, y }
       lineTypePicker: false,      // sequence message line type 선택 모드
 
@@ -122,15 +130,18 @@ Vue.component('mermaid-preview', {
     window.addEventListener('resize', this._windowResizeHandler);
 
     // 전역 클릭 시 컨텍스트 메뉴와 엣지 툴바 닫기
-    document.addEventListener('click', function () {
-      var hadEdgeToolbar = !!self.edgeToolbar;
-      self.contextMenu = null;
-      self.edgeToolbar = null;
-      self.sequenceToolbar = null;
-      if (hadEdgeToolbar && self.editingEdgeIndex === null) {
-        self.selectedEdgeIndex = null;
-        self._clearEdgeVisualState();
-      }
+      document.addEventListener('click', function () {
+        var hadEdgeToolbar = !!self.edgeToolbar;
+        self.contextMenu = null;
+        self.edgeToolbar = null;
+        self.flowEdgeColorPicker = false;
+        self.flowEdgeBodyPicker = false;
+        self.flowEdgeHeadPicker = false;
+        self.sequenceToolbar = null;
+        if (hadEdgeToolbar && self.editingEdgeIndex === null) {
+          self.selectedEdgeIndex = null;
+          self._clearEdgeVisualState();
+        }
     });
 
     this._pointerDownCommitHandler = function (e) {
@@ -184,6 +195,9 @@ Vue.component('mermaid-preview', {
         self.selectedSequenceMessageIndex = null;
         self.contextMenu       = null;
         self.edgeToolbar       = null;
+        self.flowEdgeColorPicker = false;
+        self.flowEdgeBodyPicker = false;
+        self.flowEdgeHeadPicker = false;
         self.sequenceToolbar   = null;
         self.portDragging      = false;
       }
@@ -930,6 +944,97 @@ Vue.component('mermaid-preview', {
       return baseId;
     },
 
+    getFlowEdgeParts: function (type) {
+      return FlowEdgeCodec ? FlowEdgeCodec.parseType(type) : { body: 'solid', head: 'none' };
+    },
+
+    getFlowEdgeType: function () {
+      if (!this.edgeToolbar) return '---';
+      var edge = (this.model.edges || [])[this.edgeToolbar.edgeIndex];
+      return edge && edge.type ? edge.type : '---';
+    },
+
+    getFlowEdgeBodyLabel: function () {
+      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
+      var options = this.$options.FLOW_EDGE_BODY_OPTIONS || [];
+      for (var i = 0; i < options.length; i++) {
+        if (options[i].key === parts.body) return options[i].label;
+      }
+      return '──';
+    },
+
+    getFlowEdgeHeadLabel: function () {
+      var head = this.getFlowEdgeParts(this.getFlowEdgeType()).head;
+      var options = this.$options.FLOW_EDGE_HEAD_OPTIONS || [];
+      for (var i = 0; i < options.length; i++) {
+        if (options[i].key === head) return options[i].label;
+      }
+      return '─';
+    },
+
+    getFlowEdgeColorValue: function () {
+      if (!this.edgeToolbar) return '';
+      var edge = (this.model.edges || [])[this.edgeToolbar.edgeIndex];
+      return edge && edge.color ? edge.color : '';
+    },
+
+    getAvailableFlowEdgeHeadOptions: function () {
+      return this.$options.FLOW_EDGE_HEAD_OPTIONS || [];
+    },
+
+    composeFlowEdgeType: function (body, head) {
+      return FlowEdgeCodec ? FlowEdgeCodec.composeType(body, head) : '---';
+    },
+
+    toggleFlowEdgeColorPicker: function () {
+      if (!this.edgeToolbar) return;
+      this.flowEdgeColorPicker = !this.flowEdgeColorPicker;
+      if (this.flowEdgeColorPicker) {
+        this.flowEdgeBodyPicker = false;
+        this.flowEdgeHeadPicker = false;
+      }
+    },
+
+    toggleFlowEdgeBodyPicker: function () {
+      if (!this.edgeToolbar) return;
+      this.flowEdgeBodyPicker = !this.flowEdgeBodyPicker;
+      if (this.flowEdgeBodyPicker) {
+        this.flowEdgeColorPicker = false;
+        this.flowEdgeHeadPicker = false;
+      }
+    },
+
+    toggleFlowEdgeHeadPicker: function () {
+      if (!this.edgeToolbar) return;
+      this.flowEdgeHeadPicker = !this.flowEdgeHeadPicker;
+      if (this.flowEdgeHeadPicker) {
+        this.flowEdgeColorPicker = false;
+        this.flowEdgeBodyPicker = false;
+      }
+    },
+
+    edgeToolbarSetType: function (type) {
+      if (!this.edgeToolbar) return;
+      this.$emit('update-edge-type', {
+        index: this.edgeToolbar.edgeIndex,
+        type: type
+      });
+    },
+
+    edgeToolbarSelectLineBody: function (body) {
+      if (!this.edgeToolbar) return;
+      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
+      this.edgeToolbarSetType(this.composeFlowEdgeType(body, parts.head));
+      this.flowEdgeBodyPicker = false;
+    },
+
+    edgeToolbarSelectLineHead: function (head) {
+      if (!this.edgeToolbar) return;
+      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
+      this.edgeToolbarSetType(this.composeFlowEdgeType(parts.body, head));
+      this.flowEdgeHeadPicker = false;
+    },
+
     // 공통 엣지 툴바 액션 유틸
 
     edgeToolbarEdit: function () {
@@ -952,6 +1057,9 @@ Vue.component('mermaid-preview', {
         zIndex: 1000,
         width: '160px'
       };
+      this.flowEdgeColorPicker = false;
+      this.flowEdgeBodyPicker = false;
+      this.flowEdgeHeadPicker = false;
       this.$nextTick(this._buildCtxLite().focusEdgeEditInput);
     },
 
@@ -959,6 +1067,9 @@ Vue.component('mermaid-preview', {
       if (!this.edgeToolbar) return;
       this.$emit('delete-selected', { nodeId: null, edgeIndex: this.edgeToolbar.edgeIndex });
       this.edgeToolbar       = null;
+      this.flowEdgeColorPicker = false;
+      this.flowEdgeBodyPicker = false;
+      this.flowEdgeHeadPicker = false;
       this.selectedEdgeIndex = null;
     },
 
@@ -968,9 +1079,7 @@ Vue.component('mermaid-preview', {
         index: this.edgeToolbar.edgeIndex,
         color: color || ''
       });
-      this.edgeToolbar = null;
-      this.selectedEdgeIndex = null;
-      this._clearEdgeVisualState();
+      this.flowEdgeColorPicker = false;
     },
 
     // 공통 시퀀스 툴바 액션 유틸
@@ -1193,9 +1302,49 @@ Vue.component('mermaid-preview', {
         </div>\
         <div v-if="edgeToolbar" class="edge-toolbar" :style="{ left: edgeToolbar.x + &quot;px&quot;, top: edgeToolbar.y + &quot;px&quot; }" @click.stop>\
           <button class="edge-toolbar__btn" @click="edgeToolbarEdit" title="Edit label">Label ✎</button>\
-          <div class="edge-toolbar__palette">\
-            <button class="context-menu__color-btn context-menu__color-btn--clear" aria-label="Clear color" @click="edgeToolbarChangeColor(&quot;&quot;)"></button>\
-            <button v-for="color in $options.COLOR_PALETTE" :key="color.key" class="context-menu__color-btn" :style="{ backgroundColor: color.value }" :title="color.key" @click="edgeToolbarChangeColor(color.value)"></button>\
+          <div class="edge-toolbar__sep"></div>\
+          <div class="edge-toolbar__type-group edge-toolbar__type-group--color">\
+            <button class="edge-toolbar__type-trigger edge-toolbar__type-trigger--color" :class="{ \'edge-toolbar__type-trigger--open\': flowEdgeColorPicker }" @click="toggleFlowEdgeColorPicker" title="Line color">\
+              <span class="edge-toolbar__color-swatch" :class="{ \'edge-toolbar__color-swatch--empty\': !getFlowEdgeColorValue() }" :style="getFlowEdgeColorValue() ? { backgroundColor: getFlowEdgeColorValue() } : {}"></span>\
+              <span class="edge-toolbar__type-caret">⌄</span>\
+            </button>\
+            <div v-if="flowEdgeColorPicker" class="edge-toolbar__type-menu edge-toolbar__type-menu--color">\
+              <button class="context-menu__color-btn context-menu__color-btn--clear" aria-label="Clear color" @click="edgeToolbarChangeColor(&quot;&quot;)"></button>\
+              <button v-for="color in $options.COLOR_PALETTE" :key="color.key" class="context-menu__color-btn" :class="{ \'context-menu__color-btn--selected\': getFlowEdgeColorValue() === color.value }" :style="{ backgroundColor: color.value }" :title="color.key" @click="edgeToolbarChangeColor(color.value)"></button>\
+            </div>\
+          </div>\
+          <div class="edge-toolbar__sep"></div>\
+          <div class="edge-toolbar__type-row">\
+            <div class="edge-toolbar__type-group">\
+              <button class="edge-toolbar__type-trigger" :class="{ \'edge-toolbar__type-trigger--open\': flowEdgeBodyPicker }" @click="toggleFlowEdgeBodyPicker" title="Line body">\
+                <span class="edge-toolbar__type-glyph edge-toolbar__type-glyph--body">{{ getFlowEdgeBodyLabel() }}</span>\
+                <span class="edge-toolbar__type-caret">⌄</span>\
+              </button>\
+              <div v-if="flowEdgeBodyPicker" class="edge-toolbar__type-menu edge-toolbar__type-menu--body">\
+                <button\
+                  v-for="opt in $options.FLOW_EDGE_BODY_OPTIONS"\
+                  :key="opt.key"\
+                  class="edge-toolbar__type-option"\
+                  :class="{ \'edge-toolbar__type-option--selected\': getFlowEdgeParts(getFlowEdgeType()).body === opt.key }"\
+                  @click="edgeToolbarSelectLineBody(opt.key)"\
+                >{{ opt.label }}</button>\
+              </div>\
+            </div>\
+            <div class="edge-toolbar__type-group">\
+              <button class="edge-toolbar__type-trigger" :class="{ \'edge-toolbar__type-trigger--open\': flowEdgeHeadPicker }" @click="toggleFlowEdgeHeadPicker" title="Arrow head">\
+                <span class="edge-toolbar__type-glyph edge-toolbar__type-glyph--head">{{ getFlowEdgeHeadLabel() }}</span>\
+                <span class="edge-toolbar__type-caret">⌄</span>\
+              </button>\
+              <div v-if="flowEdgeHeadPicker" class="edge-toolbar__type-menu edge-toolbar__type-menu--head">\
+                <button\
+                  v-for="opt in getAvailableFlowEdgeHeadOptions()"\
+                  :key="opt.key"\
+                  class="edge-toolbar__type-option"\
+                  :class="{ \'edge-toolbar__type-option--selected\': getFlowEdgeParts(getFlowEdgeType()).head === opt.key }"\
+                  @click="edgeToolbarSelectLineHead(opt.key)"\
+                >{{ opt.label }}</button>\
+              </div>\
+            </div>\
           </div>\
           <div class="edge-toolbar__sep"></div>\
           <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="edgeToolbarDelete" title="Delete edge">Delete</button>\

@@ -370,6 +370,7 @@ Vue.component('mermaid-full-editor', {
     updateNodeStyle: function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { nodes: this.model.nodes.map(function (n) { return n.id !== data.nodeId ? n : Object.assign({}, n, { text: data.text, fill: data.fill }); }) }); this.updateScriptFromModel(); },
     updateNodeFill:  function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { nodes: this.model.nodes.map(function (n) { return n.id !== data.nodeId ? n : Object.assign({}, n, { fill: data.fill }); }) }); this.updateScriptFromModel(); },
     updateEdgeText:  function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i === data.index ? Object.assign({}, e, { text: data.text }) : e; }) }); this.updateScriptFromModel(); },
+    updateEdgeType:  function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i !== data.index ? e : Object.assign({}, e, { type: data.type }); }) }); this.updateScriptFromModel(); },
     updateEdgeStyle: function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i !== data.index ? e : Object.assign({}, e, { text: data.text, color: data.color }); }) }); this.updateScriptFromModel(); },
     updateEdgeColor: function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i !== data.index ? e : Object.assign({}, e, { color: data.color }); }) }); this.updateScriptFromModel(); },
 
@@ -529,6 +530,7 @@ Vue.component('mermaid-full-editor', {
           @update-node-text="updateNodeText"\
           @update-node-shape="updateNodeShape"\
           @update-edge-text="updateEdgeText"\
+          @update-edge-type="updateEdgeType"\
           @update-node-style="updateNodeStyle"\
           @update-edge-style="updateEdgeStyle"\
           @update-node-fill="updateNodeFill"\

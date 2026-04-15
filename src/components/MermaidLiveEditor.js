@@ -529,6 +529,16 @@ Vue.component('mermaid-live-editor', {
       this.updateScriptFromModel();
     },
 
+    updateEdgeType: function (data) {
+      if (!this.isFlowchart) return;
+      this._snapshot();
+      var edges = this.model.edges.map(function (e, idx) {
+        return idx !== data.index ? e : Object.assign({}, e, { type: data.type });
+      });
+      this.model = Object.assign({}, this.model, { edges: edges });
+      this.updateScriptFromModel();
+    },
+
     updateEdgeStyle: function (data) {
       if (!this.isFlowchart) return;
       this._snapshot();
@@ -860,6 +870,7 @@ Vue.component('mermaid-live-editor', {
             @update-node-text="updateNodeText"\
             @update-node-shape="updateNodeShape"\
             @update-edge-text="updateEdgeText"\
+            @update-edge-type="updateEdgeType"\
             @update-node-style="updateNodeStyle"\
             @update-edge-style="updateEdgeStyle"\
             @update-node-fill="updateNodeFill"\
