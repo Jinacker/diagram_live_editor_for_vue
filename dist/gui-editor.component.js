@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-15T06:24:19.032Z
+ * Built: 2026-04-15T06:34:17.585Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -14,6 +14,71 @@
   }
 })(typeof window !== 'undefined' ? window : this);
 
+/* ===== src/services/SequenceMessageCodec.js ===== */
+/**
+ * Sequence 메시지 operator 관련 규칙을 한 곳에서 관리하는 공용 헬퍼
+ * - sequence-parser.js  : MESSAGE_RE 사용
+ * - sequence-generator.js : DEFAULT_OPERATOR 사용
+ * - SequenceSvgHandler.js : parseOperator / toggleLineStyle 사용
+ * - MermaidPreview.js     : LINE_TYPE_OPTIONS 사용
+ */
+(function (global) {
+  'use strict';
+
+  var DEFAULT_OPERATOR = '->>';
+
+  // 지원 operator 정규식 (activation suffix +/- 포함)
+  var MESSAGE_RE = /^([A-Za-z0-9_\u3131-\uD79D]+)\s*((?:-->>|--x|--\)|-->|->>|-x|-\)|->)[+-]?)\s*([A-Za-z0-9_\u3131-\uD79D]+)\s*:(.*)$/;
+
+  // UI 라벨 목록 (MermaidPreview sequence-toolbar 드롭다운)
+  var LINE_TYPE_OPTIONS = [
+    { operator: '->>',  label: '───▶' },
+    { operator: '-->>',  label: '···▶' },
+    { operator: '->',   label: '───'  },
+    { operator: '-->',  label: '···'  },
+    { operator: '-x',   label: '───x' },
+    { operator: '--x',  label: '···x' },
+    { operator: '-)',   label: '───)' },
+    { operator: '--)',  label: '···)' }
+  ];
+
+  // solid(단일 dash) ↔ dotted(이중 dash) 토글 맵
+  var TOGGLE_MAP = {
+    '->>':  '-->>',  '-->>': '->>',
+    '->':   '-->',   '-->':  '->',
+    '-x':   '--x',   '--x':  '-x',
+    '-)':   '--)',   '--)':  '-)'
+  };
+
+  // operator에서 activation suffix (+/-) 분리
+  function parseOperator(operator) {
+    var op = operator || DEFAULT_OPERATOR;
+    var suffix = '';
+    if (/[+-]$/.test(op)) {
+      suffix = op.slice(-1);
+      op = op.slice(0, -1);
+    }
+    return { base: op || DEFAULT_OPERATOR, suffix: suffix };
+  }
+
+  // solid ↔ dotted 토글 (activation suffix 유지)
+  function toggleLineStyle(operator) {
+    var parts = parseOperator(operator);
+    var nextBase = TOGGLE_MAP.hasOwnProperty(parts.base) ? TOGGLE_MAP[parts.base] : parts.base;
+    return nextBase + parts.suffix;
+  }
+
+  global.SequenceMessageCodec = {
+    DEFAULT_OPERATOR: DEFAULT_OPERATOR,
+    MESSAGE_RE: MESSAGE_RE,
+    LINE_TYPE_OPTIONS: LINE_TYPE_OPTIONS,
+    parseOperator: parseOperator,
+    toggleLineStyle: toggleLineStyle
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
 /* ===== src/sequence-parser.js ===== */
 /**
  * Mermaid 시퀀스 다이어그램 파서
@@ -23,8 +88,7 @@
 (function (global) {
   'use strict';
 
-  // 지원 operator: ->>, -->>, ->, -->, -x, --x, -), --)  (각각 +/- activation suffix 선택)
-  var MESSAGE_RE = /^([A-Za-z0-9_\u3131-\uD79D]+)\s*((?:-->>|--x|--\)|-->|->>|-x|-\)|->)[+-]?)\s*([A-Za-z0-9_\u3131-\uD79D]+)\s*:(.*)$/;
+  var MESSAGE_RE = SequenceMessageCodec.MESSAGE_RE;
 
   function ensureParticipant(model, id, label) {
     if (!id || model._participantMap[id]) return;
@@ -172,7 +236,7 @@
       lines.push(
         '    ' +
         message.from +
-        (message.operator || '->>') +
+        (message.operator || SequenceMessageCodec.DEFAULT_OPERATOR) +
         message.to +
         ': ' +
         (message.text || '')
@@ -2850,15 +2914,6 @@
     return value;
   }
 
-  function getMessageOperatorBase(operator) {
-    var suffix = '';
-    if (/[+-]$/.test(operator)) {
-      suffix = operator.slice(-1);
-      operator = operator.slice(0, -1);
-    }
-    return { base: operator || '->>', suffix: suffix };
-  }
-
   var SequenceSvgHandler = {
     attach: function (svgEl, model, ctx) {
       var participantMap = SequencePositionTracker.collectParticipants(svgEl, model);
@@ -3073,15 +3128,7 @@
 
     // solid(단일 dash) ↔ dotted(이중 dash) 토글
     toggleMessageLineType: function (message) {
-      var parts = getMessageOperatorBase(message.operator || '->>');
-      var TOGGLE = {
-        '->>': '-->>',  '-->>': '->>',
-        '->':  '-->',   '-->':  '->',
-        '-x':  '--x',   '--x':  '-x',
-        '-)':  '--)',   '--)':  '-)'
-      };
-      var nextBase = TOGGLE[parts.base] !== undefined ? TOGGLE[parts.base] : parts.base;
-      return nextBase + parts.suffix;
+      return SequenceMessageCodec.toggleLineStyle(message.operator || SequenceMessageCodec.DEFAULT_OPERATOR);
     }
   };
 
@@ -3395,16 +3442,7 @@ Vue.component('mermaid-preview', {
 
   // 템플릿에서 사용하는 전체 shape 목록
   SHAPES: SvgNodeHandler.SHAPES,
-  LINE_TYPE_OPTIONS: [
-    { operator: '->>',  label: '───▶' },
-    { operator: '-->>',  label: '···▶' },
-    { operator: '->',   label: '───' },
-    { operator: '-->',   label: '···' },
-    { operator: '-x',   label: '───✕' },
-    { operator: '--x',   label: '···✕' },
-    { operator: '-)',   label: '───)' },
-    { operator: '--)',  label: '···)' }
-  ],
+  LINE_TYPE_OPTIONS: window.SequenceMessageCodec ? window.SequenceMessageCodec.LINE_TYPE_OPTIONS : [],
   COLOR_PALETTE: [
     { key: 'red',    value: '#ef4444' },
     { key: 'orange', value: '#f97316' },

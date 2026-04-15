@@ -51,7 +51,7 @@
       lines.push(
         '    ' +
         message.from +
-        (message.operator || '->>') +
+        (message.operator || SequenceMessageCodec.DEFAULT_OPERATOR) +
         message.to +
         ': ' +
         (message.text || '')

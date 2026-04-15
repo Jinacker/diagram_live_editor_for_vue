@@ -20,16 +20,7 @@ Vue.component('mermaid-preview', {
 
   // 템플릿에서 사용하는 전체 shape 목록
   SHAPES: SvgNodeHandler.SHAPES,
-  LINE_TYPE_OPTIONS: [
-    { operator: '->>',  label: '───▶' },
-    { operator: '-->>',  label: '···▶' },
-    { operator: '->',   label: '───' },
-    { operator: '-->',   label: '···' },
-    { operator: '-x',   label: '───✕' },
-    { operator: '--x',   label: '···✕' },
-    { operator: '-)',   label: '───)' },
-    { operator: '--)',  label: '···)' }
-  ],
+  LINE_TYPE_OPTIONS: window.SequenceMessageCodec ? window.SequenceMessageCodec.LINE_TYPE_OPTIONS : [],
   COLOR_PALETTE: [
     { key: 'red',    value: '#ef4444' },
     { key: 'orange', value: '#f97316' },

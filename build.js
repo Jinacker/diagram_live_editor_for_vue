@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 
 const coreFiles = [
+  'src/services/SequenceMessageCodec.js',
   'src/sequence-parser.js',
   'src/sequence-generator.js',
   'src/services/FlowEdgeCodec.js',

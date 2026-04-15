@@ -6,8 +6,7 @@
 (function (global) {
   'use strict';
 
-  // 지원 operator: ->>, -->>, ->, -->, -x, --x, -), --)  (각각 +/- activation suffix 선택)
-  var MESSAGE_RE = /^([A-Za-z0-9_\u3131-\uD79D]+)\s*((?:-->>|--x|--\)|-->|->>|-x|-\)|->)[+-]?)\s*([A-Za-z0-9_\u3131-\uD79D]+)\s*:(.*)$/;
+  var MESSAGE_RE = SequenceMessageCodec.MESSAGE_RE;
 
   function ensureParticipant(model, id, label) {
     if (!id || model._participantMap[id]) return;

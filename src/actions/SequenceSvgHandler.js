@@ -7,15 +7,6 @@
     return value;
   }
 
-  function getMessageOperatorBase(operator) {
-    var suffix = '';
-    if (/[+-]$/.test(operator)) {
-      suffix = operator.slice(-1);
-      operator = operator.slice(0, -1);
-    }
-    return { base: operator || '->>', suffix: suffix };
-  }
-
   var SequenceSvgHandler = {
     attach: function (svgEl, model, ctx) {
       var participantMap = SequencePositionTracker.collectParticipants(svgEl, model);
@@ -230,15 +221,7 @@
 
     // solid(단일 dash) ↔ dotted(이중 dash) 토글
     toggleMessageLineType: function (message) {
-      var parts = getMessageOperatorBase(message.operator || '->>');
-      var TOGGLE = {
-        '->>': '-->>',  '-->>': '->>',
-        '->':  '-->',   '-->':  '->',
-        '-x':  '--x',   '--x':  '-x',
-        '-)':  '--)',   '--)':  '-)'
-      };
-      var nextBase = TOGGLE[parts.base] !== undefined ? TOGGLE[parts.base] : parts.base;
-      return nextBase + parts.suffix;
+      return SequenceMessageCodec.toggleLineStyle(message.operator || SequenceMessageCodec.DEFAULT_OPERATOR);
     }
   };
 
