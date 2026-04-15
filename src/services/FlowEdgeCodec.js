@@ -13,8 +13,8 @@
     { key: 'both-x', label: 'x─x' },
     { key: 'arrow', label: '→' },
     { key: 'both-arrow', label: '⟷' },
-    { key: 'circle', label: '─o' },
-    { key: 'both-circle', label: 'o─o' }
+    { key: 'circle', label: '─●' },
+    { key: 'both-circle', label: '●─●' }
   ];
 
   // Parser는 exact 후보 문자열을 먼저 찾고, semantics는 아래 regex 규칙으로 해석한다.

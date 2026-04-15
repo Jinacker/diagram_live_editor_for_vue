@@ -1108,7 +1108,9 @@
   border-radius: 8px;
   background: transparent;
   color: #1f2937;
+  font-family: var(--font-mono);
   font-size: 14px;
+  font-variant: normal;
   line-height: 1;
   text-transform: none !important;
   cursor: pointer;
