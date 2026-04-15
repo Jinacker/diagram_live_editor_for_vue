@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-15T06:38:53.419Z
+ * Built: 2026-04-15T06:56:44.926Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -264,13 +264,13 @@
   ];
 
   var HEAD_OPTIONS = [
-    { key: 'none', label: '─' },
+    { key: 'none', label: '──' },
     { key: 'x', label: '─x' },
     { key: 'both-x', label: 'x─x' },
     { key: 'arrow', label: '→' },
     { key: 'both-arrow', label: '⟷' },
-    { key: 'circle', label: '─○' },
-    { key: 'both-circle', label: '○─○' }
+    { key: 'circle', label: '—●' },
+    { key: 'both-circle', label: '●—●' }
   ];
 
   // Parser는 exact 후보 문자열을 먼저 찾고, semantics는 아래 regex 규칙으로 해석한다.
