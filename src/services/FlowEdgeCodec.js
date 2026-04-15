@@ -12,7 +12,7 @@
     { key: 'x', label: '─x' },
     { key: 'both-x', label: 'x─x' },
     { key: 'arrow', label: '→' },
-    { key: 'both-arrow', label: '↔' },
+    { key: 'both-arrow', label: '⟷' },
     { key: 'circle', label: '─○' },
     { key: 'both-circle', label: '○─○' }
   ];

@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-15T06:34:17.585Z
+ * Built: 2026-04-15T06:38:53.419Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -268,7 +268,7 @@
     { key: 'x', label: '─x' },
     { key: 'both-x', label: 'x─x' },
     { key: 'arrow', label: '→' },
-    { key: 'both-arrow', label: '↔' },
+    { key: 'both-arrow', label: '⟷' },
     { key: 'circle', label: '─○' },
     { key: 'both-circle', label: '○─○' }
   ];
