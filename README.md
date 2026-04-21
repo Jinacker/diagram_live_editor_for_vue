@@ -15,8 +15,9 @@
 gui-editor/
 ├─ src/
 │  ├─ components/    # 에디터, 툴바, 프리뷰 컴포넌트
+│  │  └─ mixins/     # LiveEditor / FullEditor 공통 액션
 │  ├─ actions/       # SVG 상호작용 처리 로직
-│  └─ utils/         # codec, export, history, diagnostics 등 공통 유틸
+│  └─ utils/         # codec, export, history, diagnostics, ctx builder
 ├─ dist/             # 배포용 번들 결과물
 ├─ docs/             # 설계/임베드/기능 문서
 ├─ build.js          # 번들 빌드 스크립트
@@ -117,9 +118,8 @@ script -> model -> svg -> interaction -> model -> script
 
 이번 구조는 단순히 파일을 보기 좋게 나눈 것이 아니라, 편집 책임을 서로 다른 계층으로 분리하기 위해 정리된 결과입니다.
 
-특히 최근 리팩터링에서 아래 방향으로 정리되었습니다.
 
-- 순수 규칙과 공통 로직은 `src/utils`로 이동
+- 순수 규칙과 공통 보조 로직은 `src/utils`로 이동
 - LiveEditor / FullEditor 공통 액션은 `src/components/mixins`로 이동
 - preview handler가 쓰는 ctx 조립은 `PreviewCtxBuilder`로 분리
 - 공개 임베드용 컴포넌트와 내부 개발용 컴포넌트의 역할을 분리
