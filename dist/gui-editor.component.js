@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-21T06:20:06.996Z
+ * Built: 2026-04-21T06:24:48.802Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -159,7 +159,61 @@
       if (statementIndex !== -1) statements.splice(statementIndex, 1);
     }
 
-    return statements;
+    return pruneEmptyBlocks(statements);
+  }
+
+  function pruneEmptyBlocks(statements) {
+    var next = (statements || []).slice();
+    var changed = true;
+
+    while (changed) {
+      changed = false;
+      var removeSet = {};
+      var stack = [];
+
+      for (var i = 0; i < next.length; i++) {
+        var statement = next[i];
+        if (!statement) continue;
+
+        if (/^(loop|alt|opt|par)$/.test(statement.type)) {
+          stack.push({
+            startIndex: i,
+            branchIndices: [],
+            hasContent: false
+          });
+          continue;
+        }
+
+        if (/^(else|and)$/.test(statement.type)) {
+          if (stack.length) stack[stack.length - 1].branchIndices.push(i);
+          continue;
+        }
+
+        if (statement.type === 'end') {
+          if (!stack.length) continue;
+          var block = stack.pop();
+          if (!block.hasContent) {
+            removeSet[block.startIndex] = true;
+            removeSet[i] = true;
+            for (var b = 0; b < block.branchIndices.length; b++) {
+              removeSet[block.branchIndices[b]] = true;
+            }
+            changed = true;
+          } else if (stack.length) {
+            stack[stack.length - 1].hasContent = true;
+          }
+          continue;
+        }
+
+        if (stack.length) stack[stack.length - 1].hasContent = true;
+      }
+
+      if (changed) {
+        next = next.filter(function (_, idx) { return !removeSet[idx]; });
+      }
+    }
+
+    return next;
   }
 
   function listBlocks(statements) {
