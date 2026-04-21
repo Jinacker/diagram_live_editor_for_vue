@@ -1127,9 +1127,9 @@ Vue.component('mermaid-preview', {
 
   template: '\
     <div class="preview-area" @click.self="selectedNodeId = null; selectedEdgeIndex = null; selectedSequenceParticipantId = null; selectedSequenceMessageIndex = null;">\
-      <div v-if="portDragging" class="edge-mode-overlay" style="background: var(--success);">\
-        Release on target node to connect\
-      </div>\
+        <div v-if="portDragging" class="edge-mode-overlay" style="background: var(--success);">\
+          {{ model.type === &quot;sequence&quot; ? &quot;Release on target participant to insert message&quot; : &quot;Release on target node to connect&quot; }}\
+        </div>\
       <div v-if="svgContent" :key="renderCounter" ref="canvas" class="preview-area__canvas">\
         <div class="preview-area__svg-host" v-html="svgContent"></div>\
         <div v-if="editingNodeId" class="node-edit-overlay" :style="editInputStyle">\
@@ -1214,7 +1214,7 @@ Vue.component('mermaid-preview', {
           <button class="edge-toolbar__btn" @click="sequenceToolbarEdit">Label ✎</button>\
           <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarMoveLeft" title="Move left">◀</button>\
           <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarMoveRight" title="Move right">▶</button>\
-          <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarToggleKind">{{ sequenceToolbar.kind === &quot;actor&quot; ? &quot;→ Participant&quot; : &quot;→ Actor&quot; }}</button>\
+          <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarToggleKind">{{ sequenceToolbar.kind === &quot;actor&quot; ? &quot;→ Participant&quot; : &quot;→ Shape&quot; }}</button>\
           <button v-if="sequenceToolbar.type === &quot;message&quot;" class="edge-toolbar__btn" @click="sequenceToolbarReverse">Reverse</button>\
           <div v-if="sequenceToolbar.type === &quot;message&quot;" class="edge-toolbar__type-group">\
             <button class="edge-toolbar__type-trigger" :class="{ \'edge-toolbar__type-trigger--open\': lineTypePicker }" @click.stop="sequenceToolbarToggleLineType" title="Line type">\

@@ -158,6 +158,7 @@
       var self = this;
       this._bringOverlayToFront(svgEl);
       this._dragging = true;
+      ctx.setState({ portDragging: true });
       this.clearHandles();
 
       this._dragLine.setAttribute('x1', startX);
@@ -167,9 +168,12 @@
       this._dragLine.style.display = '';
 
       var currentTarget = null;
+      var pointerClientX = 0;
+      var pointerClientY = 0;
+      var autoPanFrame = null;
 
-      var onMove = function (me) {
-        var svgPt = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
+      var updateDragAtClient = function (clientX, clientY) {
+        var svgPt = SvgPositionTracker.getSVGPoint(svgEl, clientX, clientY);
         self._dragLine.setAttribute('x2', svgPt.x);
         self._dragLine.setAttribute('y2', startY);
 
@@ -181,12 +185,78 @@
         }
       };
 
+      var getAutoPanDelta = function (clientX, clientY) {
+        var rect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+        var threshold = 56;
+        var maxStep = 8;
+        var dx = 0;
+        var dy = 0;
+        var progress = 0;
+
+        if (!rect) return { dx: 0, dy: 0 };
+
+        if (clientX <= rect.left + threshold) {
+          progress = Math.min(1, (rect.left + threshold - clientX) / threshold);
+          dx = Math.ceil(progress * maxStep);
+        } else if (clientX >= rect.right - threshold) {
+          progress = Math.min(1, (clientX - (rect.right - threshold)) / threshold);
+          dx = -Math.ceil(progress * maxStep);
+        }
+
+        if (clientY <= rect.top + threshold) {
+          progress = Math.min(1, (rect.top + threshold - clientY) / threshold);
+          dy = Math.ceil(progress * maxStep);
+        } else if (clientY >= rect.bottom - threshold) {
+          progress = Math.min(1, (clientY - (rect.bottom - threshold)) / threshold);
+          dy = -Math.ceil(progress * maxStep);
+        }
+
+        return { dx: dx, dy: dy };
+      };
+
+      var stopAutoPan = function () {
+        if (!autoPanFrame) return;
+        cancelAnimationFrame(autoPanFrame);
+        autoPanFrame = null;
+      };
+
+      var autoPanTick = function () {
+        autoPanFrame = null;
+        if (!ctx.getState().portDragging) return;
+
+        var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+        if (!delta.dx && !delta.dy) return;
+
+        if (ctx.panPreviewBy) {
+          ctx.panPreviewBy(delta.dx, delta.dy);
+          updateDragAtClient(pointerClientX, pointerClientY);
+        }
+
+        autoPanFrame = requestAnimationFrame(autoPanTick);
+      };
+
+      var scheduleAutoPan = function () {
+        if (autoPanFrame) return;
+        var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+        if (!delta.dx && !delta.dy) return;
+        autoPanFrame = requestAnimationFrame(autoPanTick);
+      };
+
+      var onMove = function (me) {
+        pointerClientX = me.clientX;
+        pointerClientY = me.clientY;
+        updateDragAtClient(pointerClientX, pointerClientY);
+        scheduleAutoPan();
+      };
+
       var onUp = function (me) {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
+        stopAutoPan();
         self._dragLine.style.display = 'none';
         self._targetLine.style.display = 'none';
         self._dragging = false;
+        ctx.setState({ portDragging: false });
 
         if (currentTarget) self._clearTargetHighlight(participantMap[currentTarget]);
 
@@ -201,6 +271,10 @@
           });
         }
       };
+
+      var startScreenPt = SvgPositionTracker.svgToScreen(svgEl, startX, startY);
+      pointerClientX = startScreenPt.x;
+      pointerClientY = startScreenPt.y;
 
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
