@@ -137,17 +137,16 @@
     return statements;
   }
 
+  function findBlockById(blocks, blockId) {
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].id === blockId) return blocks[i];
+    }
+    return null;
+  }
+
   function updateBlockText(model, blockId, text) {
     var statements = cloneStatements(model);
-    var blocks = listBlocks(statements);
-    var block = null;
-
-    for (var i = 0; i < blocks.length; i++) {
-      if (blocks[i].id === blockId) {
-        block = blocks[i];
-        break;
-      }
-    }
+    var block = findBlockById(listBlocks(statements), blockId);
     if (!block) return statements;
 
     statements[block.statementIndex] = Object.assign({}, statements[block.statementIndex], {
@@ -158,15 +157,7 @@
 
   function deleteBlock(model, blockId) {
     var statements = cloneStatements(model);
-    var blocks = listBlocks(statements);
-    var block = null;
-
-    for (var i = 0; i < blocks.length; i++) {
-      if (blocks[i].id === blockId) {
-        block = blocks[i];
-        break;
-      }
-    }
+    var block = findBlockById(listBlocks(statements), blockId);
     if (!block) return statements;
 
     var removeSet = {};
@@ -183,29 +174,86 @@
     return next;
   }
 
+  // alt ↔ else, par ↔ and
+  var BRANCH_KEYWORD = { alt: 'else', par: 'and' };
+
   function changeBlockKind(model, blockId, newKind) {
     var statements = cloneStatements(model);
-    var blocks = listBlocks(statements);
-    var block = null;
-
-    for (var i = 0; i < blocks.length; i++) {
-      if (blocks[i].id === blockId) { block = blocks[i]; break; }
-    }
+    var block = findBlockById(listBlocks(statements), blockId);
     if (!block) return statements;
 
+    var newKindStr = String(newKind || 'loop').toLowerCase();
     statements[block.statementIndex] = Object.assign({}, statements[block.statementIndex], {
-      type: String(newKind || 'loop').toLowerCase()
+      type: newKindStr
     });
+
+    var oldBranch = BRANCH_KEYWORD[block.kind];
+    var newBranch = BRANCH_KEYWORD[newKindStr];
+
+    if (oldBranch && newBranch && oldBranch !== newBranch) {
+      // alt ↔ par: 분기 키워드 변환 (else ↔ and)
+      for (var b = 0; b < block.branchIndices.length; b++) {
+        var bi = block.branchIndices[b];
+        statements[bi] = Object.assign({}, statements[bi], { type: newBranch });
+      }
+    } else if (oldBranch && !newBranch && block.branchIndices.length) {
+      // alt/par → loop/opt: 분기 statement 제거, 메시지는 유지
+      var removeSet = {};
+      for (var b2 = 0; b2 < block.branchIndices.length; b2++) {
+        removeSet[block.branchIndices[b2]] = true;
+      }
+      statements = statements.filter(function (_, idx) { return !removeSet[idx]; });
+    }
+    // loop/opt → alt/par: 타입만 교체 (분기 없는 alt/par는 유효한 문법)
+
+    return statements;
+  }
+
+  function findEnclosingBranchBlock(model, messageIndices) {
+    if (!messageIndices || !messageIndices.length) return null;
+    var sorted = messageIndices.slice().sort(function (a, b) { return a - b; });
+    var minIdx = sorted[0];
+    var maxIdx = sorted[sorted.length - 1];
+
+    var blocks = listBlocks((model && model.statements) || []);
+    var best = null;
+    for (var i = 0; i < blocks.length; i++) {
+      var b = blocks[i];
+      if (b.kind !== 'alt' && b.kind !== 'par') continue;
+      if (b.messageStartIndex === null || b.messageEndIndex === null) continue;
+      if (b.messageStartIndex > minIdx || b.messageEndIndex < maxIdx) continue;
+      // 가장 안쪽(depth 깊은) 블록 우선
+      if (!best || b.depth > best.depth) best = b;
+    }
+    return best;
+  }
+
+  function insertBranchStatement(model, messageIndices, keyword, text) {
+    var sorted = messageIndices.slice().sort(function (a, b) { return a - b; });
+    var statements = cloneStatements(model);
+    var insertAt = messageIndexToStatementIndex(statements, sorted[0]);
+    if (insertAt === -1) return statements;
+    statements.splice(insertAt, 0, { type: String(keyword), text: text || '' });
+    return statements;
+  }
+
+  function updateBranchText(model, statementIndex, text) {
+    var statements = cloneStatements(model);
+    if (statementIndex < 0 || statementIndex >= statements.length) return statements;
+    statements[statementIndex] = Object.assign({}, statements[statementIndex], { text: text || '' });
     return statements;
   }
 
   global.SequenceStatementUtils = {
     cloneStatements: cloneStatements,
     listBlocks: listBlocks,
+    findEnclosingBranchBlock: findEnclosingBranchBlock,
     insertMessageStatement: insertMessageStatement,
     removeMessageStatements: removeMessageStatements,
     wrapMessagesInBlock: wrapMessagesInBlock,
+    insertBranchStatement: insertBranchStatement,
     updateBlockText: updateBlockText,
+    updateBranchText: updateBranchText,
     deleteBlock: deleteBlock,
     changeBlockKind: changeBlockKind
   };

@@ -209,8 +209,10 @@ Vue.component('mermaid-full-editor', {
           @reverse-sequence-message="reverseSequenceMessage"\
           @toggle-sequence-message-line-type="toggleSequenceMessageLineType"\
           @set-sequence-message-line-type="setSequenceMessageLineType"\
+          @add-sequence-branch="addSequenceBranch"\
           @wrap-sequence-messages-in-block="wrapSequenceMessagesInBlock"\
           @update-sequence-block-text="updateSequenceBlockText"\
+          @update-sequence-branch-text="updateSequenceBranchText"\
           @change-sequence-block-type="changeSequenceBlockType"\
           @toggle-participant-kind="toggleParticipantKind"\
           @move-sequence-participant="moveSequenceParticipant"\

@@ -1565,6 +1565,9 @@ mermaid-toolbar {
   border-color: #93c5fd;
   font-weight: 700;
 }
+.edge-toolbar__btn--branch {
+  border: 1px solid #d1d5db;
+}
 
 .preview-area__canvas .labelText,
 .preview-area__canvas .loopText {

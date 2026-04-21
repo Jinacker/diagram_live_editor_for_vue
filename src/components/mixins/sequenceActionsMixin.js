@@ -164,6 +164,19 @@
         this._updateSequenceModel({ messages: messages });
       },
 
+      addSequenceBranch: function (data) {
+        if (this.isFlowchart || !data || !data.keyword || !data.messageIndices || !data.messageIndices.length) return;
+        this._snapshot();
+        this._updateSequenceModel({
+          statements: SequenceStatementUtils.insertBranchStatement(
+            this.model,
+            data.messageIndices,
+            data.keyword,
+            data.text || ''
+          )
+        });
+      },
+
       wrapSequenceMessagesInBlock: function (data) {
         if (this.isFlowchart || !data || !data.kind) return;
         var messageIndices = data.messageIndices || [];
@@ -184,6 +197,14 @@
         this._snapshot();
         this._updateSequenceModel({
           statements: SequenceStatementUtils.updateBlockText(this.model, data.blockId, data.text || '')
+        });
+      },
+
+      updateSequenceBranchText: function (data) {
+        if (this.isFlowchart || !data || data.statementIndex === null || data.statementIndex === undefined) return;
+        this._snapshot();
+        this._updateSequenceModel({
+          statements: SequenceStatementUtils.updateBranchText(this.model, data.statementIndex, data.text || '')
         });
       },
 

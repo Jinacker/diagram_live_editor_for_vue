@@ -130,6 +130,11 @@
             toolbarPos.y = center.y;
           }
 
+          var enclosing = SequenceStatementUtils.findEnclosingBranchBlock(
+            ctx.getModel ? ctx.getModel() : null,
+            currentSelection
+          );
+
           ctx.setState({
             selectedSequenceParticipantId: null,
             selectedSequenceMessageIndex: null,
@@ -138,6 +143,7 @@
             sequenceToolbar: {
               type: 'selection',
               messageIndices: currentSelection.slice(),
+              parentKind: enclosing ? enclosing.kind : null,
               x: toolbarPos.x,
               y: toolbarPos.y
             }
@@ -186,43 +192,28 @@
       var blocks = SequenceStatementUtils.listBlocks(model && model.statements);
       var labelTextEls = Array.prototype.slice.call(svgEl.querySelectorAll('.labelText'));
       var allLoopTextEls = Array.prototype.slice.call(svgEl.querySelectorAll('.loopText'));
-      var usedLoopIndices = {};
+      var loopCursor = 0;
+      var stmts = model && model.statements;
 
       for (var i = 0; i < blocks.length; i++) {
         var block = blocks[i];
         var labelEl = labelTextEls[i] || null;
-        var titleEl = this._findMatchingLoopText(labelEl, allLoopTextEls, usedLoopIndices);
-        this._attachBlockElementInteractions(svgEl, block, labelEl, titleEl, ctx);
+        // loopText가 statements보다 적을 수 있으므로 범위 체크
+        var mainTitleEl = loopCursor < allLoopTextEls.length ? allLoopTextEls[loopCursor++] : null;
+
+        var branchTitleEls = [];
+        var branchStatements = [];
+        for (var b = 0; b < block.branchIndices.length; b++) {
+          branchTitleEls.push(loopCursor < allLoopTextEls.length ? allLoopTextEls[loopCursor++] : null);
+          var si = block.branchIndices[b];
+          branchStatements.push(stmts && stmts[si] ? stmts[si] : {});
+        }
+
+        this._attachBlockElementInteractions(svgEl, block, labelEl, mainTitleEl, branchTitleEls, branchStatements, ctx);
       }
     },
 
-    _findMatchingLoopText: function (labelEl, allLoopTextEls, usedLoopIndices) {
-      if (!labelEl || !labelEl.getBBox) return null;
-      var labelBox;
-      try { labelBox = labelEl.getBBox(); } catch (e) { return null; }
-
-      var bestEl = null;
-      var bestDist = Infinity;
-      var bestIdx = -1;
-
-      for (var j = 0; j < allLoopTextEls.length; j++) {
-        if (usedLoopIndices[j]) continue;
-        var el = allLoopTextEls[j];
-        if (!el.getBBox) continue;
-        var box;
-        try { box = el.getBBox(); } catch (e2) { continue; }
-        var dist = Math.abs(box.y - labelBox.y);
-        if (dist < bestDist) { bestDist = dist; bestEl = el; bestIdx = j; }
-      }
-
-      if (bestEl && bestIdx !== -1) {
-        usedLoopIndices[bestIdx] = true;
-        return bestEl;
-      }
-      return null;
-    },
-
-    _attachBlockElementInteractions: function (svgEl, block, labelEl, titleEl, ctx) {
+    _attachBlockElementInteractions: function (svgEl, block, labelEl, titleEl, branchTitleEls, branchStatements, ctx) {
       // labelText의 부모 그룹(labelBox rect 포함)을 클릭 → toolbar
       var labelGroup = labelEl && (labelEl.closest ? labelEl.closest('g') : labelEl.parentNode);
       if (labelGroup) {
@@ -240,6 +231,7 @@
               blockId: block.id,
               kind: block.kind,
               text: block.text || '',
+              hasBranches: block.branchIndices.length > 0,
               x: e.clientX,
               y: e.clientY
             }
@@ -250,7 +242,7 @@
         }
       }
 
-      // loopText 클릭 → 바로 inline edit 오픈
+      // 메인 title(loopText) 클릭 → 블록 텍스트 inline edit
       if (titleEl) {
         titleEl.style.cursor = 'text';
         titleEl.style.pointerEvents = 'all';
@@ -260,6 +252,21 @@
             ctx.openSequenceBlockEdit(block.id, block.text || '', e.clientX, e.clientY);
           }
         });
+      }
+
+      // 분기 title(loopText) 클릭 → 분기 텍스트 inline edit
+      for (var b = 0; b < branchTitleEls.length; b++) {
+        (function (branchEl, statementIndex, branchStmt) {
+          if (!branchEl) return;
+          branchEl.style.cursor = 'text';
+          branchEl.style.pointerEvents = 'all';
+          branchEl.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (ctx.openSequenceBranchEdit) {
+              ctx.openSequenceBranchEdit(statementIndex, branchStmt.text || '', e.clientX, e.clientY);
+            }
+          });
+        }(branchTitleEls[b], block.branchIndices[b], branchStatements[b] || {}));
       }
     },
 

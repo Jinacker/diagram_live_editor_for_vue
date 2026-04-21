@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-21T04:37:54.740Z
+ * Built: 2026-04-21T05:19:08.482Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -245,17 +245,16 @@
     return statements;
   }
 
+  function findBlockById(blocks, blockId) {
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].id === blockId) return blocks[i];
+    }
+    return null;
+  }
+
   function updateBlockText(model, blockId, text) {
     var statements = cloneStatements(model);
-    var blocks = listBlocks(statements);
-    var block = null;
-
-    for (var i = 0; i < blocks.length; i++) {
-      if (blocks[i].id === blockId) {
-        block = blocks[i];
-        break;
-      }
-    }
+    var block = findBlockById(listBlocks(statements), blockId);
     if (!block) return statements;
 
     statements[block.statementIndex] = Object.assign({}, statements[block.statementIndex], {
@@ -266,15 +265,7 @@
 
   function deleteBlock(model, blockId) {
     var statements = cloneStatements(model);
-    var blocks = listBlocks(statements);
-    var block = null;
-
-    for (var i = 0; i < blocks.length; i++) {
-      if (blocks[i].id === blockId) {
-        block = blocks[i];
-        break;
-      }
-    }
+    var block = findBlockById(listBlocks(statements), blockId);
     if (!block) return statements;
 
     var removeSet = {};
@@ -291,29 +282,86 @@
     return next;
   }
 
+  // alt ↔ else, par ↔ and
+  var BRANCH_KEYWORD = { alt: 'else', par: 'and' };
+
   function changeBlockKind(model, blockId, newKind) {
     var statements = cloneStatements(model);
-    var blocks = listBlocks(statements);
-    var block = null;
-
-    for (var i = 0; i < blocks.length; i++) {
-      if (blocks[i].id === blockId) { block = blocks[i]; break; }
-    }
+    var block = findBlockById(listBlocks(statements), blockId);
     if (!block) return statements;
 
+    var newKindStr = String(newKind || 'loop').toLowerCase();
     statements[block.statementIndex] = Object.assign({}, statements[block.statementIndex], {
-      type: String(newKind || 'loop').toLowerCase()
+      type: newKindStr
     });
+
+    var oldBranch = BRANCH_KEYWORD[block.kind];
+    var newBranch = BRANCH_KEYWORD[newKindStr];
+
+    if (oldBranch && newBranch && oldBranch !== newBranch) {
+      // alt ↔ par: 분기 키워드 변환 (else ↔ and)
+      for (var b = 0; b < block.branchIndices.length; b++) {
+        var bi = block.branchIndices[b];
+        statements[bi] = Object.assign({}, statements[bi], { type: newBranch });
+      }
+    } else if (oldBranch && !newBranch && block.branchIndices.length) {
+      // alt/par → loop/opt: 분기 statement 제거, 메시지는 유지
+      var removeSet = {};
+      for (var b2 = 0; b2 < block.branchIndices.length; b2++) {
+        removeSet[block.branchIndices[b2]] = true;
+      }
+      statements = statements.filter(function (_, idx) { return !removeSet[idx]; });
+    }
+    // loop/opt → alt/par: 타입만 교체 (분기 없는 alt/par는 유효한 문법)
+
+    return statements;
+  }
+
+  function findEnclosingBranchBlock(model, messageIndices) {
+    if (!messageIndices || !messageIndices.length) return null;
+    var sorted = messageIndices.slice().sort(function (a, b) { return a - b; });
+    var minIdx = sorted[0];
+    var maxIdx = sorted[sorted.length - 1];
+
+    var blocks = listBlocks((model && model.statements) || []);
+    var best = null;
+    for (var i = 0; i < blocks.length; i++) {
+      var b = blocks[i];
+      if (b.kind !== 'alt' && b.kind !== 'par') continue;
+      if (b.messageStartIndex === null || b.messageEndIndex === null) continue;
+      if (b.messageStartIndex > minIdx || b.messageEndIndex < maxIdx) continue;
+      // 가장 안쪽(depth 깊은) 블록 우선
+      if (!best || b.depth > best.depth) best = b;
+    }
+    return best;
+  }
+
+  function insertBranchStatement(model, messageIndices, keyword, text) {
+    var sorted = messageIndices.slice().sort(function (a, b) { return a - b; });
+    var statements = cloneStatements(model);
+    var insertAt = messageIndexToStatementIndex(statements, sorted[0]);
+    if (insertAt === -1) return statements;
+    statements.splice(insertAt, 0, { type: String(keyword), text: text || '' });
+    return statements;
+  }
+
+  function updateBranchText(model, statementIndex, text) {
+    var statements = cloneStatements(model);
+    if (statementIndex < 0 || statementIndex >= statements.length) return statements;
+    statements[statementIndex] = Object.assign({}, statements[statementIndex], { text: text || '' });
     return statements;
   }
 
   global.SequenceStatementUtils = {
     cloneStatements: cloneStatements,
     listBlocks: listBlocks,
+    findEnclosingBranchBlock: findEnclosingBranchBlock,
     insertMessageStatement: insertMessageStatement,
     removeMessageStatements: removeMessageStatements,
     wrapMessagesInBlock: wrapMessagesInBlock,
+    insertBranchStatement: insertBranchStatement,
     updateBlockText: updateBlockText,
+    updateBranchText: updateBranchText,
     deleteBlock: deleteBlock,
     changeBlockKind: changeBlockKind
   };
@@ -779,15 +827,17 @@
 
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].trim();
-      if (!line || line.indexOf('%%') === 0) continue;
+      if (!line) continue;
 
       if (!started) {
+        if (line.indexOf('%%') === 0) continue;
         if (/^sequenceDiagram$/i.test(line)) {
           started = true;
         }
         continue;
       }
 
+      if (line.indexOf('%%') === 0) { model.statements.push({ type: 'raw', raw: line }); continue; }
       var sourceInfo = countSourceOccurrence(model, line);
       if (line === 'autonumber') { model.autonumber = true; continue; }
       if (parseParticipantLine(line, model)) continue;
@@ -2299,6 +2349,23 @@
       focusSequenceMessageInput: function () {
         vm.$nextTick(function () {
           var el = vm.$refs.sequenceMessageInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+      openSequenceBranchEdit: function (statementIndex, text, clientX, clientY) {
+        vm.sequenceToolbar = null;
+        vm.editingSequenceBlockId = null;
+        vm.editingSequenceBranchStatementIndex = statementIndex;
+        vm.editingSequenceBlockText = text || '';
+        vm.sequenceBlockEditStyle = {
+          position: 'fixed',
+          left: Math.max(12, clientX - 110) + 'px',
+          top: Math.max(12, clientY - 22) + 'px',
+          zIndex: 1000,
+          width: '220px'
+        };
+        vm.$nextTick(function () {
+          var el = vm.$refs.sequenceBlockInput;
           if (el) { el.focus(); el.select(); }
         });
       },
@@ -4201,6 +4268,11 @@
             toolbarPos.y = center.y;
           }
 
+          var enclosing = SequenceStatementUtils.findEnclosingBranchBlock(
+            ctx.getModel ? ctx.getModel() : null,
+            currentSelection
+          );
+
           ctx.setState({
             selectedSequenceParticipantId: null,
             selectedSequenceMessageIndex: null,
@@ -4209,6 +4281,7 @@
             sequenceToolbar: {
               type: 'selection',
               messageIndices: currentSelection.slice(),
+              parentKind: enclosing ? enclosing.kind : null,
               x: toolbarPos.x,
               y: toolbarPos.y
             }
@@ -4257,43 +4330,28 @@
       var blocks = SequenceStatementUtils.listBlocks(model && model.statements);
       var labelTextEls = Array.prototype.slice.call(svgEl.querySelectorAll('.labelText'));
       var allLoopTextEls = Array.prototype.slice.call(svgEl.querySelectorAll('.loopText'));
-      var usedLoopIndices = {};
+      var loopCursor = 0;
+      var stmts = model && model.statements;
 
       for (var i = 0; i < blocks.length; i++) {
         var block = blocks[i];
         var labelEl = labelTextEls[i] || null;
-        var titleEl = this._findMatchingLoopText(labelEl, allLoopTextEls, usedLoopIndices);
-        this._attachBlockElementInteractions(svgEl, block, labelEl, titleEl, ctx);
+        // loopText가 statements보다 적을 수 있으므로 범위 체크
+        var mainTitleEl = loopCursor < allLoopTextEls.length ? allLoopTextEls[loopCursor++] : null;
+
+        var branchTitleEls = [];
+        var branchStatements = [];
+        for (var b = 0; b < block.branchIndices.length; b++) {
+          branchTitleEls.push(loopCursor < allLoopTextEls.length ? allLoopTextEls[loopCursor++] : null);
+          var si = block.branchIndices[b];
+          branchStatements.push(stmts && stmts[si] ? stmts[si] : {});
+        }
+
+        this._attachBlockElementInteractions(svgEl, block, labelEl, mainTitleEl, branchTitleEls, branchStatements, ctx);
       }
     },
 
-    _findMatchingLoopText: function (labelEl, allLoopTextEls, usedLoopIndices) {
-      if (!labelEl || !labelEl.getBBox) return null;
-      var labelBox;
-      try { labelBox = labelEl.getBBox(); } catch (e) { return null; }
-
-      var bestEl = null;
-      var bestDist = Infinity;
-      var bestIdx = -1;
-
-      for (var j = 0; j < allLoopTextEls.length; j++) {
-        if (usedLoopIndices[j]) continue;
-        var el = allLoopTextEls[j];
-        if (!el.getBBox) continue;
-        var box;
-        try { box = el.getBBox(); } catch (e2) { continue; }
-        var dist = Math.abs(box.y - labelBox.y);
-        if (dist < bestDist) { bestDist = dist; bestEl = el; bestIdx = j; }
-      }
-
-      if (bestEl && bestIdx !== -1) {
-        usedLoopIndices[bestIdx] = true;
-        return bestEl;
-      }
-      return null;
-    },
-
-    _attachBlockElementInteractions: function (svgEl, block, labelEl, titleEl, ctx) {
+    _attachBlockElementInteractions: function (svgEl, block, labelEl, titleEl, branchTitleEls, branchStatements, ctx) {
       // labelText의 부모 그룹(labelBox rect 포함)을 클릭 → toolbar
       var labelGroup = labelEl && (labelEl.closest ? labelEl.closest('g') : labelEl.parentNode);
       if (labelGroup) {
@@ -4311,6 +4369,7 @@
               blockId: block.id,
               kind: block.kind,
               text: block.text || '',
+              hasBranches: block.branchIndices.length > 0,
               x: e.clientX,
               y: e.clientY
             }
@@ -4321,7 +4380,7 @@
         }
       }
 
-      // loopText 클릭 → 바로 inline edit 오픈
+      // 메인 title(loopText) 클릭 → 블록 텍스트 inline edit
       if (titleEl) {
         titleEl.style.cursor = 'text';
         titleEl.style.pointerEvents = 'all';
@@ -4331,6 +4390,21 @@
             ctx.openSequenceBlockEdit(block.id, block.text || '', e.clientX, e.clientY);
           }
         });
+      }
+
+      // 분기 title(loopText) 클릭 → 분기 텍스트 inline edit
+      for (var b = 0; b < branchTitleEls.length; b++) {
+        (function (branchEl, statementIndex, branchStmt) {
+          if (!branchEl) return;
+          branchEl.style.cursor = 'text';
+          branchEl.style.pointerEvents = 'all';
+          branchEl.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (ctx.openSequenceBranchEdit) {
+              ctx.openSequenceBranchEdit(statementIndex, branchStmt.text || '', e.clientX, e.clientY);
+            }
+          });
+        }(branchTitleEls[b], block.branchIndices[b], branchStatements[b] || {}));
       }
     },
 
@@ -4515,18 +4589,20 @@
       }
     },
 
-    startParticipantEdit: function (participantId, participantEl, ctx) {
+    startParticipantEdit: function (participantId, screenPos, topBox, ctx) {
       var participant = ctx.findSequenceParticipant(participantId);
       if (!participant) return;
-      var rect = participantEl.getBoundingClientRect();
-      var width = Math.max(160, rect.width + 28);
+      var boxW = topBox ? topBox.width : 120;
+      var width = Math.max(160, boxW + 28);
+      var centerX = screenPos ? screenPos.x : (global.innerWidth || 400) / 2;
+      var centerY = screenPos ? screenPos.y : (global.innerHeight || 300) / 2;
       var left = clamp(
-        rect.left + rect.width / 2 - width / 2,
+        centerX - width / 2,
         12,
         Math.max(12, (global.innerWidth || 0) - width - 12)
       );
       var top = clamp(
-        rect.top + rect.height / 2 - 18,
+        centerY - 18,
         12,
         Math.max(12, (global.innerHeight || 0) - 48)
       );
@@ -4933,6 +5009,19 @@
         this._updateSequenceModel({ messages: messages });
       },
 
+      addSequenceBranch: function (data) {
+        if (this.isFlowchart || !data || !data.keyword || !data.messageIndices || !data.messageIndices.length) return;
+        this._snapshot();
+        this._updateSequenceModel({
+          statements: SequenceStatementUtils.insertBranchStatement(
+            this.model,
+            data.messageIndices,
+            data.keyword,
+            data.text || ''
+          )
+        });
+      },
+
       wrapSequenceMessagesInBlock: function (data) {
         if (this.isFlowchart || !data || !data.kind) return;
         var messageIndices = data.messageIndices || [];
@@ -4953,6 +5042,14 @@
         this._snapshot();
         this._updateSequenceModel({
           statements: SequenceStatementUtils.updateBlockText(this.model, data.blockId, data.text || '')
+        });
+      },
+
+      updateSequenceBranchText: function (data) {
+        if (this.isFlowchart || !data || data.statementIndex === null || data.statementIndex === undefined) return;
+        this._snapshot();
+        this._updateSequenceModel({
+          statements: SequenceStatementUtils.updateBranchText(this.model, data.statementIndex, data.text || '')
         });
       },
 
@@ -5554,6 +5651,7 @@ Vue.component('mermaid-preview', {
       editingSequenceMessageText: '',
       sequenceMessageEditStyle: {},
       editingSequenceBlockId: null,
+      editingSequenceBranchStatementIndex: null,
       editingSequenceBlockText: '',
       sequenceBlockEditStyle: {},
 
@@ -5653,7 +5751,7 @@ Vue.component('mermaid-preview', {
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (self.editingNodeId !== null || self.editingEdgeIndex !== null ||
             self.editingSequenceParticipantId !== null || self.editingSequenceMessageIndex !== null ||
-            self.editingSequenceBlockId !== null) return;
+            self.editingSequenceBlockId !== null || self.editingSequenceBranchStatementIndex !== null) return;
         if (self.selectedNodeId || self.selectedEdgeIndex !== null) {
           self.$emit('delete-selected', {
             nodeId:    self.selectedNodeId,
@@ -5745,7 +5843,7 @@ Vue.component('mermaid-preview', {
       if (this.editingEdgeIndex !== null) this.confirmEdgeEdit();
       if (this.editingSequenceParticipantId) this.confirmSequenceParticipantEdit();
       if (this.editingSequenceMessageIndex !== null) this.confirmSequenceMessageEdit();
-      if (this.editingSequenceBlockId !== null) this.confirmSequenceBlockEdit();
+      if (this.editingSequenceBlockId !== null || this.editingSequenceBranchStatementIndex !== null) this.confirmSequenceBlockEdit();
     },
 
     // 공통 렌더 유틸
@@ -6271,13 +6369,20 @@ Vue.component('mermaid-preview', {
           blockId: this.editingSequenceBlockId,
           text: this.editingSequenceBlockText.trim()
         });
+      } else if (this.editingSequenceBranchStatementIndex !== null) {
+        this.$emit('update-sequence-branch-text', {
+          statementIndex: this.editingSequenceBranchStatementIndex,
+          text: this.editingSequenceBlockText.trim()
+        });
       }
       this.editingSequenceBlockId = null;
+      this.editingSequenceBranchStatementIndex = null;
       this.editingSequenceBlockText = '';
     },
 
     cancelSequenceBlockEdit: function () {
       this.editingSequenceBlockId = null;
+      this.editingSequenceBranchStatementIndex = null;
       this.editingSequenceBlockText = '';
     },
 
@@ -6535,8 +6640,10 @@ Vue.component('mermaid-preview', {
       if (toolbar.type === 'participant') {
         var participantMap = SequencePositionTracker.collectParticipants(svgEl, this.model);
         var participant = participantMap[toolbar.id];
-        if (participant && participant.el) {
-          SequenceSvgHandler.startParticipantEdit(toolbar.id, participant.el, this._buildCtxLite());
+        if (participant) {
+          var topBox = participant.topBox || participant.bbox;
+          var screenPos = { x: toolbar.x, y: toolbar.y };
+          SequenceSvgHandler.startParticipantEdit(toolbar.id, screenPos, topBox, this._buildCtxLite());
         }
       } else if (toolbar.type === 'message') {
         SequenceSvgHandler.startMessageEdit(toolbar.index, toolbar.x, toolbar.y, svgEl, this._buildCtxLite());
@@ -6603,6 +6710,17 @@ Vue.component('mermaid-preview', {
         blockId: this.sequenceToolbar.blockId,
         kind: kind
       });
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarAddBranch: function (keyword) {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'selection') return;
+      this.$emit('add-sequence-branch', {
+        keyword: keyword,
+        text: keyword === 'else' ? 'case' : 'task',
+        messageIndices: (this.sequenceToolbar.messageIndices || []).slice()
+      });
+      this.selectedSequenceMessageIndices = [];
       this.sequenceToolbar = null;
     },
 
@@ -6702,7 +6820,7 @@ Vue.component('mermaid-preview', {
         <div v-if="editingSequenceMessageIndex !== null" class="node-edit-overlay" :style="sequenceMessageEditStyle">\
           <input ref="sequenceMessageInput" class="node-edit-input" v-model="editingSequenceMessageText" placeholder="Message text" @keydown="onSequenceMessageEditKeyDown" @blur="confirmSequenceMessageEdit" />\
         </div>\
-        <div v-if="editingSequenceBlockId !== null" class="node-edit-overlay" :style="sequenceBlockEditStyle">\
+        <div v-if="editingSequenceBlockId !== null || editingSequenceBranchStatementIndex !== null" class="node-edit-overlay" :style="sequenceBlockEditStyle">\
           <input ref="sequenceBlockInput" class="node-edit-input" v-model="editingSequenceBlockText" placeholder="Block text" @keydown="onSequenceBlockEditKeyDown" @blur="confirmSequenceBlockEdit" />\
         </div>\
         <div v-if="contextMenu" class="context-menu" :style="{ left: contextMenu.x + &quot;px&quot;, top: contextMenu.y + &quot;px&quot; }" @click.stop>\
@@ -6772,13 +6890,15 @@ Vue.component('mermaid-preview', {
           <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="edgeToolbarDelete" title="Delete edge">Delete</button>\
         </div>\
         <div v-if="sequenceToolbar" class="sequence-toolbar" :style="{ left: sequenceToolbar.x + &quot;px&quot;, top: sequenceToolbar.y + &quot;px&quot; }" @click.stop>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot; &amp;&amp; sequenceToolbar.parentKind === &quot;alt&quot;" class="edge-toolbar__btn edge-toolbar__btn--branch" @click="sequenceToolbarAddBranch(&quot;else&quot;)">+ else</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot; &amp;&amp; sequenceToolbar.parentKind === &quot;par&quot;" class="edge-toolbar__btn edge-toolbar__btn--branch" @click="sequenceToolbarAddBranch(&quot;and&quot;)">+ and</button>\
           <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;loop&quot;)">Loop ↻</button>\
           <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;alt&quot;)">Alt ⎇</button>\
           <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;opt&quot;)">Opt ?</button>\
           <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;par&quot;)">Par∥</button>\
           <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;loop&quot; }" @click="sequenceToolbarChangeBlockType(&quot;loop&quot;)">Loop ↻</button>\
-          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;alt&quot; }" @click="sequenceToolbarChangeBlockType(&quot;alt&quot;)">Alt ⎇</button>\
           <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;opt&quot; }" @click="sequenceToolbarChangeBlockType(&quot;opt&quot;)">Opt ?</button>\
+          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;alt&quot; }" @click="sequenceToolbarChangeBlockType(&quot;alt&quot;)">Alt ⎇</button>\
           <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;par&quot; }" @click="sequenceToolbarChangeBlockType(&quot;par&quot;)">Par∥</button>\
           <button v-if="sequenceToolbar.type !== &quot;block&quot; &amp;&amp; sequenceToolbar.type !== &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarEdit">Label ✎</button>\
           <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarMoveLeft" title="Move left">◀</button>\
@@ -7025,8 +7145,10 @@ Vue.component('mermaid-full-editor', {
           @reverse-sequence-message="reverseSequenceMessage"\
           @toggle-sequence-message-line-type="toggleSequenceMessageLineType"\
           @set-sequence-message-line-type="setSequenceMessageLineType"\
+          @add-sequence-branch="addSequenceBranch"\
           @wrap-sequence-messages-in-block="wrapSequenceMessagesInBlock"\
           @update-sequence-block-text="updateSequenceBlockText"\
+          @update-sequence-branch-text="updateSequenceBranchText"\
           @change-sequence-block-type="changeSequenceBlockType"\
           @toggle-participant-kind="toggleParticipantKind"\
           @move-sequence-participant="moveSequenceParticipant"\

@@ -1330,6 +1330,9 @@
   border-color: #93c5fd;
   font-weight: 700;
 }
+.gui-editor-shell .edge-toolbar__btn--branch {
+  border: 1px solid var(--border-light, #d1d5db);
+}
 
 .gui-editor-shell .preview-area__canvas .labelText,
 .gui-editor-shell .preview-area__canvas .loopText {

@@ -215,15 +215,17 @@
 
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].trim();
-      if (!line || line.indexOf('%%') === 0) continue;
+      if (!line) continue;
 
       if (!started) {
+        if (line.indexOf('%%') === 0) continue;
         if (/^sequenceDiagram$/i.test(line)) {
           started = true;
         }
         continue;
       }
 
+      if (line.indexOf('%%') === 0) { model.statements.push({ type: 'raw', raw: line }); continue; }
       var sourceInfo = countSourceOccurrence(model, line);
       if (line === 'autonumber') { model.autonumber = true; continue; }
       if (parseParticipantLine(line, model)) continue;

@@ -166,18 +166,20 @@
       }
     },
 
-    startParticipantEdit: function (participantId, participantEl, ctx) {
+    startParticipantEdit: function (participantId, screenPos, topBox, ctx) {
       var participant = ctx.findSequenceParticipant(participantId);
       if (!participant) return;
-      var rect = participantEl.getBoundingClientRect();
-      var width = Math.max(160, rect.width + 28);
+      var boxW = topBox ? topBox.width : 120;
+      var width = Math.max(160, boxW + 28);
+      var centerX = screenPos ? screenPos.x : (global.innerWidth || 400) / 2;
+      var centerY = screenPos ? screenPos.y : (global.innerHeight || 300) / 2;
       var left = clamp(
-        rect.left + rect.width / 2 - width / 2,
+        centerX - width / 2,
         12,
         Math.max(12, (global.innerWidth || 0) - width - 12)
       );
       var top = clamp(
-        rect.top + rect.height / 2 - 18,
+        centerY - 18,
         12,
         Math.max(12, (global.innerHeight || 0) - 48)
       );

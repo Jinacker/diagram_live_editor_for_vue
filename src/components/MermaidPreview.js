@@ -67,6 +67,7 @@ Vue.component('mermaid-preview', {
       editingSequenceMessageText: '',
       sequenceMessageEditStyle: {},
       editingSequenceBlockId: null,
+      editingSequenceBranchStatementIndex: null,
       editingSequenceBlockText: '',
       sequenceBlockEditStyle: {},
 
@@ -166,7 +167,7 @@ Vue.component('mermaid-preview', {
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (self.editingNodeId !== null || self.editingEdgeIndex !== null ||
             self.editingSequenceParticipantId !== null || self.editingSequenceMessageIndex !== null ||
-            self.editingSequenceBlockId !== null) return;
+            self.editingSequenceBlockId !== null || self.editingSequenceBranchStatementIndex !== null) return;
         if (self.selectedNodeId || self.selectedEdgeIndex !== null) {
           self.$emit('delete-selected', {
             nodeId:    self.selectedNodeId,
@@ -258,7 +259,7 @@ Vue.component('mermaid-preview', {
       if (this.editingEdgeIndex !== null) this.confirmEdgeEdit();
       if (this.editingSequenceParticipantId) this.confirmSequenceParticipantEdit();
       if (this.editingSequenceMessageIndex !== null) this.confirmSequenceMessageEdit();
-      if (this.editingSequenceBlockId !== null) this.confirmSequenceBlockEdit();
+      if (this.editingSequenceBlockId !== null || this.editingSequenceBranchStatementIndex !== null) this.confirmSequenceBlockEdit();
     },
 
     // 공통 렌더 유틸
@@ -784,13 +785,20 @@ Vue.component('mermaid-preview', {
           blockId: this.editingSequenceBlockId,
           text: this.editingSequenceBlockText.trim()
         });
+      } else if (this.editingSequenceBranchStatementIndex !== null) {
+        this.$emit('update-sequence-branch-text', {
+          statementIndex: this.editingSequenceBranchStatementIndex,
+          text: this.editingSequenceBlockText.trim()
+        });
       }
       this.editingSequenceBlockId = null;
+      this.editingSequenceBranchStatementIndex = null;
       this.editingSequenceBlockText = '';
     },
 
     cancelSequenceBlockEdit: function () {
       this.editingSequenceBlockId = null;
+      this.editingSequenceBranchStatementIndex = null;
       this.editingSequenceBlockText = '';
     },
 
@@ -1048,8 +1056,10 @@ Vue.component('mermaid-preview', {
       if (toolbar.type === 'participant') {
         var participantMap = SequencePositionTracker.collectParticipants(svgEl, this.model);
         var participant = participantMap[toolbar.id];
-        if (participant && participant.el) {
-          SequenceSvgHandler.startParticipantEdit(toolbar.id, participant.el, this._buildCtxLite());
+        if (participant) {
+          var topBox = participant.topBox || participant.bbox;
+          var screenPos = { x: toolbar.x, y: toolbar.y };
+          SequenceSvgHandler.startParticipantEdit(toolbar.id, screenPos, topBox, this._buildCtxLite());
         }
       } else if (toolbar.type === 'message') {
         SequenceSvgHandler.startMessageEdit(toolbar.index, toolbar.x, toolbar.y, svgEl, this._buildCtxLite());
@@ -1116,6 +1126,17 @@ Vue.component('mermaid-preview', {
         blockId: this.sequenceToolbar.blockId,
         kind: kind
       });
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarAddBranch: function (keyword) {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'selection') return;
+      this.$emit('add-sequence-branch', {
+        keyword: keyword,
+        text: keyword === 'else' ? 'case' : 'task',
+        messageIndices: (this.sequenceToolbar.messageIndices || []).slice()
+      });
+      this.selectedSequenceMessageIndices = [];
       this.sequenceToolbar = null;
     },
 
@@ -1215,7 +1236,7 @@ Vue.component('mermaid-preview', {
         <div v-if="editingSequenceMessageIndex !== null" class="node-edit-overlay" :style="sequenceMessageEditStyle">\
           <input ref="sequenceMessageInput" class="node-edit-input" v-model="editingSequenceMessageText" placeholder="Message text" @keydown="onSequenceMessageEditKeyDown" @blur="confirmSequenceMessageEdit" />\
         </div>\
-        <div v-if="editingSequenceBlockId !== null" class="node-edit-overlay" :style="sequenceBlockEditStyle">\
+        <div v-if="editingSequenceBlockId !== null || editingSequenceBranchStatementIndex !== null" class="node-edit-overlay" :style="sequenceBlockEditStyle">\
           <input ref="sequenceBlockInput" class="node-edit-input" v-model="editingSequenceBlockText" placeholder="Block text" @keydown="onSequenceBlockEditKeyDown" @blur="confirmSequenceBlockEdit" />\
         </div>\
         <div v-if="contextMenu" class="context-menu" :style="{ left: contextMenu.x + &quot;px&quot;, top: contextMenu.y + &quot;px&quot; }" @click.stop>\
@@ -1285,13 +1306,15 @@ Vue.component('mermaid-preview', {
           <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="edgeToolbarDelete" title="Delete edge">Delete</button>\
         </div>\
         <div v-if="sequenceToolbar" class="sequence-toolbar" :style="{ left: sequenceToolbar.x + &quot;px&quot;, top: sequenceToolbar.y + &quot;px&quot; }" @click.stop>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot; &amp;&amp; sequenceToolbar.parentKind === &quot;alt&quot;" class="edge-toolbar__btn edge-toolbar__btn--branch" @click="sequenceToolbarAddBranch(&quot;else&quot;)">+ else</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot; &amp;&amp; sequenceToolbar.parentKind === &quot;par&quot;" class="edge-toolbar__btn edge-toolbar__btn--branch" @click="sequenceToolbarAddBranch(&quot;and&quot;)">+ and</button>\
           <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;loop&quot;)">Loop ↻</button>\
           <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;alt&quot;)">Alt ⎇</button>\
           <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;opt&quot;)">Opt ?</button>\
           <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;par&quot;)">Par∥</button>\
           <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;loop&quot; }" @click="sequenceToolbarChangeBlockType(&quot;loop&quot;)">Loop ↻</button>\
-          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;alt&quot; }" @click="sequenceToolbarChangeBlockType(&quot;alt&quot;)">Alt ⎇</button>\
           <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;opt&quot; }" @click="sequenceToolbarChangeBlockType(&quot;opt&quot;)">Opt ?</button>\
+          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;alt&quot; }" @click="sequenceToolbarChangeBlockType(&quot;alt&quot;)">Alt ⎇</button>\
           <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;par&quot; }" @click="sequenceToolbarChangeBlockType(&quot;par&quot;)">Par∥</button>\
           <button v-if="sequenceToolbar.type !== &quot;block&quot; &amp;&amp; sequenceToolbar.type !== &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarEdit">Label ✎</button>\
           <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarMoveLeft" title="Move left">◀</button>\
