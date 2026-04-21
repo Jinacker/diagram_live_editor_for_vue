@@ -51,12 +51,38 @@
     return nextBase + parts.suffix;
   }
 
+  // activation +/- 균형 재계산
+  // GUI에서 메시지를 지운 뒤 남은 -가 inactive participant에 붙어 있으면
+  // Mermaid가 "Trying to inactivate an inactive participant"로 렌더 실패한다.
+  // 실제로 active가 아닌 from에 붙은 -만 떼어내고, 나머지는 그대로 둔다.
+  function normalizeActivations(messages) {
+    var result = [];
+    var activeCounts = {};
+    for (var i = 0; i < messages.length; i++) {
+      var msg = Object.assign({}, messages[i]);
+      var parts = parseOperator(msg.operator);
+      if (parts.suffix === '+') {
+        activeCounts[msg.to] = (activeCounts[msg.to] || 0) + 1;
+      }
+      if (parts.suffix === '-') {
+        if (activeCounts[msg.from] > 0) {
+          activeCounts[msg.from]--;
+        } else {
+          msg.operator = parts.base;
+        }
+      }
+      result.push(msg);
+    }
+    return result;
+  }
+
   global.SequenceMessageCodec = {
     DEFAULT_OPERATOR: DEFAULT_OPERATOR,
     MESSAGE_RE: MESSAGE_RE,
     LINE_TYPE_OPTIONS: LINE_TYPE_OPTIONS,
     parseOperator: parseOperator,
-    toggleLineStyle: toggleLineStyle
+    toggleLineStyle: toggleLineStyle,
+    normalizeActivations: normalizeActivations
   };
 
 })(typeof window !== 'undefined' ? window : this);

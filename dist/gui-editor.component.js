@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-16T01:27:42.524Z
+ * Built: 2026-04-21T00:30:29.111Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -14,7 +14,7 @@
   }
 })(typeof window !== 'undefined' ? window : this);
 
-/* ===== src/services/SequenceMessageCodec.js ===== */
+/* ===== src/utils/SequenceMessageCodec.js ===== */
 /**
  * Sequence 메시지 operator 관련 규칙을 한 곳에서 관리하는 공용 헬퍼
  * - sequence-parser.js  : MESSAGE_RE 사용
@@ -68,12 +68,186 @@
     return nextBase + parts.suffix;
   }
 
+  // activation +/- 균형 재계산
+  // GUI에서 메시지를 지운 뒤 남은 -가 inactive participant에 붙어 있으면
+  // Mermaid가 "Trying to inactivate an inactive participant"로 렌더 실패한다.
+  // 실제로 active가 아닌 from에 붙은 -만 떼어내고, 나머지는 그대로 둔다.
+  function normalizeActivations(messages) {
+    var result = [];
+    var activeCounts = {};
+    for (var i = 0; i < messages.length; i++) {
+      var msg = Object.assign({}, messages[i]);
+      var parts = parseOperator(msg.operator);
+      if (parts.suffix === '+') {
+        activeCounts[msg.to] = (activeCounts[msg.to] || 0) + 1;
+      }
+      if (parts.suffix === '-') {
+        if (activeCounts[msg.from] > 0) {
+          activeCounts[msg.from]--;
+        } else {
+          msg.operator = parts.base;
+        }
+      }
+      result.push(msg);
+    }
+    return result;
+  }
+
   global.SequenceMessageCodec = {
     DEFAULT_OPERATOR: DEFAULT_OPERATOR,
     MESSAGE_RE: MESSAGE_RE,
     LINE_TYPE_OPTIONS: LINE_TYPE_OPTIONS,
     parseOperator: parseOperator,
-    toggleLineStyle: toggleLineStyle
+    toggleLineStyle: toggleLineStyle,
+    normalizeActivations: normalizeActivations
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/IdAllocator.js ===== */
+/**
+ * IdAllocator
+ * GUI에서 새 노드/참가자를 추가할 때 충돌 없는 ID(`N12`, `P3` 등)를 할당한다.
+ *
+ * - script와 model 양쪽을 모두 살펴 충돌을 피한다 (parser가 누락한 ID도 보호).
+ * - counter는 한 번 올라가면 절대 내려가지 않는다 (단조 증가).
+ * - prefix별 인스턴스 생성: `new IdAllocator('N')` / `new IdAllocator('P')`.
+ */
+(function (global) {
+  'use strict';
+
+  function IdAllocator(prefix) {
+    this.prefix = prefix;
+    this.counter = 0;
+  }
+
+  // script의 prefix+숫자와 modelItems의 ID 끝 숫자를 모두 훑어 counter를 끌어올린다.
+  // 사용자가 수동으로 큰 번호를 쓴 ID를 보존하기 위함.
+  IdAllocator.prototype.seed = function (script, items) {
+    var max = this._scanScriptMax(script);
+    var list = items || [];
+    for (var i = 0; i < list.length; i++) {
+      var id = String(list[i] && list[i].id || '');
+      var nm = id.match(/(\d+)$/);
+      if (nm) {
+        var n = parseInt(nm[1], 10);
+        if (n > max) max = n;
+      }
+    }
+    if (max > this.counter) this.counter = max;
+  };
+
+  // 충돌 없는 다음 ID를 반환. counter를 함께 증가시킴.
+  IdAllocator.prototype.next = function (script, items) {
+    var candidate = '';
+    do {
+      this.counter++;
+      candidate = this.prefix + this.counter;
+    } while (this.scriptContainsId(script, candidate) || this.itemsContainId(items, candidate));
+    return candidate;
+  };
+
+  IdAllocator.prototype.scriptContainsId = function (script, id) {
+    if (!id) return false;
+    var escapedId = String(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('\\b' + escapedId + '\\b').test(script || '');
+  };
+
+  IdAllocator.prototype.itemsContainId = function (items, id) {
+    var list = items || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].id === id) return true;
+    }
+    return false;
+  };
+
+  IdAllocator.prototype._scanScriptMax = function (script) {
+    var src = script || '';
+    var escapedPrefix = String(this.prefix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var regex = new RegExp('\\b' + escapedPrefix + '(\\d+)\\b', 'g');
+    var max = 0;
+    var match;
+    while ((match = regex.exec(src))) {
+      var n = parseInt(match[1], 10);
+      if (n > max) max = n;
+    }
+    return max;
+  };
+
+  global.IdAllocator = IdAllocator;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/ModelDiagnostics.js ===== */
+/**
+ * ModelDiagnostics
+ * raw script와 parsed model을 비교해 사용자가 인지해야 할 경고 문구를 만든다.
+ *
+ * 현재는 "예약 ID 누락 경고" 한 종류만 제공한다:
+ *   - script에는 N12 / P3 같은 예약 ID가 있는데 parser가 model에 반영하지 못한 경우
+ *   - unsupported 문법 때문에 GUI 동기화가 끊겼을 가능성을 사용자에게 알려준다.
+ *
+ * StorageManager 스타일의 stateless plain object.
+ */
+(function (global) {
+  'use strict';
+
+  function collectReservedIds(script, prefix) {
+    var src = script || '';
+    var escapedPrefix = String(prefix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var regex = new RegExp('\\b' + escapedPrefix + '(\\d+)\\b', 'g');
+    var ids = {};
+    var match;
+    while ((match = regex.exec(src))) {
+      ids[prefix + match[1]] = true;
+    }
+    return ids;
+  }
+
+  function collectModelIds(items, prefix) {
+    var ids = {};
+    var list = items || [];
+    var idPattern = new RegExp('^' + prefix + '\\d+$');
+    for (var i = 0; i < list.length; i++) {
+      var id = String(list[i] && list[i].id || '');
+      if (idPattern.test(id)) {
+        ids[id] = true;
+      }
+    }
+    return ids;
+  }
+
+  function countMissingIds(reserved, parsed) {
+    var count = 0;
+    var keys = Object.keys(reserved);
+    for (var i = 0; i < keys.length; i++) {
+      if (!parsed[keys[i]]) count++;
+    }
+    return count;
+  }
+
+  // script ↔ parsed model 비교 후 경고 문자열 반환 (없으면 빈 문자열).
+  function reservedIdWarning(script, parsed) {
+    if (!parsed) return '';
+    var reservedNodeIds = collectReservedIds(script, 'N');
+    var reservedParticipantIds = collectReservedIds(script, 'P');
+    var parsedNodeIds = collectModelIds(parsed.nodes || [], 'N');
+    var parsedParticipantIds = collectModelIds(parsed.participants || [], 'P');
+    var missingNodeCount = countMissingIds(reservedNodeIds, parsedNodeIds);
+    var missingParticipantCount = countMissingIds(reservedParticipantIds, parsedParticipantIds);
+
+    if (!missingNodeCount && !missingParticipantCount) return '';
+
+    var parts = [];
+    if (missingNodeCount) parts.push('N ID ' + missingNodeCount + '개');
+    if (missingParticipantCount) parts.push('P ID ' + missingParticipantCount + '개');
+    return '일부 Mermaid 요소가 GUI parser에 완전히 반영되지 않았을 수 있습니다. 누락 추정: ' + parts.join(', ');
+  }
+
+  global.ModelDiagnostics = {
+    reservedIdWarning: reservedIdWarning
   };
 
 })(typeof window !== 'undefined' ? window : this);
@@ -253,7 +427,7 @@
 })(typeof window !== 'undefined' ? window : this);
 
 
-/* ===== src/services/FlowEdgeCodec.js ===== */
+/* ===== src/utils/FlowEdgeCodec.js ===== */
 (function (global) {
   'use strict';
 
@@ -973,7 +1147,7 @@
 })(typeof window !== 'undefined' ? window : this);
 
 
-/* ===== src/services/HistoryManager.js ===== */
+/* ===== src/utils/HistoryManager.js ===== */
 (function (global) {
   'use strict';
 
@@ -1018,7 +1192,7 @@
 })(typeof window !== 'undefined' ? window : this);
 
 
-/* ===== src/services/SvgExport.js ===== */
+/* ===== src/utils/SvgExport.js ===== */
 (function (global) {
   'use strict';
 
@@ -1337,6 +1511,158 @@
       return exportRaster(svgSource, options);
     }
   };
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/PreviewCtxBuilder.js ===== */
+/**
+ * PreviewCtxBuilder
+ * MermaidPreview가 5개 핸들러(SvgNodeHandler, SvgEdgeHandler, SequenceSvgHandler,
+ * PortDragHandler, SequenceMessageDragHandler)에 넘기는 ctx 객체를 한 곳에서 만든다.
+ *
+ * - build(vm, svgEl): postRenderSetup 시점의 full ctx (svgEl 의존 메서드 포함).
+ * - buildLite(vm)  : toolbar/액션에서 쓰는 경량 ctx (svgEl 불필요).
+ *
+ * **시그니처 보존 약속**: ctx 메서드 이름·인자·반환값은 5개 핸들러가 의존하므로
+ *   변경 금지. 이 파일은 기존 _buildCtx / _buildCtxLite 코드를 그대로 옮긴 것.
+ *
+ * StorageManager 스타일의 stateless plain object.
+ */
+(function (global) {
+  'use strict';
+
+  // 공통 ctx 파편 — full / lite 양쪽이 공유.
+  function commonCtx(vm) {
+    return {
+      emit: function (ev, data) { vm.$emit(ev, data); },
+      getState: function () { return vm.$data; },
+      setState: function (patch) {
+        var keys = Object.keys(patch);
+        for (var i = 0; i < keys.length; i++) { vm[keys[i]] = patch[keys[i]]; }
+      },
+      getModel: function () { return vm.model; },
+      findNode: function (nodeId) {
+        var nodes = vm.model.nodes || [];
+        for (var i = 0; i < nodes.length; i++) {
+          if (nodes[i].id === nodeId) return nodes[i];
+        }
+        return null;
+      },
+      findSequenceParticipant: function (participantId) {
+        var participants = vm.model.participants || [];
+        for (var i = 0; i < participants.length; i++) {
+          if (participants[i].id === participantId) return participants[i];
+        }
+        return null;
+      },
+      findSequenceMessage: function (messageIndex) {
+        var messages = vm.model.messages || [];
+        return messages[messageIndex] || null;
+      },
+      focusEditInput: function () {
+        vm.$nextTick(function () {
+          var el = vm.$refs.editInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+      focusEdgeEditInput: function () {
+        vm.$nextTick(function () {
+          var el = vm.$refs.editEdgeInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+      focusSequenceParticipantInput: function () {
+        vm.$nextTick(function () {
+          var el = vm.$refs.sequenceParticipantInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+      focusSequenceMessageInput: function () {
+        vm.$nextTick(function () {
+          var el = vm.$refs.sequenceMessageInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      }
+    };
+  }
+
+  // postRenderSetup용 full ctx — selection watcher와 viewport 의존 메서드 포함.
+  // (기존 _buildCtx에 getPreviewRect가 line 706/736 두 번 정의돼 있던 버그 동시 수정.
+  //  본문이 동일했으므로 동작 차이 없음.)
+  function build(vm, svgEl) {
+    var ctx = commonCtx(vm);
+
+    ctx.watchSelection = function (nodeId, nodeEl) {
+      vm.$watch('selectedNodeId', function (val) {
+        nodeEl.classList.toggle('selected', val === nodeId);
+      }, { immediate: true });
+    };
+
+    ctx.watchEdgeSelection = function (edgeIndex, edgeEl) {
+      vm.$watch('selectedEdgeIndex', function (val) {
+        if (edgeEl) {
+          var isSelected = val === edgeIndex;
+          if (edgeEl.classList) {
+            edgeEl.classList.toggle('edge-selected', isSelected);
+            edgeEl.classList.toggle('edge-hovered', isSelected);
+          }
+          var edgePaths = edgeEl.querySelectorAll ? edgeEl.querySelectorAll('path') : [];
+          for (var i = 0; i < edgePaths.length; i++) {
+            edgePaths[i].classList.toggle('edge-selected', isSelected);
+            edgePaths[i].classList.toggle('edge-hovered', isSelected);
+          }
+        }
+      }, { immediate: true });
+    };
+
+    ctx.watchSequenceParticipantSelection = function (participantId, el) {
+      vm.$watch('selectedSequenceParticipantId', function (val) {
+        el.classList.toggle('sequence-participant-selected', val === participantId);
+      }, { immediate: true });
+    };
+
+    ctx.watchSequenceMessageSelection = function (messageIndex, lineEl, textEl) {
+      vm.$watch('selectedSequenceMessageIndex', function (val) {
+        if (lineEl) lineEl.classList.toggle('sequence-message-selected', val === messageIndex);
+        if (textEl) textEl.classList.toggle('sequence-message-text-selected', val === messageIndex);
+      }, { immediate: true });
+    };
+
+    ctx.watchSequenceMessageHitSelection = function (messageIndex, hitEl) {
+      vm.$watch('selectedSequenceMessageIndex', function (val) {
+        if (hitEl && hitEl.classList) {
+          hitEl.classList.toggle('sequence-hit-selected', val === messageIndex);
+        }
+      }, { immediate: true });
+    };
+
+    ctx.getPreviewRect = function () {
+      return vm.$refs.canvas && vm.$refs.canvas.getBoundingClientRect
+        ? vm.$refs.canvas.getBoundingClientRect()
+        : (vm.$el && vm.$el.getBoundingClientRect ? vm.$el.getBoundingClientRect() : null);
+    };
+
+    ctx.panPreviewBy = function (dx, dy) {
+      if (!vm._svgEl) return;
+      if (!dx && !dy) return;
+      vm.panX += dx || 0;
+      vm.panY += dy || 0;
+      vm._applyTransform();
+    };
+
+    return ctx;
+  }
+
+  // toolbar/액션용 — postRenderSetup 바깥에서 ctx만 필요한 경로.
+  function buildLite(vm) {
+    return commonCtx(vm);
+  }
+
+  global.PreviewCtxBuilder = {
+    build: build,
+    buildLite: buildLite
+  };
+
 })(typeof window !== 'undefined' ? window : this);
 
 
@@ -3137,6 +3463,528 @@
 })(typeof window !== 'undefined' ? window : this);
 
 
+/* ===== src/components/mixins/flowchartActionsMixin.js ===== */
+/**
+ * flowchartActionsMixin
+ * LiveEditor와 FullEditor가 공유하는 flowchart 액션을 믹스인으로 추출한 것.
+ * 이전에는 같은 메서드가 양쪽 컴포넌트에 복붙돼 있어 수정할 때마다 둘 다 손봐야 했다.
+ *
+ * 호출부 요구사항:
+ *   - data: model (type, nodes, edges, direction)
+ *   - data: nodeIdAllocator (IdAllocator 인스턴스)
+ *   - methods: _snapshot, updateScriptFromModel, _schedulePreviewFit
+ *   - computed: isFlowchart
+ *
+ * deleteSelected dispatcher는 컴포넌트에 남고, flowchart 삭제 분기만 여기서 처리.
+ */
+(function (global) {
+  'use strict';
+
+  global.flowchartActionsMixin = {
+    methods: {
+      addNode: function (shape) {
+        if (!this.isFlowchart) return;
+        this._snapshot();
+        var nodeShape = shape;
+        var nodeText = 'Node';
+        var nodeFill = '';
+
+        if (shape && typeof shape === 'object') {
+          nodeShape = shape.shape;
+          nodeText = shape.text || nodeText;
+          nodeFill = shape.fill || '';
+        }
+
+        if (!nodeShape) nodeShape = 'rect';
+        var newId   = this.nodeIdAllocator.next(this.script, this.model.nodes);
+        var newNode = { id: newId, text: nodeText, shape: nodeShape };
+        if (nodeFill) newNode.fill = nodeFill;
+        var nodes   = this.model.nodes.slice();
+        nodes.push(newNode);
+        this.model = Object.assign({}, this.model, { nodes: nodes });
+        this.updateScriptFromModel();
+        this._schedulePreviewFit();
+      },
+
+      addEdge: function (data) {
+        if (!this.isFlowchart) return;
+        var edges = this.model.edges;
+        if (data.from === data.to) {
+          for (var i = 0; i < edges.length; i++) {
+            if (edges[i].from === data.from && edges[i].to === data.to) return;
+          }
+        }
+        this._snapshot();
+        var newEdges = edges.slice();
+        newEdges.push({ from: data.from, to: data.to, text: '', type: '-->' });
+        this.model = Object.assign({}, this.model, { edges: newEdges });
+        this.updateScriptFromModel();
+      },
+
+      updateNodeText: function (data) {
+        if (!this.isFlowchart) return;
+        this._snapshot();
+        var nodes = this.model.nodes.map(function (n) {
+          return n.id === data.nodeId ? Object.assign({}, n, { text: data.text }) : n;
+        });
+        this.model = Object.assign({}, this.model, { nodes: nodes });
+        this.updateScriptFromModel();
+      },
+
+      updateNodeShape: function (data) {
+        if (!this.isFlowchart) return;
+        this._snapshot();
+        var nodes = this.model.nodes.map(function (n) {
+          return n.id === data.nodeId ? Object.assign({}, n, { shape: data.shape }) : n;
+        });
+        this.model = Object.assign({}, this.model, { nodes: nodes });
+        this.updateScriptFromModel();
+      },
+
+      updateNodeStyle: function (data) {
+        if (!this.isFlowchart) return;
+        this._snapshot();
+        var nodes = this.model.nodes.map(function (n) {
+          if (n.id !== data.nodeId) return n;
+          return Object.assign({}, n, {
+            text: data.text,
+            fill: data.fill
+          });
+        });
+        this.model = Object.assign({}, this.model, { nodes: nodes });
+        this.updateScriptFromModel();
+      },
+
+      updateNodeFill: function (data) {
+        if (!this.isFlowchart) return;
+        this._snapshot();
+        var nodes = this.model.nodes.map(function (n) {
+          if (n.id !== data.nodeId) return n;
+          return Object.assign({}, n, { fill: data.fill });
+        });
+        this.model = Object.assign({}, this.model, { nodes: nodes });
+        this.updateScriptFromModel();
+      },
+
+      updateEdgeText: function (data) {
+        if (!this.isFlowchart) return;
+        this._snapshot();
+        var edges = this.model.edges.map(function (e, idx) {
+          return idx === data.index ? Object.assign({}, e, { text: data.text }) : e;
+        });
+        this.model = Object.assign({}, this.model, { edges: edges });
+        this.updateScriptFromModel();
+      },
+
+      updateEdgeType: function (data) {
+        if (!this.isFlowchart) return;
+        this._snapshot();
+        var edges = this.model.edges.map(function (e, idx) {
+          return idx !== data.index ? e : Object.assign({}, e, { type: data.type });
+        });
+        this.model = Object.assign({}, this.model, { edges: edges });
+        this.updateScriptFromModel();
+      },
+
+      updateEdgeStyle: function (data) {
+        if (!this.isFlowchart) return;
+        this._snapshot();
+        var edges = this.model.edges.map(function (e, idx) {
+          if (idx !== data.index) return e;
+          return Object.assign({}, e, {
+            text: data.text,
+            color: data.color
+          });
+        });
+        this.model = Object.assign({}, this.model, { edges: edges });
+        this.updateScriptFromModel();
+      },
+
+      updateEdgeColor: function (data) {
+        if (!this.isFlowchart) return;
+        this._snapshot();
+        var edges = this.model.edges.map(function (e, idx) {
+          if (idx !== data.index) return e;
+          return Object.assign({}, e, { color: data.color });
+        });
+        this.model = Object.assign({}, this.model, { edges: edges });
+        this.updateScriptFromModel();
+      },
+
+      changeDirection: function (dir) {
+        if (!this.isFlowchart) return;
+        this._snapshot();
+        this.model = Object.assign({}, this.model, { direction: dir });
+        this.updateScriptFromModel();
+        this._schedulePreviewFit();
+      },
+
+      // deleteSelected dispatcher가 flowchart 분기일 때 호출. _snapshot은 dispatcher 쪽에서 이미 찍었음.
+      _deleteFlowchartSelection: function (data) {
+        if (data.nodeId) {
+          var nodes = this.model.nodes.filter(function (n) { return n.id !== data.nodeId; });
+          var edges = this.model.edges.filter(function (e) {
+            return e.from !== data.nodeId && e.to !== data.nodeId;
+          });
+          this.model = Object.assign({}, this.model, { nodes: nodes, edges: edges });
+          return true;
+        }
+        if (data.edgeIndex !== null && data.edgeIndex !== undefined) {
+          var ec = this.model.edges.slice();
+          ec.splice(data.edgeIndex, 1);
+          this.model = Object.assign({}, this.model, { edges: ec });
+          return true;
+        }
+        return false;
+      }
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/mixins/sequenceActionsMixin.js ===== */
+/**
+ * sequenceActionsMixin
+ * LiveEditor와 FullEditor가 공유하는 sequence diagram 액션 믹스인.
+ * flowchartActionsMixin과 세트로 사용한다.
+ *
+ * 호출부 요구사항:
+ *   - data: model (type, participants, messages, autonumber)
+ *   - data: participantIdAllocator (IdAllocator 인스턴스)
+ *   - methods: _snapshot, _updateSequenceModel
+ *   - computed: isFlowchart
+ *
+ * deleteSelected dispatcher는 컴포넌트에 남고, sequence 삭제 분기만 여기서 처리.
+ */
+(function (global) {
+  'use strict';
+
+  global.sequenceActionsMixin = {
+    methods: {
+      addSequenceParticipant: function () {
+        if (this.isFlowchart) return;
+        this._snapshot();
+        var id = this.participantIdAllocator.next(this.script, this.model.participants);
+        var participants = (this.model.participants || []).slice();
+        participants.push({ id: id, label: 'Participant ' + this.participantIdAllocator.counter, kind: 'participant' });
+        this._updateSequenceModel({ participants: participants });
+      },
+
+      addSequenceActor: function () {
+        if (this.isFlowchart) return;
+        this._snapshot();
+        var id = this.participantIdAllocator.next(this.script, this.model.participants);
+        var participants = (this.model.participants || []).slice();
+        participants.push({ id: id, label: 'Actor ' + this.participantIdAllocator.counter, kind: 'actor' });
+        this._updateSequenceModel({ participants: participants });
+      },
+
+      toggleParticipantKind: function (data) {
+        if (this.isFlowchart) return;
+        this._snapshot();
+        var participants = (this.model.participants || []).map(function (p) {
+          if (p.id !== data.participantId) return p;
+          return Object.assign({}, p, { kind: p.kind === 'actor' ? 'participant' : 'actor' });
+        });
+        this._updateSequenceModel({ participants: participants });
+      },
+
+      moveSequenceParticipant: function (data) {
+        if (this.isFlowchart) return;
+        var participants = (this.model.participants || []).slice();
+        var idx = -1;
+        for (var i = 0; i < participants.length; i++) {
+          if (participants[i].id === data.participantId) { idx = i; break; }
+        }
+        if (idx === -1) return;
+        var swapIdx = data.direction === 'left' ? idx - 1 : idx + 1;
+        if (swapIdx < 0 || swapIdx >= participants.length) return;
+        this._snapshot();
+        var tmp = participants[idx];
+        participants[idx] = participants[swapIdx];
+        participants[swapIdx] = tmp;
+        this._updateSequenceModel({ participants: participants });
+      },
+
+      addSequenceMessage: function (payload) {
+        if (this.isFlowchart) return;
+        var participants = this.model.participants || [];
+        if (!participants.length) return;
+
+        this._snapshot();
+        var fromId = participants[0].id;
+        var toId = participants[Math.min(1, participants.length - 1)].id;
+        var messageText = 'Message';
+
+        if (payload && payload.fromId) fromId = payload.fromId;
+        if (payload && payload.toId) toId = payload.toId;
+        if (payload && payload.text) messageText = payload.text;
+
+        if (payload && payload.participantId && !payload.fromId) {
+          fromId = payload.participantId;
+          for (var i = 0; i < participants.length; i++) {
+            if (participants[i].id === payload.participantId) {
+              toId = participants[(i + 1) % participants.length].id;
+              break;
+            }
+          }
+        }
+
+        var messages = (this.model.messages || []).slice();
+        var insertAt = messages.length;
+        if (payload && payload.insertIndex !== null && payload.insertIndex !== undefined) {
+          insertAt = Math.max(0, Math.min(messages.length, payload.insertIndex));
+        } else if (payload && payload.afterIndex !== null && payload.afterIndex !== undefined) {
+          insertAt = Math.min(messages.length, payload.afterIndex + 1);
+        }
+
+        messages.splice(insertAt, 0, {
+          from: fromId,
+          to: toId,
+          operator: '->>',
+          text: messageText
+        });
+
+        this._updateSequenceModel({ messages: messages });
+      },
+
+      updateSequenceParticipantText: function (data) {
+        if (this.isFlowchart) return;
+        this._snapshot();
+        var participants = (this.model.participants || []).map(function (p) {
+          return p.id === data.participantId ? Object.assign({}, p, { label: data.text }) : p;
+        });
+        this._updateSequenceModel({ participants: participants });
+      },
+
+      updateSequenceMessageText: function (data) {
+        if (this.isFlowchart) return;
+        this._snapshot();
+        var messages = (this.model.messages || []).map(function (m, idx) {
+          return idx === data.index ? Object.assign({}, m, { text: data.text }) : m;
+        });
+        this._updateSequenceModel({ messages: messages });
+      },
+
+      reverseSequenceMessage: function (index) {
+        if (this.isFlowchart) return;
+        this._snapshot();
+        var messages = (this.model.messages || []).map(function (m, idx) {
+          if (idx !== index) return m;
+          return Object.assign({}, m, { from: m.to, to: m.from });
+        });
+        this._updateSequenceModel({ messages: messages });
+      },
+
+      toggleAutonumber: function () {
+        if (this.isFlowchart) return;
+        this._snapshot();
+        this._updateSequenceModel({ autonumber: !this.model.autonumber });
+      },
+
+      toggleSequenceMessageLineType: function (index) {
+        if (this.isFlowchart) return;
+        this._snapshot();
+        var messages = (this.model.messages || []).map(function (m, idx) {
+          if (idx !== index) return m;
+          return Object.assign({}, m, {
+            operator: SequenceSvgHandler.toggleMessageLineType(m)
+          });
+        });
+        this._updateSequenceModel({ messages: messages });
+      },
+
+      setSequenceMessageLineType: function (data) {
+        if (this.isFlowchart) return;
+        this._snapshot();
+        var messages = (this.model.messages || []).map(function (m, idx) {
+          if (idx !== data.index) return m;
+          var suffix = /[+-]$/.test(m.operator || '') ? m.operator.slice(-1) : '';
+          return Object.assign({}, m, { operator: data.operator + suffix });
+        });
+        this._updateSequenceModel({ messages: messages });
+      },
+
+      // deleteSelected dispatcher가 sequence 분기일 때 호출.
+      _deleteSequenceSelection: function (data) {
+        if (data.sequenceParticipantId) {
+          var participants = (this.model.participants || []).filter(function (p) {
+            return p.id !== data.sequenceParticipantId;
+          });
+          var messages = (this.model.messages || []).filter(function (m) {
+            return m.from !== data.sequenceParticipantId && m.to !== data.sequenceParticipantId;
+          });
+          this._updateSequenceModel({
+            participants: participants,
+            messages: messages
+          });
+          return true;
+        }
+        if (data.sequenceMessageIndex !== null && data.sequenceMessageIndex !== undefined) {
+          var mc = (this.model.messages || []).slice();
+          mc.splice(data.sequenceMessageIndex, 1);
+          this._updateSequenceModel({ messages: mc });
+          return true;
+        }
+        return false;
+      }
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/mixins/exportMixin.js ===== */
+/**
+ * exportMixin
+ * LiveEditor와 FullEditor가 공유하는 export/copy 래퍼.
+ * SvgExport 서비스(이미 분리돼 있음)를 감싸고, 토스트 메시지를 연결한다.
+ *
+ * 호출부 요구사항:
+ *   - ref: preview (mermaid-preview 컴포넌트)
+ *   - methods: showToast (toastMixin에서 제공)
+ */
+(function (global) {
+  'use strict';
+
+  global.exportMixin = {
+    methods: {
+      _runExport: function (promise, successMsg) {
+        var self = this;
+        return promise
+          .then(function () {
+            self.showToast(successMsg, 'success');
+          })
+          .catch(function () {
+            self.showToast('Export failed', 'error');
+          });
+      },
+
+      getSvgElement: function () {
+        var preview = this.$refs.preview;
+        if (!preview) return null;
+        // canvas ref는 v-if="svgContent" 조건이라 렌더 완료 전엔 DOM에 없을 수 있음
+        var canvas = preview.$refs && preview.$refs.canvas;
+        if (canvas) return canvas.querySelector('svg');
+        // fallback: svgContent 문자열에서 파싱 (외부에서 getSvgElement를 직접 호출한 경우)
+        if (preview.svgContent) {
+          var tmp = document.createElement('div');
+          tmp.innerHTML = preview.svgContent;
+          return tmp.querySelector('svg');
+        }
+        return null;
+      },
+
+      getSvgText: function () {
+        var preview = this.$refs.preview;
+        if (preview && preview.svgContent) {
+          return preview.svgContent;
+        }
+        var svgEl = this.getSvgElement();
+        if (svgEl) {
+          return new XMLSerializer().serializeToString(svgEl);
+        }
+        return '';
+      },
+
+      exportSvg: function () {
+        var svgStr = this.getSvgText();
+        if (!svgStr) return;
+        return this._runExport(
+          SvgExport.exportSvg(svgStr, { filename: 'diagram.svg' }),
+          'SVG exported!'
+        );
+      },
+
+      exportPng: function () {
+        var svgStr = this.getSvgText();
+        if (!svgStr) return;
+        return this._runExport(
+          SvgExport.exportPng(svgStr, { filename: 'diagram.png', scale: 2, padding: 20 }),
+          'PNG exported!'
+        );
+      },
+
+      exportJpg: function () {
+        var svgStr = this.getSvgText();
+        if (!svgStr) return;
+        return this._runExport(
+          SvgExport.exportJpg(svgStr, { filename: 'diagram.jpg', scale: 2, padding: 20, quality: 0.92 }),
+          'JPG exported!'
+        );
+      },
+
+      copySvg: function () {
+        var svgStr = this.getSvgText();
+        if (!svgStr) return;
+        var self = this;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(svgStr).then(function () {
+            self.showToast('SVG copied to clipboard!', 'success');
+          }).catch(function () {
+            self._fallbackCopy(svgStr);
+          });
+        } else {
+          this._fallbackCopy(svgStr);
+        }
+      },
+
+      _fallbackCopy: function (text) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.top = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand('copy');
+          this.showToast('SVG copied!', 'success');
+        } catch (e) {
+          this.showToast('Copy failed — try Ctrl+C', 'error');
+        }
+        document.body.removeChild(ta);
+      }
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/mixins/toastMixin.js ===== */
+/**
+ * toastMixin
+ * 화면 하단에 나타났다 사라지는 토스트 메시지.
+ * LiveEditor와 FullEditor가 공유한다.
+ */
+(function (global) {
+  'use strict';
+
+  global.toastMixin = {
+    data: function () {
+      return {
+        toastMsg: '',
+        toastVisible: false,
+        _toastTimer: null
+      };
+    },
+
+    methods: {
+      showToast: function (msg, type) {
+        var self = this;
+        this.toastMsg     = msg;
+        this.toastVisible = true;
+        clearTimeout(this._toastTimer);
+        this._toastTimer = setTimeout(function () {
+          self.toastVisible = false;
+        }, 2800);
+      }
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
 /* ===== src/components/MermaidEditor.js ===== */
 /**
  * MermaidEditor component
@@ -4078,114 +4926,7 @@ Vue.component('mermaid-preview', {
     },
 
     _buildCtx: function (svgEl) {
-      var self = this;
-      var ctx = {
-        emit: function (ev, data) { self.$emit(ev, data); },
-        getState: function () { return self.$data; },
-        setState: function (patch) {
-          var keys = Object.keys(patch);
-          for (var i = 0; i < keys.length; i++) { self[keys[i]] = patch[keys[i]]; }
-        },
-        getModel: function () { return self.model; },
-        findNode: function (nodeId) {
-          var nodes = self.model.nodes || [];
-          for (var i = 0; i < nodes.length; i++) {
-            if (nodes[i].id === nodeId) return nodes[i];
-          }
-          return null;
-        },
-        findSequenceParticipant: function (participantId) {
-          var participants = self.model.participants || [];
-          for (var i = 0; i < participants.length; i++) {
-            if (participants[i].id === participantId) return participants[i];
-          }
-          return null;
-        },
-        findSequenceMessage: function (messageIndex) {
-          return (self.model.messages || [])[messageIndex] || null;
-        },
-        watchSelection: function (nodeId, nodeEl) {
-          self.$watch('selectedNodeId', function (val) {
-            nodeEl.classList.toggle('selected', val === nodeId);
-          }, { immediate: true });
-        },
-        watchEdgeSelection: function (edgeIndex, edgeEl) {
-          self.$watch('selectedEdgeIndex', function (val) {
-            if (edgeEl) {
-              var isSelected = val === edgeIndex;
-              if (edgeEl.classList) {
-                edgeEl.classList.toggle('edge-selected', isSelected);
-                edgeEl.classList.toggle('edge-hovered', isSelected);
-              }
-              var edgePaths = edgeEl.querySelectorAll ? edgeEl.querySelectorAll('path') : [];
-              for (var i = 0; i < edgePaths.length; i++) {
-                edgePaths[i].classList.toggle('edge-selected', isSelected);
-                edgePaths[i].classList.toggle('edge-hovered', isSelected);
-              }
-            }
-          }, { immediate: true });
-        },
-        getPreviewRect: function () {
-          return self.$refs.canvas && self.$refs.canvas.getBoundingClientRect
-            ? self.$refs.canvas.getBoundingClientRect()
-            : (self.$el && self.$el.getBoundingClientRect ? self.$el.getBoundingClientRect() : null);
-        },
-        panPreviewBy: function (dx, dy) {
-          if (!self._svgEl) return;
-          if (!dx && !dy) return;
-          self.panX += dx || 0;
-          self.panY += dy || 0;
-          self._applyTransform();
-        },
-        watchSequenceParticipantSelection: function (participantId, el) {
-          self.$watch('selectedSequenceParticipantId', function (val) {
-            el.classList.toggle('sequence-participant-selected', val === participantId);
-          }, { immediate: true });
-        },
-        watchSequenceMessageSelection: function (messageIndex, lineEl, textEl) {
-          self.$watch('selectedSequenceMessageIndex', function (val) {
-            if (lineEl) lineEl.classList.toggle('sequence-message-selected', val === messageIndex);
-            if (textEl) textEl.classList.toggle('sequence-message-text-selected', val === messageIndex);
-          }, { immediate: true });
-        },
-        watchSequenceMessageHitSelection: function (messageIndex, hitEl) {
-          self.$watch('selectedSequenceMessageIndex', function (val) {
-            if (hitEl && hitEl.classList) {
-              hitEl.classList.toggle('sequence-hit-selected', val === messageIndex);
-            }
-          }, { immediate: true });
-        },
-        getPreviewRect: function () {
-          return self.$refs.canvas && self.$refs.canvas.getBoundingClientRect
-            ? self.$refs.canvas.getBoundingClientRect()
-            : (self.$el && self.$el.getBoundingClientRect ? self.$el.getBoundingClientRect() : null);
-        },
-        focusEditInput: function () {
-          self.$nextTick(function () {
-            var el = self.$refs.editInput;
-            if (el) { el.focus(); el.select(); }
-          });
-        },
-        focusEdgeEditInput: function () {
-          self.$nextTick(function () {
-            var el = self.$refs.editEdgeInput;
-            if (el) { el.focus(); el.select(); }
-          });
-        },
-        focusSequenceParticipantInput: function () {
-          self.$nextTick(function () {
-            var el = self.$refs.sequenceParticipantInput;
-            if (el) { el.focus(); el.select(); }
-          });
-        },
-        focusSequenceMessageInput: function () {
-          self.$nextTick(function () {
-            var el = self.$refs.sequenceMessageInput;
-            if (el) { el.focus(); el.select(); }
-          });
-        }
-      };
-      return ctx;
+      return PreviewCtxBuilder.build(this, svgEl);
     },
 
     // 공통 노드 편집 유틸
@@ -4591,58 +5332,7 @@ Vue.component('mermaid-preview', {
 
     // postRenderSetup 바깥에서도 재사용하는 경량 ctx
     _buildCtxLite: function () {
-      var self = this;
-      return {
-        emit: function (ev, data) { self.$emit(ev, data); },
-        getState: function () { return self.$data; },
-        setState: function (patch) {
-          var keys = Object.keys(patch);
-          for (var i = 0; i < keys.length; i++) { self[keys[i]] = patch[keys[i]]; }
-        },
-        getModel: function () { return self.model; },
-        findNode: function (nodeId) {
-          var nodes = self.model.nodes || [];
-          for (var i = 0; i < nodes.length; i++) {
-            if (nodes[i].id === nodeId) return nodes[i];
-          }
-          return null;
-        },
-        findSequenceParticipant: function (participantId) {
-          var participants = self.model.participants || [];
-          for (var i = 0; i < participants.length; i++) {
-            if (participants[i].id === participantId) return participants[i];
-          }
-          return null;
-        },
-        findSequenceMessage: function (messageIndex) {
-          var messages = self.model.messages || [];
-          return messages[messageIndex] || null;
-        },
-        focusEditInput: function () {
-          self.$nextTick(function () {
-            var el = self.$refs.editInput;
-            if (el) { el.focus(); el.select(); }
-          });
-        },
-        focusEdgeEditInput: function () {
-          self.$nextTick(function () {
-            var el = self.$refs.editEdgeInput;
-            if (el) { el.focus(); el.select(); }
-          });
-        },
-        focusSequenceParticipantInput: function () {
-          self.$nextTick(function () {
-            var el = self.$refs.sequenceParticipantInput;
-            if (el) { el.focus(); el.select(); }
-          });
-        },
-        focusSequenceMessageInput: function () {
-          self.$nextTick(function () {
-            var el = self.$refs.sequenceMessageInput;
-            if (el) { el.focus(); el.select(); }
-          });
-        }
-      };
+      return PreviewCtxBuilder.buildLite(this);
     },
 
     fitView: function () {
@@ -4817,6 +5507,8 @@ Vue.component('mermaid-preview', {
  */
 
 Vue.component('mermaid-full-editor', {
+  mixins: [flowchartActionsMixin, sequenceActionsMixin, exportMixin, toastMixin],
+
   props: {
     value: { type: String, default: '' }
   },
@@ -4832,14 +5524,13 @@ Vue.component('mermaid-full-editor', {
       selectedEdge: null,
       selectedSequenceParticipant: '',
       selectedSequenceMessage: null,
-      nodeCounter:  0,
-      participantCounter: 0,
 
-      history: null,
+      // mounted에서 생성되는 IdAllocator 인스턴스 (N* / P* 충돌 없는 ID 할당)
+      nodeIdAllocator: null,
+      participantIdAllocator: null,
 
-      toastMsg:     '',
-      toastVisible: false,
-      _toastTimer:  null
+      history: null
+      // 토스트 상태는 toastMixin에서 제공
     };
   },
 
@@ -4865,13 +5556,14 @@ Vue.component('mermaid-full-editor', {
 
   mounted: function () {
     this.history = new HistoryManager();
+    this.nodeIdAllocator = new IdAllocator('N');
+    this.participantIdAllocator = new IdAllocator('P');
     if (this.script) {
       this.parseScript();
     }
     var self = this;
     this.$nextTick(function () {
-      self.updateNodeCounter();
-      self.updateParticipantCounter();
+      self._seedIdAllocators();
     });
   },
 
@@ -4888,31 +5580,12 @@ Vue.component('mermaid-full-editor', {
       if (this.$refs.preview) this.$refs.preview.scheduleFit();
     },
 
-    _normalizeSequenceMessages: function (messages) {
-      var result = [];
-      var activeCounts = {};
-      var splitOperator = function (operator) {
-        var suffix = '', base = operator || '->>';
-        if (/[+-]$/.test(base)) { suffix = base.slice(-1); base = base.slice(0, -1); }
-        return { base: base, suffix: suffix };
-      };
-      for (var i = 0; i < messages.length; i++) {
-        var msg = Object.assign({}, messages[i]);
-        var parts = splitOperator(msg.operator);
-        if (parts.suffix === '+') { activeCounts[msg.to] = (activeCounts[msg.to] || 0) + 1; }
-        if (parts.suffix === '-') {
-          if (activeCounts[msg.from] > 0) { activeCounts[msg.from]--; }
-          else { msg.operator = parts.base; }
-        }
-        result.push(msg);
-      }
-      return result;
-    },
-
     _updateSequenceModel: function (patch) {
       var nextModel = Object.assign({}, this.model, patch);
       nextModel.explicitParticipants = true;
-      if (nextModel.messages) { nextModel.messages = this._normalizeSequenceMessages(nextModel.messages); }
+      if (nextModel.messages) {
+        nextModel.messages = SequenceMessageCodec.normalizeActivations(nextModel.messages);
+      }
       this.model = nextModel;
       this.updateScriptFromModel();
     },
@@ -4924,15 +5597,12 @@ Vue.component('mermaid-full-editor', {
         var parsed = MermaidParser.parse(this.script);
         this.model = parsed;
         this.error = '';
-        this.parseWarning = this._buildReservedIdWarning(parsed);
-        this.updateNodeCounter();
-        this.updateParticipantCounter();
+        this.parseWarning = ModelDiagnostics.reservedIdWarning(this.script, parsed);
       } catch (e) {
         this.error = e.message || 'Parse error';
         this.parseWarning = '';
-        this.updateNodeCounter();
-        this.updateParticipantCounter();
       }
+      this._seedIdAllocators();
     },
 
     updateScriptFromModel: function () {
@@ -4940,270 +5610,31 @@ Vue.component('mermaid-full-editor', {
       this.error  = '';
     },
 
-    updateNodeCounter: function () {
-      // parser가 일부 문법을 놓쳐도 script 안에 이미 있는 N숫자 ID는 예약된 것으로 본다.
-      var max = this._scanReservedCounter('N');
-      if (this.model && this.model.nodes) {
-        for (var i = 0; i < this.model.nodes.length; i++) {
-          var nm = this.model.nodes[i].id.match(/(\d+)$/);
-          if (nm) { var n = parseInt(nm[1], 10); if (n > max) max = n; }
-        }
+    _seedIdAllocators: function () {
+      if (this.nodeIdAllocator) {
+        this.nodeIdAllocator.seed(this.script, (this.model && this.model.nodes) || []);
       }
-      if (max > this.nodeCounter) this.nodeCounter = max;
-    },
-
-    updateParticipantCounter: function () {
-      // sequence 쪽도 같은 이유로 raw script의 P숫자 ID를 같이 본다.
-      var max = this._scanReservedCounter('P');
-      var participants = (this.model && this.model.participants) || [];
-      for (var i = 0; i < participants.length; i++) {
-        var pm = String(participants[i].id || '').match(/(\d+)$/);
-        if (!pm) continue;
-        var n = parseInt(pm[1], 10);
-        if (n > max) max = n;
+      if (this.participantIdAllocator) {
+        this.participantIdAllocator.seed(this.script, (this.model && this.model.participants) || []);
       }
-      if (max > this.participantCounter) this.participantCounter = max;
     },
 
-    _scanReservedCounter: function (prefix) {
-      var script = this.script || '';
-      var escapedPrefix = String(prefix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      var regex = new RegExp('\\b' + escapedPrefix + '(\\d+)\\b', 'g');
-      var max = 0;
-      var match;
-      while ((match = regex.exec(script))) {
-        var n = parseInt(match[1], 10);
-        if (n > max) max = n;
-      }
-      return max;
-    },
-
-    _collectReservedIds: function (prefix) {
-      var script = this.script || '';
-      var escapedPrefix = String(prefix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      var regex = new RegExp('\\b' + escapedPrefix + '(\\d+)\\b', 'g');
-      var ids = {};
-      var match;
-      while ((match = regex.exec(script))) {
-        ids[prefix + match[1]] = true;
-      }
-      return ids;
-    },
-
-    _collectModelIds: function (items, prefix) {
-      var ids = {};
-      for (var i = 0; i < items.length; i++) {
-        var id = String(items[i] && items[i].id || '');
-        if (new RegExp('^' + prefix + '\\d+$').test(id)) {
-          ids[id] = true;
-        }
-      }
-      return ids;
-    },
-
-    _countMissingIds: function (reserved, parsed) {
-      var count = 0;
-      var keys = Object.keys(reserved);
-      for (var i = 0; i < keys.length; i++) {
-        if (!parsed[keys[i]]) count++;
-      }
-      return count;
-    },
-
-    _buildReservedIdWarning: function (parsed) {
-      if (!parsed) return '';
-      var reservedNodeIds = this._collectReservedIds('N');
-      var reservedParticipantIds = this._collectReservedIds('P');
-      var parsedNodeIds = this._collectModelIds((parsed.nodes || []), 'N');
-      var parsedParticipantIds = this._collectModelIds((parsed.participants || []), 'P');
-      var missingNodeCount = this._countMissingIds(reservedNodeIds, parsedNodeIds);
-      var missingParticipantCount = this._countMissingIds(reservedParticipantIds, parsedParticipantIds);
-
-      if (!missingNodeCount && !missingParticipantCount) return '';
-
-      var parts = [];
-      if (missingNodeCount) parts.push('N ID ' + missingNodeCount + '개');
-      if (missingParticipantCount) parts.push('P ID ' + missingParticipantCount + '개');
-      return '일부 Mermaid 요소가 GUI parser에 완전히 반영되지 않았을 수 있습니다. 누락 추정: ' + parts.join(', ');
-    },
-
-    _scriptContainsId: function (id) {
-      if (!id) return false;
-      var escapedId = String(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return new RegExp('\\b' + escapedId + '\\b').test(this.script || '');
-    },
-
-    _modelContainsNodeId: function (id) {
-      var nodes = (this.model && this.model.nodes) || [];
-      for (var i = 0; i < nodes.length; i++) {
-        if (nodes[i].id === id) return true;
-      }
-      return false;
-    },
-
-    _modelContainsParticipantId: function (id) {
-      var participants = (this.model && this.model.participants) || [];
-      for (var i = 0; i < participants.length; i++) {
-        if (participants[i].id === id) return true;
-      }
-      return false;
-    },
-
-    _nextAvailableNodeId: function () {
-      var candidate = '';
-      do {
-        this.nodeCounter++;
-        candidate = 'N' + this.nodeCounter;
-        // model 파싱 결과와 raw script 둘 다에 없는 ID가 나올 때까지 올린다.
-      } while (this._scriptContainsId(candidate) || this._modelContainsNodeId(candidate));
-      return candidate;
-    },
-
-    _nextAvailableParticipantId: function () {
-      var candidate = '';
-      do {
-        this.participantCounter++;
-        candidate = 'P' + this.participantCounter;
-        // unsupported 문법으로 participant 파싱이 빠져도 ID 충돌은 피한다.
-      } while (this._scriptContainsId(candidate) || this._modelContainsParticipantId(candidate));
-      return candidate;
-    },
-
-    addNode: function (shape) {
-      if (!this.isFlowchart) return;
-      this._snapshot();
-      var nodeShape = shape, nodeText = 'Node', nodeFill = '';
-      if (shape && typeof shape === 'object') { nodeShape = shape.shape; nodeText = shape.text || nodeText; nodeFill = shape.fill || ''; }
-      if (!nodeShape) nodeShape = 'rect';
-      var newNode = { id: this._nextAvailableNodeId(), text: nodeText, shape: nodeShape };
-      if (nodeFill) newNode.fill = nodeFill;
-      var nodes = this.model.nodes.slice(); nodes.push(newNode);
-      this.model = Object.assign({}, this.model, { nodes: nodes });
-      this.updateScriptFromModel(); this._schedulePreviewFit();
-    },
-
-    addEdge: function (data) {
-      if (!this.isFlowchart) return;
-      var edges = this.model.edges;
-      if (data.from === data.to) {
-        for (var i = 0; i < edges.length; i++) { if (edges[i].from === data.from && edges[i].to === data.to) return; }
-      }
-      this._snapshot();
-      var newEdges = edges.slice(); newEdges.push({ from: data.from, to: data.to, text: '', type: '-->' });
-      this.model = Object.assign({}, this.model, { edges: newEdges }); this.updateScriptFromModel();
-    },
-
-    addSequenceParticipant: function () {
-      if (this.isFlowchart) return; this._snapshot();
-      var participants = (this.model.participants || []).slice();
-      var participantId = this._nextAvailableParticipantId();
-      participants.push({ id: participantId, label: 'Participant ' + this.participantCounter, kind: 'participant' });
-      this._updateSequenceModel({ participants: participants });
-    },
-
-    addSequenceActor: function () {
-      if (this.isFlowchart) return; this._snapshot();
-      var participants = (this.model.participants || []).slice();
-      var actorId = this._nextAvailableParticipantId();
-      participants.push({ id: actorId, label: 'Actor ' + this.participantCounter, kind: 'actor' });
-      this._updateSequenceModel({ participants: participants });
-    },
-
-    toggleParticipantKind: function (data) {
-      if (this.isFlowchart) return; this._snapshot();
-      var participants = (this.model.participants || []).map(function (p) {
-        return p.id !== data.participantId ? p : Object.assign({}, p, { kind: p.kind === 'actor' ? 'participant' : 'actor' });
-      });
-      this._updateSequenceModel({ participants: participants });
-    },
-
-    moveSequenceParticipant: function (data) {
-      if (this.isFlowchart) return;
-      var participants = (this.model.participants || []).slice(), idx = -1;
-      for (var i = 0; i < participants.length; i++) { if (participants[i].id === data.participantId) { idx = i; break; } }
-      if (idx === -1) return;
-      var swapIdx = data.direction === 'left' ? idx - 1 : idx + 1;
-      if (swapIdx < 0 || swapIdx >= participants.length) return;
-      this._snapshot();
-      var tmp = participants[idx]; participants[idx] = participants[swapIdx]; participants[swapIdx] = tmp;
-      this._updateSequenceModel({ participants: participants });
-    },
-
-    addSequenceMessage: function (payload) {
-      if (this.isFlowchart) return;
-      var participants = this.model.participants || []; if (!participants.length) return;
-      this._snapshot();
-      var fromId = participants[0].id, toId = participants[Math.min(1, participants.length - 1)].id, messageText = 'Message';
-      if (payload && payload.fromId) fromId = payload.fromId;
-      if (payload && payload.toId)   toId   = payload.toId;
-      if (payload && payload.text)   messageText = payload.text;
-      if (payload && payload.participantId && !payload.fromId) {
-        fromId = payload.participantId;
-        for (var i = 0; i < participants.length; i++) {
-          if (participants[i].id === payload.participantId) { toId = participants[(i + 1) % participants.length].id; break; }
-        }
-      }
-      var messages = (this.model.messages || []).slice();
-      var insertAt = messages.length;
-      if (payload && payload.insertIndex != null) insertAt = Math.max(0, Math.min(messages.length, payload.insertIndex));
-      else if (payload && payload.afterIndex != null) insertAt = Math.min(messages.length, payload.afterIndex + 1);
-      messages.splice(insertAt, 0, { from: fromId, to: toId, operator: '->>', text: messageText });
-      this._updateSequenceModel({ messages: messages });
-    },
-
+    // deleteSelected dispatcher — flowchart / sequence 분기를 각 믹스인 헬퍼로 위임
     deleteSelected: function (data) {
-      if (!data) return; this._snapshot();
-      if (this.isFlowchart && data.nodeId) {
-        var nodes = this.model.nodes.filter(function (n) { return n.id !== data.nodeId; });
-        var edges = this.model.edges.filter(function (e) { return e.from !== data.nodeId && e.to !== data.nodeId; });
-        this.model = Object.assign({}, this.model, { nodes: nodes, edges: edges });
-      } else if (this.isFlowchart && data.edgeIndex != null) {
-        var ec = this.model.edges.slice(); ec.splice(data.edgeIndex, 1);
-        this.model = Object.assign({}, this.model, { edges: ec });
-      } else if (!this.isFlowchart && data.sequenceParticipantId) {
-        var pts  = (this.model.participants || []).filter(function (p) { return p.id !== data.sequenceParticipantId; });
-        var msgs = (this.model.messages   || []).filter(function (m) { return m.from !== data.sequenceParticipantId && m.to !== data.sequenceParticipantId; });
-        this._updateSequenceModel({ participants: pts, messages: msgs }); return;
-      } else if (!this.isFlowchart && data.sequenceMessageIndex != null) {
-        var mc = (this.model.messages || []).slice(); mc.splice(data.sequenceMessageIndex, 1);
-        this._updateSequenceModel({ messages: mc }); return;
-      } else { return; }
-      this.selectedNode = ''; this.selectedEdge = null;
-      this.selectedSequenceParticipant = ''; this.selectedSequenceMessage = null;
-      if (this.isFlowchart) this.updateScriptFromModel();
-    },
+      if (!data) return;
+      this._snapshot();
+      var handled = this.isFlowchart
+        ? this._deleteFlowchartSelection(data)
+        : this._deleteSequenceSelection(data);
+      if (!handled) return;
 
-    updateNodeText:  function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { nodes: this.model.nodes.map(function (n) { return n.id === data.nodeId ? Object.assign({}, n, { text: data.text }) : n; }) }); this.updateScriptFromModel(); },
-    updateNodeShape: function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { nodes: this.model.nodes.map(function (n) { return n.id === data.nodeId ? Object.assign({}, n, { shape: data.shape }) : n; }) }); this.updateScriptFromModel(); },
-    updateNodeStyle: function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { nodes: this.model.nodes.map(function (n) { return n.id !== data.nodeId ? n : Object.assign({}, n, { text: data.text, fill: data.fill }); }) }); this.updateScriptFromModel(); },
-    updateNodeFill:  function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { nodes: this.model.nodes.map(function (n) { return n.id !== data.nodeId ? n : Object.assign({}, n, { fill: data.fill }); }) }); this.updateScriptFromModel(); },
-    updateEdgeText:  function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i === data.index ? Object.assign({}, e, { text: data.text }) : e; }) }); this.updateScriptFromModel(); },
-    updateEdgeType:  function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i !== data.index ? e : Object.assign({}, e, { type: data.type }); }) }); this.updateScriptFromModel(); },
-    updateEdgeStyle: function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i !== data.index ? e : Object.assign({}, e, { text: data.text, color: data.color }); }) }); this.updateScriptFromModel(); },
-    updateEdgeColor: function (data) { if (!this.isFlowchart) return; this._snapshot(); this.model = Object.assign({}, this.model, { edges: this.model.edges.map(function (e, i) { return i !== data.index ? e : Object.assign({}, e, { color: data.color }); }) }); this.updateScriptFromModel(); },
-
-    changeDirection: function (dir) {
-      if (!this.isFlowchart) return; this._snapshot();
-      this.model = Object.assign({}, this.model, { direction: dir });
-      this.updateScriptFromModel(); this._schedulePreviewFit();
-    },
-
-    updateSequenceParticipantText: function (data) { if (this.isFlowchart) return; this._snapshot(); this._updateSequenceModel({ participants: (this.model.participants || []).map(function (p) { return p.id === data.participantId ? Object.assign({}, p, { label: data.text }) : p; }) }); },
-    updateSequenceMessageText:     function (data) { if (this.isFlowchart) return; this._snapshot(); this._updateSequenceModel({ messages: (this.model.messages || []).map(function (m, i) { return i === data.index ? Object.assign({}, m, { text: data.text }) : m; }) }); },
-    reverseSequenceMessage:        function (index) { if (this.isFlowchart) return; this._snapshot(); this._updateSequenceModel({ messages: (this.model.messages || []).map(function (m, i) { return i !== index ? m : Object.assign({}, m, { from: m.to, to: m.from }); }) }); },
-    toggleAutonumber:              function ()      { if (this.isFlowchart) return; this._snapshot(); this._updateSequenceModel({ autonumber: !this.model.autonumber }); },
-
-    toggleSequenceMessageLineType: function (index) {
-      if (this.isFlowchart) return; this._snapshot();
-      this._updateSequenceModel({ messages: (this.model.messages || []).map(function (m, i) { return i !== index ? m : Object.assign({}, m, { operator: SequenceSvgHandler.toggleMessageLineType(m) }); }) });
-    },
-    setSequenceMessageLineType: function (data) {
-      if (this.isFlowchart) return; this._snapshot();
-      this._updateSequenceModel({ messages: (this.model.messages || []).map(function (m, i) {
-        if (i !== data.index) return m;
-        var suffix = /[+-]$/.test(m.operator || '') ? m.operator.slice(-1) : '';
-        return Object.assign({}, m, { operator: data.operator + suffix });
-      }) });
+      this.selectedNode = '';
+      this.selectedEdge = null;
+      this.selectedSequenceParticipant = '';
+      this.selectedSequenceMessage = null;
+      if (this.isFlowchart) {
+        this.updateScriptFromModel();
+      }
     },
 
     undo: function () { if (!this.history) return; var prev = this.history.undo(this.model); if (!prev) return; this.model = prev; this.script = MermaidGenerator.generate(this.model); },
@@ -5216,89 +5647,9 @@ Vue.component('mermaid-full-editor', {
 
     fitView:  function () { if (this.$refs.preview) this.$refs.preview.fitView(); },
     zoomIn:   function () { if (this.$refs.preview) this.$refs.preview.zoomIn(); },
-    zoomOut:  function () { if (this.$refs.preview) this.$refs.preview.zoomOut(); },
+    zoomOut:  function () { if (this.$refs.preview) this.$refs.preview.zoomOut(); }
 
-    _runExport: function (promise, successMsg) {
-      var self = this;
-      return promise
-        .then(function () {
-          self.showToast(successMsg);
-        })
-        .catch(function () {
-          self.showToast('Export failed');
-        });
-    },
-
-    getSvgElement: function () {
-      var preview = this.$refs.preview;
-      if (!preview) return null;
-      // canvas ref는 v-if="svgContent" 조건이라 렌더 완료 전엔 DOM에 없을 수 있음
-      var canvas = preview.$refs && preview.$refs.canvas;
-      if (canvas) return canvas.querySelector('svg');
-      // fallback: svgContent 문자열에서 파싱해서 반환
-      if (preview.svgContent) {
-        var tmp = document.createElement('div');
-        tmp.innerHTML = preview.svgContent;
-        return tmp.querySelector('svg');
-      }
-      return null;
-    },
-
-    getSvgText: function () {
-      var preview = this.$refs.preview;
-      if (preview && preview.svgContent) {
-        return preview.svgContent;
-      }
-      var svgEl = this.getSvgElement();
-      if (svgEl) {
-        return new XMLSerializer().serializeToString(svgEl);
-      }
-      return '';
-    },
-
-    exportSvg: function () {
-      var svgStr = this.getSvgText();
-      if (!svgStr) return;
-      return this._runExport(
-        SvgExport.exportSvg(svgStr, { filename: 'diagram.svg' }),
-        'SVG exported!'
-      );
-    },
-
-    exportPng: function () {
-      var svgStr = this.getSvgText();
-      if (!svgStr) return;
-      return this._runExport(
-        SvgExport.exportPng(svgStr, { filename: 'diagram.png', scale: 2, padding: 20 }),
-        'PNG exported!'
-      );
-    },
-
-    exportJpg: function () {
-      var svgStr = this.getSvgText();
-      if (!svgStr) return;
-      return this._runExport(
-        SvgExport.exportJpg(svgStr, { filename: 'diagram.jpg', scale: 2, padding: 20, quality: 0.92 }),
-        'JPG exported!'
-      );
-    },
-
-    copySvg: function () {
-      var svgStr=this.getSvgText(), self=this;
-      if(!svgStr) return;
-      if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(svgStr).then(function(){self.showToast('SVG copied!');}).catch(function(){self._fallbackCopy(svgStr);});}else{this._fallbackCopy(svgStr);}
-    },
-    _fallbackCopy: function (text) {
-      var ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.top='-9999px';document.body.appendChild(ta);ta.select();
-      try{document.execCommand('copy');this.showToast('SVG copied!');}catch(e){this.showToast('Copy failed');}
-      document.body.removeChild(ta);
-    },
-
-    showToast: function (msg) {
-      var self=this; this.toastMsg=msg; this.toastVisible=true;
-      clearTimeout(this._toastTimer);
-      this._toastTimer=setTimeout(function(){self.toastVisible=false;},2800);
-    }
+    // flowchart/sequence 액션, export/copy, toast는 모두 믹스인에서 제공
   },
 
   template: '\
