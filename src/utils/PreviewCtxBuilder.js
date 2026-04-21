@@ -65,6 +65,23 @@
           var el = vm.$refs.sequenceMessageInput;
           if (el) { el.focus(); el.select(); }
         });
+      },
+      openSequenceBlockEdit: function (blockId, text, clientX, clientY) {
+        vm.sequenceToolbar = null;
+        vm.selectedSequenceBlockId = blockId;
+        vm.editingSequenceBlockId = blockId;
+        vm.editingSequenceBlockText = text || '';
+        vm.sequenceBlockEditStyle = {
+          position: 'fixed',
+          left: Math.max(12, clientX - 110) + 'px',
+          top: Math.max(12, clientY - 22) + 'px',
+          zIndex: 1000,
+          width: '220px'
+        };
+        vm.$nextTick(function () {
+          var el = vm.$refs.sequenceBlockInput;
+          if (el) { el.focus(); el.select(); }
+        });
       }
     };
   }
@@ -118,6 +135,34 @@
         }
       }, { immediate: true });
     };
+
+    ctx.watchSequenceMessageMultiSelection = function (messageIndex, lineEl, textEl, hitEl) {
+      vm.$watch('selectedSequenceMessageIndices', function (val) {
+        var selected = Array.isArray(val) && val.indexOf(messageIndex) !== -1;
+        if (lineEl) lineEl.classList.toggle('sequence-message-multi-selected', selected);
+        if (textEl) textEl.classList.toggle('sequence-message-text-multi-selected', selected);
+        if (hitEl && hitEl.classList) hitEl.classList.toggle('sequence-hit-multi-selected', selected);
+      }, { immediate: true, deep: true });
+    };
+
+    ctx.watchSequenceBlockSelection = function (blockId, el) {
+      vm.$watch('selectedSequenceBlockId', function (val) {
+        if (el && el.classList) {
+          el.classList.toggle('sequence-block-badge--selected', val === blockId);
+        }
+      }, { immediate: true });
+    };
+
+    ctx.watchSequenceSelectionHighlight = (function () {
+      var registered = false;
+      return function () {
+        if (registered) return;
+        registered = true;
+        vm.$watch('selectedSequenceMessageIndices', function (val) {
+          if (!val || !val.length) SequenceBlockHandler.hideSelectionHighlight();
+        }, { deep: true });
+      };
+    }());
 
     ctx.getPreviewRect = function () {
       return vm.$refs.canvas && vm.$refs.canvas.getBoundingClientRect

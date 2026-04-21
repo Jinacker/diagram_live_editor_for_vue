@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-21T02:41:20.359Z
+ * Built: 2026-04-21T04:37:54.740Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -100,6 +100,222 @@
     parseOperator: parseOperator,
     toggleLineStyle: toggleLineStyle,
     normalizeActivations: normalizeActivations
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/SequenceStatementUtils.js ===== */
+(function (global) {
+  'use strict';
+
+  function cloneStatement(statement) {
+    return Object.assign({}, statement || {});
+  }
+
+  function cloneStatements(model) {
+    var statements = (model && model.statements) || [];
+    if (statements.length) return statements.map(cloneStatement);
+
+    var messages = (model && model.messages) || [];
+    var fallback = [];
+    for (var i = 0; i < messages.length; i++) {
+      fallback.push({ type: 'message', message: Object.assign({}, messages[i]) });
+    }
+    return fallback;
+  }
+
+  function messageIndexToStatementIndex(statements, messageIndex) {
+    if (messageIndex === null || messageIndex === undefined || messageIndex < 0) return -1;
+    var seen = 0;
+    for (var i = 0; i < statements.length; i++) {
+      if (statements[i] && statements[i].type === 'message') {
+        if (seen === messageIndex) return i;
+        seen++;
+      }
+    }
+    return -1;
+  }
+
+  function insertMessageStatement(model, insertAt, message) {
+    var statements = cloneStatements(model);
+    var statement = { type: 'message', message: Object.assign({}, message || {}) };
+    var statementIndex = messageIndexToStatementIndex(statements, insertAt);
+
+    if (statementIndex === -1) {
+      statements.push(statement);
+    } else {
+      statements.splice(statementIndex, 0, statement);
+    }
+    return statements;
+  }
+
+  function removeMessageStatements(model, messageIndices) {
+    var statements = cloneStatements(model);
+    var indices = (messageIndices || []).slice().sort(function (a, b) { return b - a; });
+
+    for (var i = 0; i < indices.length; i++) {
+      var statementIndex = messageIndexToStatementIndex(statements, indices[i]);
+      if (statementIndex !== -1) statements.splice(statementIndex, 1);
+    }
+
+    return statements;
+  }
+
+  function listBlocks(statements) {
+    var source = (statements || []).map(cloneStatement);
+    var blocks = [];
+    var stack = [];
+    var messageCursor = 0;
+
+    for (var i = 0; i < source.length; i++) {
+      var statement = source[i];
+      if (!statement) continue;
+
+      if (/^(loop|alt|opt|par)$/.test(statement.type)) {
+        stack.push({
+          id: 'block-' + i,
+          kind: statement.type,
+          text: statement.text || '',
+          statementIndex: i,
+          endIndex: -1,
+          branchIndices: [],
+          depth: stack.length,
+          messageStartIndex: null,
+          messageEndIndex: null
+        });
+        continue;
+      }
+
+      if (statement.type === 'message') {
+        for (var s = 0; s < stack.length; s++) {
+          if (stack[s].messageStartIndex === null) stack[s].messageStartIndex = messageCursor;
+          stack[s].messageEndIndex = messageCursor;
+        }
+        messageCursor++;
+        continue;
+      }
+
+      if (statement.type === 'else' || statement.type === 'and') {
+        var top = stack.length ? stack[stack.length - 1] : null;
+        var expected = statement.type === 'else' ? 'alt' : 'par';
+        if (top && top.kind === expected) {
+          top.branchIndices.push(i);
+        }
+        continue;
+      }
+
+      if (statement.type === 'end') {
+        if (!stack.length) continue;
+        var block = stack.pop();
+        block.endIndex = i;
+        blocks.push(block);
+      }
+    }
+
+    blocks.sort(function (a, b) {
+      return a.statementIndex - b.statementIndex;
+    });
+    return blocks;
+  }
+
+  function wrapMessagesInBlock(model, messageIndices, kind, text) {
+    var unique = {};
+    var ordered = [];
+    var statements = cloneStatements(model);
+
+    for (var i = 0; i < (messageIndices || []).length; i++) {
+      var idx = messageIndices[i];
+      if (idx === null || idx === undefined || unique[idx]) continue;
+      unique[idx] = true;
+      ordered.push(idx);
+    }
+    if (!ordered.length) return statements;
+
+    ordered.sort(function (a, b) { return a - b; });
+    var startStatementIndex = messageIndexToStatementIndex(statements, ordered[0]);
+    var endStatementIndex = messageIndexToStatementIndex(statements, ordered[ordered.length - 1]);
+    if (startStatementIndex === -1 || endStatementIndex === -1) return statements;
+
+    statements.splice(startStatementIndex, 0, {
+      type: String(kind || 'loop').toLowerCase(),
+      text: text || ''
+    });
+    statements.splice(endStatementIndex + 2, 0, { type: 'end' });
+    return statements;
+  }
+
+  function updateBlockText(model, blockId, text) {
+    var statements = cloneStatements(model);
+    var blocks = listBlocks(statements);
+    var block = null;
+
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].id === blockId) {
+        block = blocks[i];
+        break;
+      }
+    }
+    if (!block) return statements;
+
+    statements[block.statementIndex] = Object.assign({}, statements[block.statementIndex], {
+      text: text || ''
+    });
+    return statements;
+  }
+
+  function deleteBlock(model, blockId) {
+    var statements = cloneStatements(model);
+    var blocks = listBlocks(statements);
+    var block = null;
+
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].id === blockId) {
+        block = blocks[i];
+        break;
+      }
+    }
+    if (!block) return statements;
+
+    var removeSet = {};
+    removeSet[block.statementIndex] = true;
+    removeSet[block.endIndex] = true;
+    for (var b = 0; b < block.branchIndices.length; b++) {
+      removeSet[block.branchIndices[b]] = true;
+    }
+
+    var next = [];
+    for (var s = 0; s < statements.length; s++) {
+      if (!removeSet[s]) next.push(statements[s]);
+    }
+    return next;
+  }
+
+  function changeBlockKind(model, blockId, newKind) {
+    var statements = cloneStatements(model);
+    var blocks = listBlocks(statements);
+    var block = null;
+
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].id === blockId) { block = blocks[i]; break; }
+    }
+    if (!block) return statements;
+
+    statements[block.statementIndex] = Object.assign({}, statements[block.statementIndex], {
+      type: String(newKind || 'loop').toLowerCase()
+    });
+    return statements;
+  }
+
+  global.SequenceStatementUtils = {
+    cloneStatements: cloneStatements,
+    listBlocks: listBlocks,
+    insertMessageStatement: insertMessageStatement,
+    removeMessageStatements: removeMessageStatements,
+    wrapMessagesInBlock: wrapMessagesInBlock,
+    updateBlockText: updateBlockText,
+    deleteBlock: deleteBlock,
+    changeBlockKind: changeBlockKind
   };
 
 })(typeof window !== 'undefined' ? window : this);
@@ -2085,6 +2301,23 @@
           var el = vm.$refs.sequenceMessageInput;
           if (el) { el.focus(); el.select(); }
         });
+      },
+      openSequenceBlockEdit: function (blockId, text, clientX, clientY) {
+        vm.sequenceToolbar = null;
+        vm.selectedSequenceBlockId = blockId;
+        vm.editingSequenceBlockId = blockId;
+        vm.editingSequenceBlockText = text || '';
+        vm.sequenceBlockEditStyle = {
+          position: 'fixed',
+          left: Math.max(12, clientX - 110) + 'px',
+          top: Math.max(12, clientY - 22) + 'px',
+          zIndex: 1000,
+          width: '220px'
+        };
+        vm.$nextTick(function () {
+          var el = vm.$refs.sequenceBlockInput;
+          if (el) { el.focus(); el.select(); }
+        });
       }
     };
   }
@@ -2138,6 +2371,34 @@
         }
       }, { immediate: true });
     };
+
+    ctx.watchSequenceMessageMultiSelection = function (messageIndex, lineEl, textEl, hitEl) {
+      vm.$watch('selectedSequenceMessageIndices', function (val) {
+        var selected = Array.isArray(val) && val.indexOf(messageIndex) !== -1;
+        if (lineEl) lineEl.classList.toggle('sequence-message-multi-selected', selected);
+        if (textEl) textEl.classList.toggle('sequence-message-text-multi-selected', selected);
+        if (hitEl && hitEl.classList) hitEl.classList.toggle('sequence-hit-multi-selected', selected);
+      }, { immediate: true, deep: true });
+    };
+
+    ctx.watchSequenceBlockSelection = function (blockId, el) {
+      vm.$watch('selectedSequenceBlockId', function (val) {
+        if (el && el.classList) {
+          el.classList.toggle('sequence-block-badge--selected', val === blockId);
+        }
+      }, { immediate: true });
+    };
+
+    ctx.watchSequenceSelectionHighlight = (function () {
+      var registered = false;
+      return function () {
+        if (registered) return;
+        registered = true;
+        vm.$watch('selectedSequenceMessageIndices', function (val) {
+          if (!val || !val.length) SequenceBlockHandler.hideSelectionHighlight();
+        }, { deep: true });
+      };
+    }());
 
     ctx.getPreviewRect = function () {
       return vm.$refs.canvas && vm.$refs.canvas.getBoundingClientRect
@@ -3807,6 +4068,284 @@
 })(typeof window !== 'undefined' ? window : this);
 
 
+/* ===== src/actions/SequenceBlockHandler.js ===== */
+(function (global) {
+  'use strict';
+
+  var SequenceBlockHandler = {
+    _overlay: null,
+    _selectionRect: null,
+    _selectionHighlight: null,
+
+    initOverlay: function (svgEl) {
+      var old = svgEl.querySelector('#sequence-block-overlay');
+      if (old) old.remove();
+
+      var overlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      overlay.setAttribute('id', 'sequence-block-overlay');
+      overlay.style.pointerEvents = 'none';
+      svgEl.appendChild(overlay);
+      this._overlay = overlay;
+
+      var selectionRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      selectionRect.setAttribute('class', 'sequence-block-selection-rect');
+      selectionRect.style.display = 'none';
+      selectionRect.style.pointerEvents = 'none';
+      overlay.appendChild(selectionRect);
+      this._selectionRect = selectionRect;
+
+      var selectionHighlight = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      selectionHighlight.setAttribute('class', 'sequence-block-selection-highlight');
+      selectionHighlight.style.display = 'none';
+      selectionHighlight.style.pointerEvents = 'none';
+      overlay.appendChild(selectionHighlight);
+      this._selectionHighlight = selectionHighlight;
+    },
+
+    hideSelectionHighlight: function () {
+      if (this._selectionHighlight) this._selectionHighlight.style.display = 'none';
+    },
+
+    _showSelectionHighlight: function (bbox) {
+      if (!this._selectionHighlight || !bbox) return;
+      this._selectionHighlight.setAttribute('x', bbox.x);
+      this._selectionHighlight.setAttribute('y', bbox.y);
+      this._selectionHighlight.setAttribute('width', bbox.width);
+      this._selectionHighlight.setAttribute('height', bbox.height);
+      this._selectionHighlight.style.display = '';
+    },
+
+    _getSelectionBBox: function (selectedIndices, messages) {
+      var pad = 12;
+      var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+      for (var i = 0; i < messages.length; i++) {
+        if (selectedIndices.indexOf(messages[i].index) === -1) continue;
+        var box = messages[i].hitBox || messages[i].bbox;
+        if (!box) continue;
+        left   = Math.min(left,   box.x);
+        top    = Math.min(top,    box.y);
+        right  = Math.max(right,  box.x + box.width);
+        bottom = Math.max(bottom, box.y + box.height);
+      }
+      if (!isFinite(left)) return null;
+      return { x: left - pad, y: top - pad, width: right - left + pad * 2, height: bottom - top + pad * 2 };
+    },
+
+    attach: function (svgEl, model, ctx) {
+      if (!this._overlay) this.initOverlay(svgEl);
+      this._bringOverlayToFront(svgEl);
+
+      var messages = SequencePositionTracker.collectMessages(svgEl, model);
+      this._renderBlockBadges(svgEl, model, ctx);
+      this._attachSelection(svgEl, messages, ctx);
+
+      if (ctx.watchSequenceSelectionHighlight) {
+        ctx.watchSequenceSelectionHighlight();
+      }
+    },
+
+    _attachSelection: function (svgEl, messages, ctx) {
+      var self = this;
+
+      svgEl.addEventListener('contextmenu', function (e) {
+        if (e.target && e.target.closest && e.target.closest('#sequence-block-overlay .sequence-block-badge-hit')) return;
+        e.preventDefault();
+      });
+
+      svgEl.addEventListener('mousedown', function (e) {
+        if (e.button !== 2) return;
+        if (e.target && e.target.closest && e.target.closest('.sequence-block-badge-hit')) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        var start = SvgPositionTracker.getSVGPoint(svgEl, e.clientX, e.clientY);
+        var currentSelection = [];
+
+        self._selectionRect.style.display = '';
+        self._updateSelectionRect(start, start);
+
+        var onMove = function (me) {
+          var current = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
+          self._updateSelectionRect(start, current);
+          currentSelection = self._collectSelectedMessages(start, current, messages);
+          ctx.setState({
+            selectedSequenceParticipantId: null,
+            selectedSequenceMessageIndex: null,
+            selectedSequenceBlockId: null,
+            selectedSequenceMessageIndices: currentSelection.slice(),
+            sequenceToolbar: null
+          });
+        };
+
+        var onUp = function () {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          self._selectionRect.style.display = 'none';
+
+          if (!currentSelection.length) {
+            self.hideSelectionHighlight();
+            ctx.setState({
+              selectedSequenceMessageIndices: [],
+              selectedSequenceBlockId: null
+            });
+            return;
+          }
+
+          var selBBox = self._getSelectionBBox(currentSelection, messages);
+          self._showSelectionHighlight(selBBox);
+
+          var toolbarPos = { x: 0, y: 0 };
+          if (selBBox) {
+            var center = SvgPositionTracker.svgToScreen(svgEl, selBBox.x + selBBox.width / 2, selBBox.y);
+            toolbarPos.x = center.x;
+            toolbarPos.y = center.y;
+          }
+
+          ctx.setState({
+            selectedSequenceParticipantId: null,
+            selectedSequenceMessageIndex: null,
+            selectedSequenceBlockId: null,
+            selectedSequenceMessageIndices: currentSelection.slice(),
+            sequenceToolbar: {
+              type: 'selection',
+              messageIndices: currentSelection.slice(),
+              x: toolbarPos.x,
+              y: toolbarPos.y
+            }
+          });
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    },
+
+    _collectSelectedMessages: function (start, current, messages) {
+      var left = Math.min(start.x, current.x);
+      var right = Math.max(start.x, current.x);
+      var top = Math.min(start.y, current.y);
+      var bottom = Math.max(start.y, current.y);
+      var selected = [];
+
+      for (var i = 0; i < messages.length; i++) {
+        var box = messages[i].hitBox || messages[i].bbox;
+        if (!box) continue;
+        var intersects = !(
+          box.x + box.width < left ||
+          box.x > right ||
+          box.y + box.height < top ||
+          box.y > bottom
+        );
+        if (intersects) selected.push(messages[i].index);
+      }
+
+      return selected;
+    },
+
+    _updateSelectionRect: function (start, current) {
+      var left = Math.min(start.x, current.x);
+      var top = Math.min(start.y, current.y);
+      var width = Math.abs(current.x - start.x);
+      var height = Math.abs(current.y - start.y);
+      this._selectionRect.setAttribute('x', left);
+      this._selectionRect.setAttribute('y', top);
+      this._selectionRect.setAttribute('width', width);
+      this._selectionRect.setAttribute('height', height);
+    },
+
+    _renderBlockBadges: function (svgEl, model, ctx) {
+      var blocks = SequenceStatementUtils.listBlocks(model && model.statements);
+      var labelTextEls = Array.prototype.slice.call(svgEl.querySelectorAll('.labelText'));
+      var allLoopTextEls = Array.prototype.slice.call(svgEl.querySelectorAll('.loopText'));
+      var usedLoopIndices = {};
+
+      for (var i = 0; i < blocks.length; i++) {
+        var block = blocks[i];
+        var labelEl = labelTextEls[i] || null;
+        var titleEl = this._findMatchingLoopText(labelEl, allLoopTextEls, usedLoopIndices);
+        this._attachBlockElementInteractions(svgEl, block, labelEl, titleEl, ctx);
+      }
+    },
+
+    _findMatchingLoopText: function (labelEl, allLoopTextEls, usedLoopIndices) {
+      if (!labelEl || !labelEl.getBBox) return null;
+      var labelBox;
+      try { labelBox = labelEl.getBBox(); } catch (e) { return null; }
+
+      var bestEl = null;
+      var bestDist = Infinity;
+      var bestIdx = -1;
+
+      for (var j = 0; j < allLoopTextEls.length; j++) {
+        if (usedLoopIndices[j]) continue;
+        var el = allLoopTextEls[j];
+        if (!el.getBBox) continue;
+        var box;
+        try { box = el.getBBox(); } catch (e2) { continue; }
+        var dist = Math.abs(box.y - labelBox.y);
+        if (dist < bestDist) { bestDist = dist; bestEl = el; bestIdx = j; }
+      }
+
+      if (bestEl && bestIdx !== -1) {
+        usedLoopIndices[bestIdx] = true;
+        return bestEl;
+      }
+      return null;
+    },
+
+    _attachBlockElementInteractions: function (svgEl, block, labelEl, titleEl, ctx) {
+      // labelText의 부모 그룹(labelBox rect 포함)을 클릭 → toolbar
+      var labelGroup = labelEl && (labelEl.closest ? labelEl.closest('g') : labelEl.parentNode);
+      if (labelGroup) {
+        labelGroup.style.cursor = 'pointer';
+        labelGroup.style.pointerEvents = 'all';
+        labelGroup.addEventListener('click', function (e) {
+          e.stopPropagation();
+          ctx.setState({
+            selectedSequenceParticipantId: null,
+            selectedSequenceMessageIndex: null,
+            selectedSequenceMessageIndices: [],
+            selectedSequenceBlockId: block.id,
+            sequenceToolbar: {
+              type: 'block',
+              blockId: block.id,
+              kind: block.kind,
+              text: block.text || '',
+              x: e.clientX,
+              y: e.clientY
+            }
+          });
+        });
+        if (ctx.watchSequenceBlockSelection) {
+          ctx.watchSequenceBlockSelection(block.id, labelGroup);
+        }
+      }
+
+      // loopText 클릭 → 바로 inline edit 오픈
+      if (titleEl) {
+        titleEl.style.cursor = 'text';
+        titleEl.style.pointerEvents = 'all';
+        titleEl.addEventListener('click', function (e) {
+          e.stopPropagation();
+          if (ctx.openSequenceBlockEdit) {
+            ctx.openSequenceBlockEdit(block.id, block.text || '', e.clientX, e.clientY);
+          }
+        });
+      }
+    },
+
+    _bringOverlayToFront: function (svgEl) {
+      if (this._overlay && this._overlay.parentNode === svgEl) {
+        svgEl.appendChild(this._overlay);
+      }
+    }
+  };
+
+  global.SequenceBlockHandler = SequenceBlockHandler;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
 /* ===== src/actions/SequenceSvgHandler.js ===== */
 (function (global) {
   'use strict';
@@ -3848,6 +4387,8 @@
         ctx.setState({
           selectedSequenceParticipantId: data.id,
           selectedSequenceMessageIndex: null,
+          selectedSequenceMessageIndices: [],
+          selectedSequenceBlockId: null,
           sequenceToolbar: {
             type: 'participant',
             id: data.id,
@@ -3889,6 +4430,8 @@
         ctx.setState({
           selectedSequenceParticipantId: null,
           selectedSequenceMessageIndex: data.index,
+          selectedSequenceMessageIndices: [],
+          selectedSequenceBlockId: null,
           sequenceToolbar: {
             type: 'message',
             index: data.index,
@@ -3923,6 +4466,9 @@
       ctx.watchSequenceMessageSelection(data.index, visualEl, textEl);
       if (ctx.watchSequenceMessageHitSelection) {
         ctx.watchSequenceMessageHitSelection(data.index, hitEl);
+      }
+      if (ctx.watchSequenceMessageMultiSelection) {
+        ctx.watchSequenceMessageMultiSelection(data.index, visualEl, textEl, hitEl);
       }
     },
 
@@ -4316,14 +4862,18 @@
           insertAt = Math.min(messages.length, payload.afterIndex + 1);
         }
 
-        messages.splice(insertAt, 0, {
+        var newMessage = {
           from: fromId,
           to: toId,
           operator: '->>',
           text: messageText
-        });
+        };
+        messages.splice(insertAt, 0, newMessage);
 
-        this._updateSequenceModel({ messages: messages });
+        this._updateSequenceModel({
+          messages: messages,
+          statements: SequenceStatementUtils.insertMessageStatement(this.model, insertAt, newMessage)
+        });
       },
 
       updateSequenceParticipantText: function (data) {
@@ -4383,25 +4933,70 @@
         this._updateSequenceModel({ messages: messages });
       },
 
+      wrapSequenceMessagesInBlock: function (data) {
+        if (this.isFlowchart || !data || !data.kind) return;
+        var messageIndices = data.messageIndices || [];
+        if (!messageIndices.length) return;
+        this._snapshot();
+        this._updateSequenceModel({
+          statements: SequenceStatementUtils.wrapMessagesInBlock(
+            this.model,
+            messageIndices,
+            data.kind,
+            data.text || ''
+          )
+        });
+      },
+
+      updateSequenceBlockText: function (data) {
+        if (this.isFlowchart || !data || !data.blockId) return;
+        this._snapshot();
+        this._updateSequenceModel({
+          statements: SequenceStatementUtils.updateBlockText(this.model, data.blockId, data.text || '')
+        });
+      },
+
+      changeSequenceBlockType: function (data) {
+        if (this.isFlowchart || !data || !data.blockId || !data.kind) return;
+        this._snapshot();
+        this._updateSequenceModel({
+          statements: SequenceStatementUtils.changeBlockKind(this.model, data.blockId, data.kind)
+        });
+      },
+
       // deleteSelected dispatcher가 sequence 분기일 때 호출.
       _deleteSequenceSelection: function (data) {
         if (data.sequenceParticipantId) {
+          var removedIndices = [];
+          var originalMessages = this.model.messages || [];
           var participants = (this.model.participants || []).filter(function (p) {
             return p.id !== data.sequenceParticipantId;
           });
-          var messages = (this.model.messages || []).filter(function (m) {
-            return m.from !== data.sequenceParticipantId && m.to !== data.sequenceParticipantId;
+          var messages = originalMessages.filter(function (m, idx) {
+            var keep = m.from !== data.sequenceParticipantId && m.to !== data.sequenceParticipantId;
+            if (!keep) removedIndices.push(idx);
+            return keep;
           });
           this._updateSequenceModel({
             participants: participants,
-            messages: messages
+            messages: messages,
+            statements: SequenceStatementUtils.removeMessageStatements(this.model, removedIndices)
+          });
+          return true;
+        }
+        if (data.sequenceBlockId) {
+          this._updateSequenceModel({
+            statements: SequenceStatementUtils.deleteBlock(this.model, data.sequenceBlockId)
           });
           return true;
         }
         if (data.sequenceMessageIndex !== null && data.sequenceMessageIndex !== undefined) {
           var mc = (this.model.messages || []).slice();
           mc.splice(data.sequenceMessageIndex, 1);
-          this._updateSequenceModel({ messages: mc });
+          this._updateSequenceModel({
+            messages: mc,
+            statements: SequenceStatementUtils.removeMessageStatements(this.model, [data.sequenceMessageIndex])
+          });
           return true;
         }
         return false;
@@ -4936,6 +5531,8 @@ Vue.component('mermaid-preview', {
       selectedEdgeIndex: null,
       selectedSequenceParticipantId: null,
       selectedSequenceMessageIndex: null,
+      selectedSequenceMessageIndices: [],
+      selectedSequenceBlockId: null,
 
       // 노드 인라인 편집
       editingNodeId:  null,
@@ -4956,6 +5553,9 @@ Vue.component('mermaid-preview', {
       editingSequenceMessageIndex: null,
       editingSequenceMessageText: '',
       sequenceMessageEditStyle: {},
+      editingSequenceBlockId: null,
+      editingSequenceBlockText: '',
+      sequenceBlockEditStyle: {},
 
       // 컨텍스트 UI 상태
       contextMenu:  null,   // { nodeId, x, y }
@@ -5021,6 +5621,8 @@ Vue.component('mermaid-preview', {
       self.flowEdgeBodyPicker = false;
       self.flowEdgeHeadPicker = false;
       self.sequenceToolbar = null;
+      self.selectedSequenceMessageIndices = [];
+      self.selectedSequenceBlockId = null;
       if (hadEdgeToolbar && self.editingEdgeIndex === null) {
         self.selectedEdgeIndex = null;
         self._clearEdgeVisualState();
@@ -5050,7 +5652,8 @@ Vue.component('mermaid-preview', {
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (self.editingNodeId !== null || self.editingEdgeIndex !== null ||
-            self.editingSequenceParticipantId !== null || self.editingSequenceMessageIndex !== null) return;
+            self.editingSequenceParticipantId !== null || self.editingSequenceMessageIndex !== null ||
+            self.editingSequenceBlockId !== null) return;
         if (self.selectedNodeId || self.selectedEdgeIndex !== null) {
           self.$emit('delete-selected', {
             nodeId:    self.selectedNodeId,
@@ -5058,13 +5661,16 @@ Vue.component('mermaid-preview', {
           });
           self.selectedNodeId    = null;
           self.selectedEdgeIndex = null;
-        } else if (self.selectedSequenceParticipantId || self.selectedSequenceMessageIndex !== null) {
+        } else if (self.selectedSequenceParticipantId || self.selectedSequenceMessageIndex !== null || self.selectedSequenceBlockId) {
           self.$emit('delete-selected', {
             sequenceParticipantId: self.selectedSequenceParticipantId,
-            sequenceMessageIndex: self.selectedSequenceMessageIndex
+            sequenceMessageIndex: self.selectedSequenceMessageIndex,
+            sequenceBlockId: self.selectedSequenceBlockId
           });
           self.selectedSequenceParticipantId = null;
           self.selectedSequenceMessageIndex = null;
+          self.selectedSequenceMessageIndices = [];
+          self.selectedSequenceBlockId = null;
         }
       }
 
@@ -5073,10 +5679,13 @@ Vue.component('mermaid-preview', {
         self.cancelEdgeEdit();
         self.cancelSequenceParticipantEdit();
         self.cancelSequenceMessageEdit();
+        self.cancelSequenceBlockEdit();
         self.selectedNodeId    = null;
         self.selectedEdgeIndex = null;
         self.selectedSequenceParticipantId = null;
         self.selectedSequenceMessageIndex = null;
+        self.selectedSequenceMessageIndices = [];
+        self.selectedSequenceBlockId = null;
         self.contextMenu       = null;
         self.edgeToolbar       = null;
         self.flowEdgeColorPicker = false;
@@ -5136,6 +5745,7 @@ Vue.component('mermaid-preview', {
       if (this.editingEdgeIndex !== null) this.confirmEdgeEdit();
       if (this.editingSequenceParticipantId) this.confirmSequenceParticipantEdit();
       if (this.editingSequenceMessageIndex !== null) this.confirmSequenceMessageEdit();
+      if (this.editingSequenceBlockId !== null) this.confirmSequenceBlockEdit();
     },
 
     // 공통 렌더 유틸
@@ -5245,7 +5855,10 @@ Vue.component('mermaid-preview', {
         this._positions = {};
         this._elements = {};
         this._edgePaths = [];
-        SequenceSvgHandler.attach(svgEl, this.model, this._buildCtx(svgEl));
+        var sequenceCtx = this._buildCtx(svgEl);
+        SequenceSvgHandler.attach(svgEl, this.model, sequenceCtx);
+        SequenceBlockHandler.initOverlay(svgEl);
+        SequenceBlockHandler.attach(svgEl, this.model, sequenceCtx);
       }
 
       // 배경 클릭 시 선택 해제
@@ -5257,6 +5870,8 @@ Vue.component('mermaid-preview', {
           self.selectedEdgeIndex = null;
           self.selectedSequenceParticipantId = null;
           self.selectedSequenceMessageIndex = null;
+          self.selectedSequenceMessageIndices = [];
+          self.selectedSequenceBlockId = null;
         }
       });
 
@@ -5516,7 +6131,8 @@ Vue.component('mermaid-preview', {
         target.closest('.context-menu') ||
         target.closest('.node-edit-overlay') ||
         target.closest('#conn-port-overlay') ||
-        target.closest('#sequence-drag-overlay')
+        target.closest('#sequence-drag-overlay') ||
+        target.closest('#sequence-block-overlay')
       )) {
         return false;
       }
@@ -5647,6 +6263,27 @@ Vue.component('mermaid-preview', {
     onSequenceMessageEditKeyDown: function (e) {
       if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceMessageEdit(); }
       if (e.key === 'Escape') { this.cancelSequenceMessageEdit(); }
+    },
+
+    confirmSequenceBlockEdit: function () {
+      if (this.editingSequenceBlockId !== null) {
+        this.$emit('update-sequence-block-text', {
+          blockId: this.editingSequenceBlockId,
+          text: this.editingSequenceBlockText.trim()
+        });
+      }
+      this.editingSequenceBlockId = null;
+      this.editingSequenceBlockText = '';
+    },
+
+    cancelSequenceBlockEdit: function () {
+      this.editingSequenceBlockId = null;
+      this.editingSequenceBlockText = '';
+    },
+
+    onSequenceBlockEditKeyDown: function (e) {
+      if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceBlockEdit(); }
+      if (e.key === 'Escape') { this.cancelSequenceBlockEdit(); }
     },
 
     // 공통 노드 컨텍스트 메뉴 액션 유틸
@@ -5903,6 +6540,8 @@ Vue.component('mermaid-preview', {
         }
       } else if (toolbar.type === 'message') {
         SequenceSvgHandler.startMessageEdit(toolbar.index, toolbar.x, toolbar.y, svgEl, this._buildCtxLite());
+      } else if (toolbar.type === 'block') {
+        this._buildCtxLite().openSequenceBlockEdit(toolbar.blockId, toolbar.text || '', toolbar.x, toolbar.y);
       }
     },
 
@@ -5920,6 +6559,13 @@ Vue.component('mermaid-preview', {
           sequenceMessageIndex: this.sequenceToolbar.index
         });
         this.selectedSequenceMessageIndex = null;
+      } else if (this.sequenceToolbar.type === 'block') {
+        this.$emit('delete-selected', {
+          sequenceParticipantId: null,
+          sequenceMessageIndex: null,
+          sequenceBlockId: this.sequenceToolbar.blockId
+        });
+        this.selectedSequenceBlockId = null;
       }
       this.sequenceToolbar = null;
     },
@@ -5949,6 +6595,26 @@ Vue.component('mermaid-preview', {
       if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'message') return;
       this.$emit('set-sequence-message-line-type', { index: this.sequenceToolbar.index, operator: operator });
       this.lineTypePicker = false;
+    },
+
+    sequenceToolbarChangeBlockType: function (kind) {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'block') return;
+      this.$emit('change-sequence-block-type', {
+        blockId: this.sequenceToolbar.blockId,
+        kind: kind
+      });
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarWrapBlock: function (kind) {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'selection') return;
+      this.$emit('wrap-sequence-messages-in-block', {
+        kind: kind,
+        text: kind + '_title',
+        messageIndices: (this.sequenceToolbar.messageIndices || []).slice()
+      });
+      this.selectedSequenceMessageIndices = [];
+      this.sequenceToolbar = null;
     },
 
     sequenceToolbarToggleKind: function () {
@@ -6018,7 +6684,7 @@ Vue.component('mermaid-preview', {
   },
 
   template: '\
-    <div class="preview-area" @click.self="selectedNodeId = null; selectedEdgeIndex = null; selectedSequenceParticipantId = null; selectedSequenceMessageIndex = null;">\
+    <div class="preview-area" @click.self="selectedNodeId = null; selectedEdgeIndex = null; selectedSequenceParticipantId = null; selectedSequenceMessageIndex = null; selectedSequenceMessageIndices = []; selectedSequenceBlockId = null;">\
         <div v-if="portDragging" class="edge-mode-overlay" style="background: var(--success);">\
           {{ model.type === &quot;sequence&quot; ? &quot;Release on target participant to insert message&quot; : &quot;Release on target node to connect&quot; }}\
         </div>\
@@ -6035,6 +6701,9 @@ Vue.component('mermaid-preview', {
         </div>\
         <div v-if="editingSequenceMessageIndex !== null" class="node-edit-overlay" :style="sequenceMessageEditStyle">\
           <input ref="sequenceMessageInput" class="node-edit-input" v-model="editingSequenceMessageText" placeholder="Message text" @keydown="onSequenceMessageEditKeyDown" @blur="confirmSequenceMessageEdit" />\
+        </div>\
+        <div v-if="editingSequenceBlockId !== null" class="node-edit-overlay" :style="sequenceBlockEditStyle">\
+          <input ref="sequenceBlockInput" class="node-edit-input" v-model="editingSequenceBlockText" placeholder="Block text" @keydown="onSequenceBlockEditKeyDown" @blur="confirmSequenceBlockEdit" />\
         </div>\
         <div v-if="contextMenu" class="context-menu" :style="{ left: contextMenu.x + &quot;px&quot;, top: contextMenu.y + &quot;px&quot; }" @click.stop>\
           <div class="context-menu__section-title">Change Shape</div>\
@@ -6103,7 +6772,15 @@ Vue.component('mermaid-preview', {
           <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="edgeToolbarDelete" title="Delete edge">Delete</button>\
         </div>\
         <div v-if="sequenceToolbar" class="sequence-toolbar" :style="{ left: sequenceToolbar.x + &quot;px&quot;, top: sequenceToolbar.y + &quot;px&quot; }" @click.stop>\
-          <button class="edge-toolbar__btn" @click="sequenceToolbarEdit">Label ✎</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;loop&quot;)">Loop ↻</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;alt&quot;)">Alt ⎇</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;opt&quot;)">Opt ?</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;par&quot;)">Par∥</button>\
+          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;loop&quot; }" @click="sequenceToolbarChangeBlockType(&quot;loop&quot;)">Loop ↻</button>\
+          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;alt&quot; }" @click="sequenceToolbarChangeBlockType(&quot;alt&quot;)">Alt ⎇</button>\
+          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;opt&quot; }" @click="sequenceToolbarChangeBlockType(&quot;opt&quot;)">Opt ?</button>\
+          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;par&quot; }" @click="sequenceToolbarChangeBlockType(&quot;par&quot;)">Par∥</button>\
+          <button v-if="sequenceToolbar.type !== &quot;block&quot; &amp;&amp; sequenceToolbar.type !== &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarEdit">Label ✎</button>\
           <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarMoveLeft" title="Move left">◀</button>\
           <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarMoveRight" title="Move right">▶</button>\
           <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarToggleKind">{{ sequenceToolbar.kind === &quot;actor&quot; ? &quot;→ Participant&quot; : &quot;→ Shape&quot; }}</button>\
@@ -6123,7 +6800,7 @@ Vue.component('mermaid-preview', {
               >{{ opt.label }}</button>\
             </div>\
           </div>\
-          <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="sequenceToolbarDelete">Delete</button>\
+          <button v-if="sequenceToolbar.type !== &quot;selection&quot;" class="edge-toolbar__btn edge-toolbar__btn--danger" @click="sequenceToolbarDelete">Delete</button>\
         </div>\
       </div>\
       <div v-else class="preview-area__empty">\
@@ -6348,6 +7025,9 @@ Vue.component('mermaid-full-editor', {
           @reverse-sequence-message="reverseSequenceMessage"\
           @toggle-sequence-message-line-type="toggleSequenceMessageLineType"\
           @set-sequence-message-line-type="setSequenceMessageLineType"\
+          @wrap-sequence-messages-in-block="wrapSequenceMessagesInBlock"\
+          @update-sequence-block-text="updateSequenceBlockText"\
+          @change-sequence-block-type="changeSequenceBlockType"\
           @toggle-participant-kind="toggleParticipantKind"\
           @move-sequence-participant="moveSequenceParticipant"\
           @node-selected="onNodeSelected"\

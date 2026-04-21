@@ -93,14 +93,18 @@
           insertAt = Math.min(messages.length, payload.afterIndex + 1);
         }
 
-        messages.splice(insertAt, 0, {
+        var newMessage = {
           from: fromId,
           to: toId,
           operator: '->>',
           text: messageText
-        });
+        };
+        messages.splice(insertAt, 0, newMessage);
 
-        this._updateSequenceModel({ messages: messages });
+        this._updateSequenceModel({
+          messages: messages,
+          statements: SequenceStatementUtils.insertMessageStatement(this.model, insertAt, newMessage)
+        });
       },
 
       updateSequenceParticipantText: function (data) {
@@ -160,25 +164,70 @@
         this._updateSequenceModel({ messages: messages });
       },
 
+      wrapSequenceMessagesInBlock: function (data) {
+        if (this.isFlowchart || !data || !data.kind) return;
+        var messageIndices = data.messageIndices || [];
+        if (!messageIndices.length) return;
+        this._snapshot();
+        this._updateSequenceModel({
+          statements: SequenceStatementUtils.wrapMessagesInBlock(
+            this.model,
+            messageIndices,
+            data.kind,
+            data.text || ''
+          )
+        });
+      },
+
+      updateSequenceBlockText: function (data) {
+        if (this.isFlowchart || !data || !data.blockId) return;
+        this._snapshot();
+        this._updateSequenceModel({
+          statements: SequenceStatementUtils.updateBlockText(this.model, data.blockId, data.text || '')
+        });
+      },
+
+      changeSequenceBlockType: function (data) {
+        if (this.isFlowchart || !data || !data.blockId || !data.kind) return;
+        this._snapshot();
+        this._updateSequenceModel({
+          statements: SequenceStatementUtils.changeBlockKind(this.model, data.blockId, data.kind)
+        });
+      },
+
       // deleteSelected dispatcher가 sequence 분기일 때 호출.
       _deleteSequenceSelection: function (data) {
         if (data.sequenceParticipantId) {
+          var removedIndices = [];
+          var originalMessages = this.model.messages || [];
           var participants = (this.model.participants || []).filter(function (p) {
             return p.id !== data.sequenceParticipantId;
           });
-          var messages = (this.model.messages || []).filter(function (m) {
-            return m.from !== data.sequenceParticipantId && m.to !== data.sequenceParticipantId;
+          var messages = originalMessages.filter(function (m, idx) {
+            var keep = m.from !== data.sequenceParticipantId && m.to !== data.sequenceParticipantId;
+            if (!keep) removedIndices.push(idx);
+            return keep;
           });
           this._updateSequenceModel({
             participants: participants,
-            messages: messages
+            messages: messages,
+            statements: SequenceStatementUtils.removeMessageStatements(this.model, removedIndices)
+          });
+          return true;
+        }
+        if (data.sequenceBlockId) {
+          this._updateSequenceModel({
+            statements: SequenceStatementUtils.deleteBlock(this.model, data.sequenceBlockId)
           });
           return true;
         }
         if (data.sequenceMessageIndex !== null && data.sequenceMessageIndex !== undefined) {
           var mc = (this.model.messages || []).slice();
           mc.splice(data.sequenceMessageIndex, 1);
-          this._updateSequenceModel({ messages: mc });
+          this._updateSequenceModel({
+            messages: mc,
+            statements: SequenceStatementUtils.removeMessageStatements(this.model, [data.sequenceMessageIndex])
+          });
           return true;
         }
         return false;

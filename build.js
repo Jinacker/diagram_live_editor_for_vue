@@ -14,6 +14,7 @@ const path = require('path');
 
 const coreFiles = [
   'src/utils/SequenceMessageCodec.js',
+  'src/utils/SequenceStatementUtils.js',
   'src/utils/IdAllocator.js',
   'src/utils/ModelDiagnostics.js',
   'src/utils/ParserHighlight.js',
@@ -31,6 +32,7 @@ const coreFiles = [
   'src/actions/PortDragHandler.js',
   'src/actions/SequencePositionTracker.js',
   'src/actions/SequenceMessageDragHandler.js',
+  'src/actions/SequenceBlockHandler.js',
   'src/actions/SequenceSvgHandler.js',
   'src/components/mixins/flowchartActionsMixin.js',
   'src/components/mixins/sequenceActionsMixin.js',

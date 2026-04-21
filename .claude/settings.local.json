@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node build.js)"
+      "Bash(node build.js)",
+      "Bash(grep -o '.\\\\{0,60\\\\}labelBox.\\\\{0,60\\\\}\\\\|.\\\\{0,60\\\\}loopText.\\\\{0,60\\\\}\\\\|.\\\\{0,60\\\\}labelText.\\\\{0,60\\\\}')",
+      "Bash(grep -o '.\\\\{0,120\\\\}class=\"labelText\".\\\\{0,120\\\\}\\\\|.\\\\{0,120\\\\}class=\"loopText\".\\\\{0,120\\\\}\\\\|.\\\\{0,120\\\\}class=\"labelBox\".\\\\{0,120\\\\}')"
     ]
   }
 }

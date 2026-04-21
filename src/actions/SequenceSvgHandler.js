@@ -38,6 +38,8 @@
         ctx.setState({
           selectedSequenceParticipantId: data.id,
           selectedSequenceMessageIndex: null,
+          selectedSequenceMessageIndices: [],
+          selectedSequenceBlockId: null,
           sequenceToolbar: {
             type: 'participant',
             id: data.id,
@@ -79,6 +81,8 @@
         ctx.setState({
           selectedSequenceParticipantId: null,
           selectedSequenceMessageIndex: data.index,
+          selectedSequenceMessageIndices: [],
+          selectedSequenceBlockId: null,
           sequenceToolbar: {
             type: 'message',
             index: data.index,
@@ -113,6 +117,9 @@
       ctx.watchSequenceMessageSelection(data.index, visualEl, textEl);
       if (ctx.watchSequenceMessageHitSelection) {
         ctx.watchSequenceMessageHitSelection(data.index, hitEl);
+      }
+      if (ctx.watchSequenceMessageMultiSelection) {
+        ctx.watchSequenceMessageMultiSelection(data.index, visualEl, textEl, hitEl);
       }
     },
 

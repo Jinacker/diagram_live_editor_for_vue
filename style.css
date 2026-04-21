@@ -1442,7 +1442,8 @@ mermaid-toolbar {
   filter: drop-shadow(0 0 8px rgba(21, 101, 192, 0.28));
 }
 
-.preview-area__canvas .sequence-message-selected {
+.preview-area__canvas .sequence-message-selected,
+.preview-area__canvas .sequence-message-multi-selected {
   stroke: #1565c0 !important;
   stroke-width: 4px !important;
   filter: drop-shadow(0 0 10px rgba(21, 101, 192, 0.45));
@@ -1454,17 +1455,20 @@ mermaid-toolbar {
 }
 
 .preview-area__canvas .sequence-message-text-selected,
+.preview-area__canvas .sequence-message-text-multi-selected,
 .preview-area__canvas .sequence-message-text-hovered {
   fill: #1a4070 !important;
   font-weight: 600 !important;
 }
 
-.preview-area__canvas .sequence-message-text-selected {
+.preview-area__canvas .sequence-message-text-selected,
+.preview-area__canvas .sequence-message-text-multi-selected {
   fill: #1565c0 !important;
   font-weight: 700 !important;
 }
 
-#sequence-message-hit-overlay .sequence-hit-selected {
+#sequence-message-hit-overlay .sequence-hit-selected,
+#sequence-message-hit-overlay .sequence-hit-multi-selected {
   fill: rgba(21, 101, 192, 0.08) !important;
   fill-opacity: 1 !important;
   stroke: rgba(21, 101, 192, 0.3) !important;
@@ -1523,6 +1527,48 @@ mermaid-toolbar {
   stroke-linecap: round;
   opacity: 1;
   filter: drop-shadow(0 0 6px rgba(37, 99, 235, 0.7));
+}
+.sequence-block-selection-rect {
+  fill: rgba(37, 99, 235, 0.08);
+  stroke: rgba(37, 99, 235, 0.5);
+  stroke-width: 1.5px;
+  stroke-dasharray: 6 4;
+}
+.sequence-block-selection-highlight {
+  fill: rgba(37, 99, 235, 0.08);
+  stroke: rgba(37, 99, 235, 0.6);
+  stroke-width: 1.5px;
+}
+.sequence-block-badge-hit {
+  fill: rgba(255, 255, 255, 0.96);
+  stroke: #64748b;
+  stroke-width: 1;
+  filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.12));
+}
+.sequence-block-badge-text {
+  fill: #0f172a;
+  font-size: 11px;
+  font-weight: 700;
+  user-select: none;
+}
+.sequence-block-badge--selected .sequence-block-badge-hit {
+  stroke: #2563eb;
+  stroke-width: 1.8px;
+}
+.sequence-block-badge--selected .sequence-block-badge-text {
+  fill: #1d4ed8;
+}
+
+.edge-toolbar__btn--active {
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-color: #93c5fd;
+  font-weight: 700;
+}
+
+.preview-area__canvas .labelText,
+.preview-area__canvas .loopText {
+  cursor: pointer;
 }
 
 .preview-area__canvas .sequence-participant-drag-target rect,
