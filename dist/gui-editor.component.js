@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-21T07:08:09.197Z
+ * Built: 2026-04-21T07:43:50.136Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -5387,9 +5387,12 @@
 
       updateSequenceNoteText: function (data) {
         if (this.isFlowchart || !data || data.statementIndex === null || data.statementIndex === undefined) return;
+        var nextText = String(data.text || '').trim();
         this._snapshot();
         this._updateSequenceModel({
-          statements: SequenceStatementUtils.updateNoteText(this.model, data.statementIndex, data.text || '')
+          statements: nextText
+            ? SequenceStatementUtils.updateNoteText(this.model, data.statementIndex, nextText)
+            : SequenceStatementUtils.deleteNoteStatement(this.model, data.statementIndex)
         });
       },
 

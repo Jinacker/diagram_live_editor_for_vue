@@ -233,9 +233,12 @@
 
       updateSequenceNoteText: function (data) {
         if (this.isFlowchart || !data || data.statementIndex === null || data.statementIndex === undefined) return;
+        var nextText = String(data.text || '').trim();
         this._snapshot();
         this._updateSequenceModel({
-          statements: SequenceStatementUtils.updateNoteText(this.model, data.statementIndex, data.text || '')
+          statements: nextText
+            ? SequenceStatementUtils.updateNoteText(this.model, data.statementIndex, nextText)
+            : SequenceStatementUtils.deleteNoteStatement(this.model, data.statementIndex)
         });
       },
 
