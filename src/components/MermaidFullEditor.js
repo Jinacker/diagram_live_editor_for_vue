@@ -72,6 +72,12 @@ Vue.component('mermaid-full-editor', {
     this.$nextTick(function () {
       self._seedIdAllocators();
     });
+    window.addEventListener('popstate', this._onPopState);
+  },
+
+  beforeDestroy: function () {
+    window.removeEventListener('popstate', this._onPopState);
+    if (this.fullScreen) history.back();
   },
 
   methods: {
@@ -145,7 +151,21 @@ Vue.component('mermaid-full-editor', {
 
     fitView:  function () { if (this.$refs.preview) this.$refs.preview.fitView(); },
     zoomIn:   function () { if (this.$refs.preview) this.$refs.preview.zoomIn(); },
-    zoomOut:  function () { if (this.$refs.preview) this.$refs.preview.zoomOut(); }
+    zoomOut:  function () { if (this.$refs.preview) this.$refs.preview.zoomOut(); },
+
+    toggleFullscreen: function () {
+      if (!this.fullScreen) {
+        this.fullScreen = true;
+        history.pushState({ guiEditorFullscreen: true }, '');
+      } else {
+        this.fullScreen = false;
+        history.back();
+      }
+    },
+
+    _onPopState: function () {
+      if (this.fullScreen) this.fullScreen = false;
+    }
 
     // flowchart/sequence 액션, export/copy, toast는 모두 믹스인에서 제공
   },
@@ -170,7 +190,7 @@ Vue.component('mermaid-full-editor', {
           :can-redo="canRedo"\
           :autonumber="!!model.autonumber"\
           :full-screen="fullScreen"\
-          @toggle-fullscreen="fullScreen = !fullScreen"\
+          @toggle-fullscreen="toggleFullscreen"\
           @add-node="addNode"\
           @add-sequence-participant="addSequenceParticipant"\
           @add-sequence-actor="addSequenceActor"\
