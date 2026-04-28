@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-28T07:52:07.234Z
+ * Built: 2026-04-28T23:39:56.162Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -6838,9 +6838,14 @@ Vue.component('mermaid-preview', {
       var snappedPanX = Math.round(this.panX);
       var snappedPanY = Math.round(this.panY);
       var snappedZoom = Math.round(this.cfgZoom * 1000) / 1000;
+      // SVG width/height를 zoom에 맞게 조절해 벡터 품질을 유지한다.
+      // CSS scale() 대신 이 방식을 쓰면 foreignObject 내부 텍스트도 선명하게 렌더된다.
+      var intrinsicW = this._intrinsicWidth || 1;
+      var intrinsicH = this._intrinsicHeight || 1;
+      this._svgEl.style.width  = (intrinsicW * snappedZoom) + 'px';
+      this._svgEl.style.height = (intrinsicH * snappedZoom) + 'px';
       this._svgEl.style.transformOrigin = '0 0';
-      this._svgEl.style.transform =
-        'translate(' + snappedPanX + 'px, ' + snappedPanY + 'px) scale(' + snappedZoom + ')';
+      this._svgEl.style.transform = 'translate(' + snappedPanX + 'px, ' + snappedPanY + 'px)';
       var self = this;
       requestAnimationFrame(function () { self._refreshFloatingUiPositions(); });
     },
@@ -6848,27 +6853,22 @@ Vue.component('mermaid-preview', {
     _getContentBounds: function () {
       if (!this._svgEl) return null;
 
+      // viewBox는 Mermaid가 SVG 생성 시 전체 다이어그램 크기로 정확히 설정한다.
+      // getBBox()는 foreignObject 레이아웃 전에 호출되면 부분 bounds를 반환할 수 있어
+      // fitView 계산이 틀려지므로 viewBox를 우선 사용한다.
       var vb = this._svgEl.viewBox && this._svgEl.viewBox.baseVal;
-      var fallback = {
-        x: 0,
-        y: 0,
-        width: (vb && vb.width) || 0,
-        height: (vb && vb.height) || 0
-      };
+      if (vb && vb.width && vb.height) {
+        return { x: vb.x, y: vb.y, width: vb.width, height: vb.height };
+      }
 
       try {
         var box = this._svgEl.getBBox();
         if (box && box.width && box.height) {
-          return {
-            x: box.x,
-            y: box.y,
-            width: box.width,
-            height: box.height
-          };
+          return { x: box.x, y: box.y, width: box.width, height: box.height };
         }
       } catch (e) {}
 
-      return (fallback.width && fallback.height) ? fallback : null;
+      return null;
     },
 
     _setupViewport: function (svgEl, canvas, forcefit) {
@@ -6893,6 +6893,9 @@ Vue.component('mermaid-preview', {
       var bounds = this._getContentBounds();
       var intrinsicWidth = (vb && vb.width) || (bounds && bounds.width) || 1;
       var intrinsicHeight = (vb && vb.height) || (bounds && bounds.height) || 1;
+
+      this._intrinsicWidth  = intrinsicWidth;
+      this._intrinsicHeight = intrinsicHeight;
 
       svgEl.style.width = intrinsicWidth + 'px';
       svgEl.style.height = intrinsicHeight + 'px';
@@ -6976,7 +6979,7 @@ Vue.component('mermaid-preview', {
       var cx = clientX - rect.left;
       var cy = clientY - rect.top;
 
-      var newZoom = Math.max(0.2, Math.min(5.0, this.cfgZoom * factor));
+      var newZoom = Math.max(0.05, Math.min(5.0, this.cfgZoom * factor));
       var ratio   = newZoom / this.cfgZoom;
 
       this.panX    = cx - (cx - this.panX) * ratio;
@@ -7549,7 +7552,7 @@ Vue.component('mermaid-preview', {
       var scaleX = (canvasW - pad * 2) / bounds.width;
       var scaleY = (canvasH - pad * 2) / bounds.height;
       var scale  = Math.min(scaleX, scaleY);
-      scale = Math.max(0.1, Math.min(5.0, scale));
+      scale = Math.min(5.0, scale);
 
       this.cfgZoom = scale;
       this.panX    = (canvasW - bounds.width * scale) / 2 - bounds.x * scale;
