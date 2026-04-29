@@ -72,6 +72,9 @@ Vue.component('mermaid-full-editor', {
     var self = this;
     this.$nextTick(function () {
       self._seedIdAllocators();
+      if (self.hideEditor) {
+        self._attachResizeObserver();
+      }
     });
     window.addEventListener('popstate', this._onPopState);
   },
@@ -79,9 +82,31 @@ Vue.component('mermaid-full-editor', {
   beforeDestroy: function () {
     window.removeEventListener('popstate', this._onPopState);
     if (this.fullScreen) history.back();
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+    }
   },
 
   methods: {
+
+    // hide-editor 모드에서 Bootstrap 모달 등 display:none 컨테이너 안에 마운트될 때
+    // 컨테이너가 0 크기 → 유효 크기로 전환되는 순간 fitView를 호출한다.
+    _attachResizeObserver: function () {
+      if (typeof ResizeObserver === 'undefined') return;
+      var self = this;
+      var previewPane = this.$el && this.$el.querySelector('.gui-editor-shell__preview-pane');
+      if (!previewPane) return;
+      this._resizeObserver = new ResizeObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) {
+          var rect = entries[i].contentRect;
+          if (rect.width > 0 && rect.height > 0) {
+            setTimeout(function () { self.fitView(); }, 50);
+          }
+        }
+      });
+      this._resizeObserver.observe(previewPane);
+    },
 
     // ── 텍스트 에디터에서 편집 ──────────────────────────────────────
     onScriptChange: function (newScript) {
