@@ -119,7 +119,14 @@ Vue.component('mermaid-full-editor', {
 
     updateScriptFromModel: function () {
       this.script = MermaidGenerator.generate(this.model);
-      this.error  = '';
+      try {
+        var parsed = MermaidParser.parse(this.script);
+        this.error = '';
+        this.parseWarning = ModelDiagnostics.reservedIdWarning(this.script, parsed);
+      } catch (e) {
+        this.error = e.message || 'Parse error';
+        this.parseWarning = '';
+      }
     },
 
     _seedIdAllocators: function () {

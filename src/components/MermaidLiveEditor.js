@@ -128,7 +128,14 @@ Vue.component('mermaid-live-editor', {
       // model 변경은 항상 script까지 다시 직렬화해서 양쪽 상태를 맞춘다.
       this.syncSource = 'gui';
       this.script     = MermaidGenerator.generate(this.model);
-      this.error      = '';
+      try {
+        var parsed = MermaidParser.parse(this.script);
+        this.error = '';
+        this.parseWarning = ModelDiagnostics.reservedIdWarning(this.script, parsed);
+      } catch (e) {
+        this.error = e.message || 'Parse error';
+        this.parseWarning = '';
+      }
     },
 
     _seedIdAllocators: function () {

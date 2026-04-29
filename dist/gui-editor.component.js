@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-29T01:43:18.355Z
+ * Built: 2026-04-29T01:57:32.655Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -7935,7 +7935,14 @@ Vue.component('mermaid-full-editor', {
 
     updateScriptFromModel: function () {
       this.script = MermaidGenerator.generate(this.model);
-      this.error  = '';
+      try {
+        var parsed = MermaidParser.parse(this.script);
+        this.error = '';
+        this.parseWarning = ModelDiagnostics.reservedIdWarning(this.script, parsed);
+      } catch (e) {
+        this.error = e.message || 'Parse error';
+        this.parseWarning = '';
+      }
     },
 
     _seedIdAllocators: function () {
