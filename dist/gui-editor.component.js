@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-04-30T05:15:19.841Z
+ * Built: 2026-04-30T06:24:09.418Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
