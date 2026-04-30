@@ -139,8 +139,10 @@
 
     var firstNode = findNode(model.nodes, nodeIds[0]);
     if (!firstNode) return '';
-    var parts = [generateNode(firstNode)];
+    // 이미 앞에서 정의된 노드는 ID만 사용 — 중복 정의 방지
+    var firstStr = usedNodes[firstNode.id] ? firstNode.id : generateNode(firstNode);
     usedNodes[firstNode.id] = true;
+    var parts = [firstStr];
 
     for (var i = 0; i < edgeRefs.length; i++) {
       var edgeMatch = findEdgeByRef(model.edges, edgeRefs[i]);
@@ -148,9 +150,10 @@
       var nextNode = findNode(model.nodes, nodeIds[i + 1]);
       if (!edge || !nextNode) return '';
       if (edgeMatch.index >= 0) usedEdges[edgeMatch.index] = true;
+      var nextStr = usedNodes[nextNode.id] ? nextNode.id : generateNode(nextNode);
       usedNodes[nextNode.id] = true;
       parts.push(generateEdgeOperator(edge));
-      parts.push(generateNode(nextNode));
+      parts.push(nextStr);
     }
 
     return parts.join(' ');
