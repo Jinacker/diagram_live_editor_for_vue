@@ -11,7 +11,7 @@
   var DEFAULT_OPERATOR = '->>';
 
   // 지원 operator 정규식 (activation suffix +/- 포함)
-  var MESSAGE_RE = /^([A-Za-z0-9_\u3131-\uD79D]+)\s*((?:-->>|--x|--\)|-->|->>|-x|-\)|->)[+-]?)\s*([A-Za-z0-9_\u3131-\uD79D]+)\s*:(.*)$/;
+  var MESSAGE_RE = /^([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*?)\s*((?:-->>|--x|--\)|-->|->>|-x|-\)|->)[+-]?)\s*([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*?)\s*:(.*)$/;
 
   // UI 라벨 목록 (MermaidPreview sequence-toolbar 드롭다운)
   var LINE_TYPE_OPTIONS = [

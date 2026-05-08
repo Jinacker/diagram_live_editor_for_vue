@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-05-08T01:27:52.471Z
+ * Built: 2026-05-08T01:54:18.060Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -28,7 +28,7 @@
   var DEFAULT_OPERATOR = '->>';
 
   // 지원 operator 정규식 (activation suffix +/- 포함)
-  var MESSAGE_RE = /^([A-Za-z0-9_\u3131-\uD79D]+)\s*((?:-->>|--x|--\)|-->|->>|-x|-\)|->)[+-]?)\s*([A-Za-z0-9_\u3131-\uD79D]+)\s*:(.*)$/;
+  var MESSAGE_RE = /^([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*?)\s*((?:-->>|--x|--\)|-->|->>|-x|-\)|->)[+-]?)\s*([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*?)\s*:(.*)$/;
 
   // UI 라벨 목록 (MermaidPreview sequence-toolbar 드롭다운)
   var LINE_TYPE_OPTIONS = [
@@ -757,7 +757,7 @@
   var MESSAGE_RE = SequenceMessageCodec.MESSAGE_RE;
   var BLOCK_OPEN_RE = /^(loop|alt|opt|par)(?:\s+(.+))?$/i;
   var RAW_BLOCK_OPEN_RE = /^(rect|critical|break|box)\b(?:\s+(.+))?$/i;
-  var NOTE_OVER_RE = /^note\s+over\s+([A-Za-z0-9_\u3131-\uD79D]+(?:\s*,\s*[A-Za-z0-9_\u3131-\uD79D]+)*)(?:\s*:\s*(.*))?$/i;
+  var NOTE_OVER_RE = /^note\s+over\s+([A-Za-z0-9_\u3131-\uD79D][^:]*?)(?:\s*:\s*(.*))?$/i;
 
   function pushBlock(model, kind, recognized) {
     model._blockStack.push({
@@ -810,7 +810,7 @@
   }
 
   function parseParticipantLine(line, model) {
-    var match = line.match(/^(participant|actor)\s+([A-Za-z0-9_\u3131-\uD79D]+)(?:\s+as\s+(.+))?$/);
+    var match = line.match(/^(participant|actor)\s+([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*?)(?:\s+as\s+(.+))?$/);
     if (!match) return false;
     model.explicitParticipants = true;
     var id = match[2];
@@ -862,7 +862,7 @@
   }
 
   function parseActivationLine(line, model) {
-    var match = line.match(/^(activate|deactivate)\s+([A-Za-z0-9_\u3131-\uD79D]+)$/i);
+    var match = line.match(/^(activate|deactivate)\s+([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*)$/i);
     if (!match) return false;
     ensureParticipant(model, match[2], match[2]);
     model.statements.push({
@@ -1697,7 +1697,16 @@
     }
 
     var trimmed = script.trim();
-    if (/^sequenceDiagram\b/i.test(trimmed) && global.SequenceParser) {
+    // %%{init:...}%% 등 front-matter 줄을 건너뛰고 첫 실제 줄로 다이어그램 타입 판별
+    var firstContentLine = trimmed;
+    var frontLines = trimmed.split('\n');
+    for (var fi = 0; fi < frontLines.length; fi++) {
+      var fl = frontLines[fi].trim();
+      if (!fl || fl.indexOf('%%') === 0) continue;
+      firstContentLine = fl;
+      break;
+    }
+    if (/^sequenceDiagram\b/i.test(firstContentLine) && global.SequenceParser) {
       return global.SequenceParser.parse(script);
     }
 

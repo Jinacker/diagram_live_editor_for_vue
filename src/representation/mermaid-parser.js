@@ -345,7 +345,16 @@
     }
 
     var trimmed = script.trim();
-    if (/^sequenceDiagram\b/i.test(trimmed) && global.SequenceParser) {
+    // %%{init:...}%% 등 front-matter 줄을 건너뛰고 첫 실제 줄로 다이어그램 타입 판별
+    var firstContentLine = trimmed;
+    var frontLines = trimmed.split('\n');
+    for (var fi = 0; fi < frontLines.length; fi++) {
+      var fl = frontLines[fi].trim();
+      if (!fl || fl.indexOf('%%') === 0) continue;
+      firstContentLine = fl;
+      break;
+    }
+    if (/^sequenceDiagram\b/i.test(firstContentLine) && global.SequenceParser) {
       return global.SequenceParser.parse(script);
     }
 

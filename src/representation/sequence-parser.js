@@ -9,7 +9,7 @@
   var MESSAGE_RE = SequenceMessageCodec.MESSAGE_RE;
   var BLOCK_OPEN_RE = /^(loop|alt|opt|par)(?:\s+(.+))?$/i;
   var RAW_BLOCK_OPEN_RE = /^(rect|critical|break|box)\b(?:\s+(.+))?$/i;
-  var NOTE_OVER_RE = /^note\s+over\s+([A-Za-z0-9_\u3131-\uD79D]+(?:\s*,\s*[A-Za-z0-9_\u3131-\uD79D]+)*)(?:\s*:\s*(.*))?$/i;
+  var NOTE_OVER_RE = /^note\s+over\s+([A-Za-z0-9_\u3131-\uD79D][^:]*?)(?:\s*:\s*(.*))?$/i;
 
   function pushBlock(model, kind, recognized) {
     model._blockStack.push({
@@ -62,7 +62,7 @@
   }
 
   function parseParticipantLine(line, model) {
-    var match = line.match(/^(participant|actor)\s+([A-Za-z0-9_\u3131-\uD79D]+)(?:\s+as\s+(.+))?$/);
+    var match = line.match(/^(participant|actor)\s+([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*?)(?:\s+as\s+(.+))?$/);
     if (!match) return false;
     model.explicitParticipants = true;
     var id = match[2];
@@ -114,7 +114,7 @@
   }
 
   function parseActivationLine(line, model) {
-    var match = line.match(/^(activate|deactivate)\s+([A-Za-z0-9_\u3131-\uD79D]+)$/i);
+    var match = line.match(/^(activate|deactivate)\s+([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*)$/i);
     if (!match) return false;
     ensureParticipant(model, match[2], match[2]);
     model.statements.push({
