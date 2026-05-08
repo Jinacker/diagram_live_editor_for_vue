@@ -42,6 +42,15 @@
     return statements;
   }
 
+  // note 사이 등 statement index를 직접 지정해 message를 삽입한다.
+  function insertMessageAtStatementIndex(model, stmtIdx, message) {
+    var statements = cloneStatements(model);
+    var statement = { type: 'message', message: Object.assign({}, message || {}) };
+    var idx = Math.max(0, Math.min(stmtIdx, statements.length));
+    statements.splice(idx, 0, statement);
+    return statements;
+  }
+
   function removeMessageStatements(model, messageIndices) {
     var statements = cloneStatements(model);
     var indices = (messageIndices || []).slice().sort(function (a, b) { return b - a; });
@@ -447,6 +456,7 @@
     listBlocks: listBlocks,
     findEnclosingBranchBlock: findEnclosingBranchBlock,
     insertMessageStatement: insertMessageStatement,
+    insertMessageAtStatementIndex: insertMessageAtStatementIndex,
     removeMessageStatements: removeMessageStatements,
     removeParticipantStatements: removeParticipantStatements,
     wrapMessagesInBlock: wrapMessagesInBlock,

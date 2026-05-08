@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-05-08T02:43:02.648Z
+ * Built: 2026-05-08T03:03:33.995Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -147,6 +147,15 @@
     } else {
       statements.splice(statementIndex, 0, statement);
     }
+    return statements;
+  }
+
+  // note 사이 등 statement index를 직접 지정해 message를 삽입한다.
+  function insertMessageAtStatementIndex(model, stmtIdx, message) {
+    var statements = cloneStatements(model);
+    var statement = { type: 'message', message: Object.assign({}, message || {}) };
+    var idx = Math.max(0, Math.min(stmtIdx, statements.length));
+    statements.splice(idx, 0, statement);
     return statements;
   }
 
@@ -555,6 +564,7 @@
     listBlocks: listBlocks,
     findEnclosingBranchBlock: findEnclosingBranchBlock,
     insertMessageStatement: insertMessageStatement,
+    insertMessageAtStatementIndex: insertMessageAtStatementIndex,
     removeMessageStatements: removeMessageStatements,
     removeParticipantStatements: removeParticipantStatements,
     wrapMessagesInBlock: wrapMessagesInBlock,
@@ -2610,9 +2620,14 @@
       };
       messages.splice(insertAt, 0, newMessage);
 
+      var stmtInsertAt = payload && payload.stmtInsertAt !== undefined && payload.stmtInsertAt !== null
+        ? payload.stmtInsertAt : null;
+
       return finish(model, {
         messages: messages,
-        statements: SequenceStatementUtils.insertMessageStatement(model, insertAt, newMessage)
+        statements: stmtInsertAt !== null
+          ? SequenceStatementUtils.insertMessageAtStatementIndex(model, stmtInsertAt, newMessage)
+          : SequenceStatementUtils.insertMessageStatement(model, insertAt, newMessage)
       });
     },
 
@@ -5660,7 +5675,7 @@
       SequenceMessageDragHandler.attach(svgEl, participantMap, insertSlots, ctx);
       SequenceSvgHandler._attachParticipants(participantTargets, svgEl, ctx);
       SequenceSvgHandler._attachMessages(messages, svgEl, ctx);
-      SequenceSvgHandler._attachNotes(svgEl, model, ctx);
+      SequenceSvgHandler._attachNotes(svgEl, model, ctx, participantMap);
     },
 
     _attachParticipants: function (participantTargets, svgEl, ctx) {
@@ -5870,7 +5885,7 @@
       ctx.focusSequenceMessageInput();
     },
 
-    _attachNotes: function (svgEl, model, ctx) {
+    _attachNotes: function (svgEl, model, ctx, participantMap) {
       var noteRects = Array.prototype.slice.call(svgEl.querySelectorAll('rect.note'));
       var noteStatements = [];
       var statements = (model && model.statements) || [];
@@ -5951,7 +5966,7 @@
             try { bbox = noteGroup.getBBox(); } catch (e) { return; }
             var participantId = noteInfo.statement.participants && noteInfo.statement.participants[0];
             btns = SequenceSvgHandler._createNoteInsertButtons(
-              noteOverlay, bbox, noteInfo.statementIndex, participantId, ctx, cancelHide, scheduleHide
+              noteOverlay, bbox, noteInfo.statementIndex, participantId, svgEl, model, participantMap, ctx, cancelHide, scheduleHide
             );
           });
           noteGroup.addEventListener('mouseleave', scheduleHide);
@@ -5963,7 +5978,7 @@
       }
     },
 
-    _createNoteInsertButtons: function (overlay, bbox, statementIndex, participantId, ctx, onEnter, onLeave) {
+    _createNoteInsertButtons: function (overlay, bbox, statementIndex, participantId, svgEl, model, participantMap, ctx, onEnter, onLeave) {
       var elements = [];
       var cx = bbox.x + bbox.width / 2 + 28;
       var positions = [
@@ -5971,56 +5986,147 @@
         { y: bbox.y + bbox.height + 12, isBefore: false }
       ];
 
+      var hasDrag = !!(participantMap && Object.keys(participantMap).length && svgEl);
+
+      var findNearestByX = function (svgX) {
+        var best = null; var bestDist = Infinity; var SNAP = 80;
+        var ids = Object.keys(participantMap);
+        for (var i = 0; i < ids.length; i++) {
+          var p = participantMap[ids[i]];
+          if (!p) continue;
+          var dx = Math.abs(svgX - p.cx);
+          if (dx < SNAP && dx < bestDist) { bestDist = dx; best = ids[i]; }
+        }
+        return best;
+      };
+
       for (var i = 0; i < positions.length; i++) {
         (function (pos) {
+          // 이 버튼 위치에서의 message insertIndex: isBefore=true이면 statementIndex 이전까지, false면 이후까지
+          var insertIndex = 0;
+          var stmts = (model && model.statements) || [];
+          var limit = pos.isBefore ? statementIndex : statementIndex + 1;
+          for (var si = 0; si < limit && si < stmts.length; si++) {
+            if (stmts[si] && stmts[si].type === 'message') insertIndex++;
+          }
+
           var hit = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-          hit.setAttribute('cx', cx);
-          hit.setAttribute('cy', pos.y);
-          hit.setAttribute('r', '14');
-          hit.setAttribute('fill', '#000');
-          hit.setAttribute('fill-opacity', '0.001');
+          hit.setAttribute('cx', cx); hit.setAttribute('cy', pos.y); hit.setAttribute('r', '14');
+          hit.setAttribute('fill', '#000'); hit.setAttribute('fill-opacity', '0.001');
           hit.style.pointerEvents = 'all';
-          hit.style.cursor = 'pointer';
-          overlay.appendChild(hit);
-          elements.push(hit);
+          hit.style.cursor = hasDrag ? 'crosshair' : 'pointer';
+          overlay.appendChild(hit); elements.push(hit);
 
           var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-          circle.setAttribute('cx', cx);
-          circle.setAttribute('cy', pos.y);
-          circle.setAttribute('r', '10');
-          circle.setAttribute('fill', '#388e3c');
-          circle.setAttribute('stroke', '#fff');
-          circle.setAttribute('stroke-width', '2');
+          circle.setAttribute('cx', cx); circle.setAttribute('cy', pos.y); circle.setAttribute('r', '10');
+          circle.setAttribute('fill', '#388e3c'); circle.setAttribute('stroke', '#fff'); circle.setAttribute('stroke-width', '2');
           circle.style.pointerEvents = 'none';
-          overlay.appendChild(circle);
-          elements.push(circle);
+          overlay.appendChild(circle); elements.push(circle);
 
           var plus = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          plus.setAttribute('x', cx);
-          plus.setAttribute('y', pos.y + 1);
-          plus.setAttribute('text-anchor', 'middle');
-          plus.setAttribute('dominant-baseline', 'middle');
-          plus.setAttribute('fill', '#fff');
-          plus.setAttribute('font-size', '16');
-          plus.setAttribute('font-weight', '700');
+          plus.setAttribute('x', cx); plus.setAttribute('y', pos.y + 1);
+          plus.setAttribute('text-anchor', 'middle'); plus.setAttribute('dominant-baseline', 'middle');
+          plus.setAttribute('fill', '#fff'); plus.setAttribute('font-size', '16'); plus.setAttribute('font-weight', '700');
           plus.style.pointerEvents = 'none';
           plus.textContent = '+';
-          overlay.appendChild(plus);
-          elements.push(plus);
+          overlay.appendChild(plus); elements.push(plus);
 
-          hit.addEventListener('click', function (e) {
-            e.stopPropagation();
-            e.preventDefault();
-            ctx.insertSequenceNoteAt(statementIndex, participantId, pos.isBefore);
-          });
-          hit.addEventListener('mouseenter', function () {
+          // 파란 + 버튼과 동일한 패턴: mousedown으로 drag vs click 분기
+          hit.addEventListener('mousedown', function (e) {
+            if (e.button !== 0) return;
+            e.preventDefault(); e.stopPropagation();
             onEnter();
-            circle.setAttribute('fill', '#43a047');
+
+            var startClient = { x: e.clientX, y: e.clientY };
+            var didDrag = false;
+            var currentTarget = null;
+            var dragLine = SequenceMessageDragHandler._dragLine;
+            var targetLine = SequenceMessageDragHandler._targetLine;
+
+            var clearTarget = function () {
+              if (currentTarget && participantMap[currentTarget] && participantMap[currentTarget].el) {
+                participantMap[currentTarget].el.classList.remove('sequence-participant-drag-target');
+              }
+              if (targetLine) targetLine.style.display = 'none';
+              currentTarget = null;
+            };
+
+            var setTarget = function (id) {
+              clearTarget();
+              currentTarget = id;
+              if (id && participantMap[id]) {
+                var p = participantMap[id];
+                if (p.el) p.el.classList.add('sequence-participant-drag-target');
+                if (targetLine) {
+                  targetLine.setAttribute('x1', p.cx); targetLine.setAttribute('x2', p.cx);
+                  targetLine.setAttribute('y1', p.lifelineTopY); targetLine.setAttribute('y2', p.lifelineBottomY);
+                  targetLine.style.display = '';
+                }
+              }
+            };
+
+            var onMove = function (me) {
+              if (!hasDrag) return;
+              var dx = me.clientX - startClient.x, dy = me.clientY - startClient.y;
+              if (!didDrag && (dx * dx + dy * dy) > 25) {
+                didDrag = true;
+                if (dragLine) {
+                  dragLine.setAttribute('x1', cx); dragLine.setAttribute('y1', pos.y);
+                  dragLine.setAttribute('x2', cx); dragLine.setAttribute('y2', pos.y);
+                  dragLine.style.display = '';
+                }
+              }
+              if (!didDrag) return;
+              var svgPt = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
+              if (dragLine) { dragLine.setAttribute('x2', svgPt.x); dragLine.setAttribute('y2', pos.y); }
+              setTarget(findNearestByX(svgPt.x));
+            };
+
+            var onUp = function (me) {
+              document.removeEventListener('mousemove', onMove);
+              document.removeEventListener('mouseup', onUp);
+              clearTarget();
+              if (dragLine) dragLine.style.display = 'none';
+              if (targetLine) targetLine.style.display = 'none';
+
+              if (!didDrag) {
+                // 클릭 = 파란 + 버튼처럼 toolbar 표시 (Self Loop / Memo)
+                ctx.setState({
+                  selectedSequenceParticipantId: null,
+                  selectedSequenceMessageIndex: null,
+                  selectedSequenceMessageIndices: [],
+                  selectedSequenceBlockId: null,
+                  sequenceToolbar: {
+                    type: 'insert',
+                    participantId: participantId,
+                    insertIndex: insertIndex,
+                    stmtInsertAt: pos.isBefore ? statementIndex : statementIndex + 1,
+                    x: me.clientX,
+                    y: me.clientY
+                  }
+                });
+              } else if (hasDrag) {
+                // 드래그 = 메시지 생성: note 바로 위/아래 statement 위치에 삽입
+                var svgPt = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
+                var target = findNearestByX(svgPt.x);
+                if (target) {
+                  ctx.emit('add-sequence-message', {
+                    fromId: participantId, toId: target,
+                    text: 'new msg', insertIndex: insertIndex,
+                    stmtInsertAt: pos.isBefore ? statementIndex : statementIndex + 1
+                  });
+                }
+              }
+              onLeave();
+            };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
           });
-          hit.addEventListener('mouseleave', function () {
-            circle.setAttribute('fill', '#388e3c');
-            onLeave();
-          });
+
+          hit.addEventListener('click', function (e) { e.stopPropagation(); });
+          hit.addEventListener('mouseenter', function () { onEnter(); circle.setAttribute('fill', '#43a047'); });
+          hit.addEventListener('mouseleave', function () { circle.setAttribute('fill', '#388e3c'); onLeave(); });
         })(positions[i]);
       }
 
@@ -8104,21 +8210,29 @@ Vue.component('mermaid-preview', {
     sequenceToolbarInsertSelfLoop: function () {
       if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'insert') return;
       var tb = this.sequenceToolbar;
-      this.$emit('add-sequence-message', {
-        fromId: tb.participantId,
-        toId: tb.participantId,
-        insertIndex: tb.insertIndex
-      });
+      var payload = { fromId: tb.participantId, toId: tb.participantId, insertIndex: tb.insertIndex };
+      if (tb.stmtInsertAt !== undefined && tb.stmtInsertAt !== null) {
+        payload.stmtInsertAt = tb.stmtInsertAt;
+      }
+      this.$emit('add-sequence-message', payload);
       this.sequenceToolbar = null;
     },
 
     sequenceToolbarInsertMemo: function () {
       if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'insert') return;
       var tb = this.sequenceToolbar;
-      this.$emit('create-sequence-note', {
-        participantId: tb.participantId,
-        insertIndex: tb.insertIndex
-      });
+      if (tb.stmtInsertAt !== undefined && tb.stmtInsertAt !== null) {
+        this.$emit('insert-sequence-note-at', {
+          statementIndex: tb.stmtInsertAt,
+          participantId: tb.participantId,
+          isBefore: true
+        });
+      } else {
+        this.$emit('create-sequence-note', {
+          participantId: tb.participantId,
+          insertIndex: tb.insertIndex
+        });
+      }
       this.sequenceToolbar = null;
     },
 

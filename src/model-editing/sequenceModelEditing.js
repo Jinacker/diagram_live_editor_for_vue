@@ -128,9 +128,14 @@
       };
       messages.splice(insertAt, 0, newMessage);
 
+      var stmtInsertAt = payload && payload.stmtInsertAt !== undefined && payload.stmtInsertAt !== null
+        ? payload.stmtInsertAt : null;
+
       return finish(model, {
         messages: messages,
-        statements: SequenceStatementUtils.insertMessageStatement(model, insertAt, newMessage)
+        statements: stmtInsertAt !== null
+          ? SequenceStatementUtils.insertMessageAtStatementIndex(model, stmtInsertAt, newMessage)
+          : SequenceStatementUtils.insertMessageStatement(model, insertAt, newMessage)
       });
     },
 

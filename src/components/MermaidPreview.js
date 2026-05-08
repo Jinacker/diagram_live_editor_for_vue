@@ -1270,21 +1270,29 @@ Vue.component('mermaid-preview', {
     sequenceToolbarInsertSelfLoop: function () {
       if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'insert') return;
       var tb = this.sequenceToolbar;
-      this.$emit('add-sequence-message', {
-        fromId: tb.participantId,
-        toId: tb.participantId,
-        insertIndex: tb.insertIndex
-      });
+      var payload = { fromId: tb.participantId, toId: tb.participantId, insertIndex: tb.insertIndex };
+      if (tb.stmtInsertAt !== undefined && tb.stmtInsertAt !== null) {
+        payload.stmtInsertAt = tb.stmtInsertAt;
+      }
+      this.$emit('add-sequence-message', payload);
       this.sequenceToolbar = null;
     },
 
     sequenceToolbarInsertMemo: function () {
       if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'insert') return;
       var tb = this.sequenceToolbar;
-      this.$emit('create-sequence-note', {
-        participantId: tb.participantId,
-        insertIndex: tb.insertIndex
-      });
+      if (tb.stmtInsertAt !== undefined && tb.stmtInsertAt !== null) {
+        this.$emit('insert-sequence-note-at', {
+          statementIndex: tb.stmtInsertAt,
+          participantId: tb.participantId,
+          isBefore: true
+        });
+      } else {
+        this.$emit('create-sequence-note', {
+          participantId: tb.participantId,
+          insertIndex: tb.insertIndex
+        });
+      }
       this.sequenceToolbar = null;
     },
 
