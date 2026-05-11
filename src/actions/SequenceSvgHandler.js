@@ -83,7 +83,7 @@
       }
       function sharedScheduleHide() {
         sharedCancelHide();
-        shared.hideTimer = setTimeout(function () { sharedHideNow(); }, 150);
+        shared.hideTimer = setTimeout(function () { sharedHideNow(); }, 500);
       }
 
       for (var i = 0; i < messages.length; i++) {
@@ -144,22 +144,37 @@
 
       var modelMsg = model && model.messages && model.messages[data.index];
       var msgFromId = modelMsg ? modelMsg.from : null;
+      var msgToId = modelMsg ? modelMsg.to : null;
 
       hitEl.addEventListener('mouseenter', function () {
         if (visualEl) visualEl.classList.add('sequence-message-hovered');
         if (textEl) textEl.classList.add('sequence-message-text-hovered');
         if (!data.bbox) return;
         sharedHideNow();
-        var fromEntry = msgFromId && participantMap && participantMap[msgFromId];
         var bboxCx = data.bbox.x + data.bbox.width / 2;
-        var cx = fromEntry
-          ? fromEntry.cx + (fromEntry.cx < bboxCx ? 28 : -28)
-          : (data.bbox.x + 20);
-        shared.btns = SequenceSvgHandler._createNoteInsertButtons(
-          msgOverlay, data.bbox, msgStmtIndex, msgFromId,
-          svgEl, model, participantMap, ctx,
-          sharedCancelHide, sharedScheduleHide, cx
-        );
+        var allBtns = [];
+
+        var fromEntry = msgFromId && participantMap && participantMap[msgFromId];
+        if (fromEntry) {
+          var fromCx = fromEntry.cx + (fromEntry.cx < bboxCx ? 28 : -28);
+          allBtns = allBtns.concat(SequenceSvgHandler._createNoteInsertButtons(
+            msgOverlay, data.bbox, msgStmtIndex, msgFromId,
+            svgEl, model, participantMap, ctx,
+            sharedCancelHide, sharedScheduleHide, fromCx
+          ));
+        }
+
+        var toEntry = msgToId && msgToId !== msgFromId && participantMap && participantMap[msgToId];
+        if (toEntry) {
+          var toCx = toEntry.cx + (toEntry.cx < bboxCx ? 28 : -28);
+          allBtns = allBtns.concat(SequenceSvgHandler._createNoteInsertButtons(
+            msgOverlay, data.bbox, msgStmtIndex, msgToId,
+            svgEl, model, participantMap, ctx,
+            sharedCancelHide, sharedScheduleHide, toCx
+          ));
+        }
+
+        shared.btns = allBtns;
       });
       hitEl.addEventListener('mouseleave', function () {
         if (visualEl) visualEl.classList.remove('sequence-message-hovered');

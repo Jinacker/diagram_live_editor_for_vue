@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-05-11T01:06:31.117Z
+ * Built: 2026-05-11T01:59:39.473Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -5541,20 +5541,58 @@
         });
       }
 
-      // 2차: 메인 title을 제외한 나머지 loopText만 branch title에 순서대로 연결한다.
-      // SVG의 loopText는 깊이 우선(안쪽 블록 branch label이 먼저)으로 렌더되므로
-      // 가장 깊은 블록부터 처리해야 Y-order 소비 순서가 맞는다.
+      // 2차: 모든 블록의 branch를 statementIndex 순서로 모아 Y순 loopText와 1:1 매칭한다.
+      // depth-first 처리는 순차 배치된 블록(loop 안 alt, opt 안 alt 등)에서 loopText를
+      // 잘못 소비하는 문제가 있으므로, SVG 렌더 순서(= statementIndex 순서)로 통합 처리한다.
+
+      // 분기 클릭 라우팅용 데이터 수집
+      var allBranchClickRanges = [];
+      var branchElRefs = [];
+      var allBranchItems = [];
+
+      // 모든 블록의 branch를 statementIndex 순서로 수집
+      var allBranchAssignments = [];
+      for (var j = 0; j < blockBindings.length; j++) {
+        var bb = blockBindings[j].block;
+        for (var b = 0; b < bb.branchIndices.length; b++) {
+          allBranchAssignments.push({ bindingIdx: j, branchIdx: b, si: bb.branchIndices[b] });
+        }
+      }
+      allBranchAssignments.sort(function (a, c) { return a.si - c.si; });
+
+      // statementIndex 순서로 loopText 할당 → SVG Y순서와 일치
+      var branchElByStmt = {};
+      for (var ai = 0; ai < allBranchAssignments.length; ai++) {
+        var assign = allBranchAssignments[ai];
+        var btelEl = this._findNextUnusedLoopText(allLoopTextEls, usedLoopIndices);
+        branchElByStmt[assign.si] = btelEl;
+
+        var bBlock = blockBindings[assign.bindingIdx].block;
+        var bInfo = {
+          blockId: bBlock.id,
+          statementIndex: assign.si,
+          text: (stmts && stmts[assign.si] ? stmts[assign.si].text : '') || ''
+        };
+        allBranchItems.push(bInfo);
+
+        if (btelEl) {
+          branchElRefs.push({ el: btelEl, info: bInfo });
+          if (btelEl.getBBox) {
+            try {
+              var bbb = btelEl.getBBox();
+              allBranchClickRanges.push(Object.assign({
+                yMin: bbb.y - 14,
+                yMax: bbb.y + Math.max(bbb.height, 16) + 14
+              }, bInfo));
+            } catch (eBBox) {}
+          }
+        }
+      }
+
+      // 각 블록에 이벤트 부착 (block-level 처리 순서는 statementIndex 기준)
       var sortedBindings = blockBindings.slice().sort(function (a, b) {
-        var da = a.block.depth !== undefined ? a.block.depth : 0;
-        var db = b.block.depth !== undefined ? b.block.depth : 0;
-        if (db !== da) return db - da; // 깊은 것 먼저
         return a.block.statementIndex - b.block.statementIndex;
       });
-
-      // 분기 클릭 라우팅용 데이터 수집 (3단계 전략)
-      var allBranchClickRanges = []; // 전략1: Y 범위 (getBBox 성공 시)
-      var branchElRefs = [];          // 전략2: element identity (elementsFromPoint)
-      var allBranchItems = [];        // 전략3: 항상 채워지는 모델 기반 목록
 
       for (var j = 0; j < sortedBindings.length; j++) {
         var binding = sortedBindings[j];
@@ -5562,30 +5600,9 @@
         var branchTitleEls = [];
         var branchStatements = [];
         for (var b = 0; b < boundBlock.branchIndices.length; b++) {
-          var btelEl = this._findNextUnusedLoopText(allLoopTextEls, usedLoopIndices);
-          branchTitleEls.push(btelEl);
           var si = boundBlock.branchIndices[b];
+          branchTitleEls.push(branchElByStmt[si] || null);
           branchStatements.push(stmts && stmts[si] ? stmts[si] : {});
-
-          var bInfo = {
-            blockId: boundBlock.id,
-            statementIndex: si,
-            text: (stmts && stmts[si] ? stmts[si].text : '') || ''
-          };
-          allBranchItems.push(bInfo);
-
-          if (btelEl) {
-            branchElRefs.push({ el: btelEl, info: bInfo });
-            if (btelEl.getBBox) {
-              try {
-                var bbb = btelEl.getBBox();
-                allBranchClickRanges.push(Object.assign({
-                  yMin: bbb.y - 14,
-                  yMax: bbb.y + Math.max(bbb.height, 16) + 14
-                }, bInfo));
-              } catch (eBBox) {}
-            }
-          }
         }
 
         this._attachBlockElementInteractions(
@@ -5614,20 +5631,7 @@
           try {
             var matched = null;
 
-            // 전략1: pre-computed Y 범위
-            if (!matched && allBranchClickRanges.length) {
-              var svgPt = SvgPositionTracker.getSVGPoint(svgEl, e.clientX, e.clientY);
-              if (svgPt) {
-                for (var ri = 0; ri < allBranchClickRanges.length; ri++) {
-                  var range = allBranchClickRanges[ri];
-                  if (svgPt.y >= range.yMin && svgPt.y <= range.yMax) {
-                    matched = range; break;
-                  }
-                }
-              }
-            }
-
-            // 전략2: 클릭 위치의 모든 element 중 branch loopText 찾기
+            // 전략1: element identity — 클릭 위치의 element가 branch loopText 본체인지 직접 확인
             if (!matched && branchElRefs.length && document.elementsFromPoint) {
               var pointEls = document.elementsFromPoint(e.clientX, e.clientY);
               outer: for (var pi = 0; pi < pointEls.length; pi++) {
@@ -5639,17 +5643,55 @@
               }
             }
 
-            // 전략3: 텍스트 내용 매칭 (loopText 클래스 한정)
+            // 전략2: pre-computed Y 범위 (element identity 실패 시 fallback)
+            if (!matched && allBranchClickRanges.length) {
+              var svgPt = SvgPositionTracker.getSVGPoint(svgEl, e.clientX, e.clientY);
+              if (svgPt) {
+                var bestRange = null, bestRangeDist = Infinity;
+                for (var ri = 0; ri < allBranchClickRanges.length; ri++) {
+                  var range = allBranchClickRanges[ri];
+                  if (svgPt.y >= range.yMin && svgPt.y <= range.yMax) {
+                    var midY = (range.yMin + range.yMax) / 2;
+                    var dist = Math.abs(svgPt.y - midY);
+                    if (dist < bestRangeDist) { bestRangeDist = dist; bestRange = range; }
+                  }
+                }
+                if (bestRange) matched = bestRange;
+              }
+            }
+
+            // 전략3: 텍스트 내용 매칭 (loopText 클래스 한정), 중복 텍스트는 Y위치로 가장 가까운 것 선택
             if (!matched && allBranchItems.length && document.elementsFromPoint) {
               var pointEls3 = document.elementsFromPoint(e.clientX, e.clientY);
               outer3: for (var pi3 = 0; pi3 < pointEls3.length; pi3++) {
                 var pel = pointEls3[pi3];
                 if (!pel || !pel.classList || !pel.classList.contains('loopText')) continue;
                 var pelText = pel.textContent ? pel.textContent.trim().replace(/^\[|\]$/g, '') : '';
+                var pelY = null;
+                try { pelY = pel.getBBox ? pel.getBBox().y : null; } catch (eY) {}
+
+                var textMatches = [];
                 for (var bi3 = 0; bi3 < allBranchItems.length; bi3++) {
                   if (allBranchItems[bi3].text && pelText === allBranchItems[bi3].text) {
-                    matched = allBranchItems[bi3]; break outer3;
+                    textMatches.push(allBranchItems[bi3]);
                   }
+                }
+                if (textMatches.length === 1) {
+                  matched = textMatches[0]; break outer3;
+                } else if (textMatches.length > 1 && pelY !== null) {
+                  // 중복 텍스트: allBranchClickRanges Y 중심과 pelY 거리 기준으로 가장 가까운 것 선택
+                  var bestMatch = null, bestDist3 = Infinity;
+                  for (var ti = 0; ti < textMatches.length; ti++) {
+                    for (var ri3 = 0; ri3 < allBranchClickRanges.length; ri3++) {
+                      if (allBranchClickRanges[ri3].statementIndex === textMatches[ti].statementIndex) {
+                        var midY3 = (allBranchClickRanges[ri3].yMin + allBranchClickRanges[ri3].yMax) / 2;
+                        var d3 = Math.abs(pelY - midY3);
+                        if (d3 < bestDist3) { bestDist3 = d3; bestMatch = textMatches[ti]; }
+                        break;
+                      }
+                    }
+                  }
+                  if (bestMatch) { matched = bestMatch; break outer3; }
                 }
               }
             }
@@ -5993,7 +6035,7 @@
       }
       function sharedScheduleHide() {
         sharedCancelHide();
-        shared.hideTimer = setTimeout(function () { sharedHideNow(); }, 150);
+        shared.hideTimer = setTimeout(function () { sharedHideNow(); }, 500);
       }
 
       for (var i = 0; i < messages.length; i++) {
@@ -6054,22 +6096,37 @@
 
       var modelMsg = model && model.messages && model.messages[data.index];
       var msgFromId = modelMsg ? modelMsg.from : null;
+      var msgToId = modelMsg ? modelMsg.to : null;
 
       hitEl.addEventListener('mouseenter', function () {
         if (visualEl) visualEl.classList.add('sequence-message-hovered');
         if (textEl) textEl.classList.add('sequence-message-text-hovered');
         if (!data.bbox) return;
         sharedHideNow();
-        var fromEntry = msgFromId && participantMap && participantMap[msgFromId];
         var bboxCx = data.bbox.x + data.bbox.width / 2;
-        var cx = fromEntry
-          ? fromEntry.cx + (fromEntry.cx < bboxCx ? 28 : -28)
-          : (data.bbox.x + 20);
-        shared.btns = SequenceSvgHandler._createNoteInsertButtons(
-          msgOverlay, data.bbox, msgStmtIndex, msgFromId,
-          svgEl, model, participantMap, ctx,
-          sharedCancelHide, sharedScheduleHide, cx
-        );
+        var allBtns = [];
+
+        var fromEntry = msgFromId && participantMap && participantMap[msgFromId];
+        if (fromEntry) {
+          var fromCx = fromEntry.cx + (fromEntry.cx < bboxCx ? 28 : -28);
+          allBtns = allBtns.concat(SequenceSvgHandler._createNoteInsertButtons(
+            msgOverlay, data.bbox, msgStmtIndex, msgFromId,
+            svgEl, model, participantMap, ctx,
+            sharedCancelHide, sharedScheduleHide, fromCx
+          ));
+        }
+
+        var toEntry = msgToId && msgToId !== msgFromId && participantMap && participantMap[msgToId];
+        if (toEntry) {
+          var toCx = toEntry.cx + (toEntry.cx < bboxCx ? 28 : -28);
+          allBtns = allBtns.concat(SequenceSvgHandler._createNoteInsertButtons(
+            msgOverlay, data.bbox, msgStmtIndex, msgToId,
+            svgEl, model, participantMap, ctx,
+            sharedCancelHide, sharedScheduleHide, toCx
+          ));
+        }
+
+        shared.btns = allBtns;
       });
       hitEl.addEventListener('mouseleave', function () {
         if (visualEl) visualEl.classList.remove('sequence-message-hovered');
