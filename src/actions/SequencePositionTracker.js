@@ -283,90 +283,172 @@
       return results;
     },
 
-    collectInsertSlots: function (participantMap, messages) {
-      var rows = [];
-      for (var i = 0; i < messages.length; i++) {
-        if (messages[i] && messages[i].rowY !== null && messages[i].rowY !== undefined) {
-          rows.push(messages[i].rowY);
+    collectInsertSlots: function (participantMap, messages, notes, model) {
+      var stmts = (model && model.statements) || [];
+
+      // 각 message의 statement index 사전 계산
+      var msgStmtIndices = [];
+      var mc = 0;
+      for (var s = 0; s < stmts.length; s++) {
+        if (stmts[s] && stmts[s].type === 'message') {
+          msgStmtIndices[mc] = s;
+          mc++;
         }
       }
 
-      rows.sort(function (a, b) { return a - b; });
+      // message와 note를 Y 기준으로 합친 이벤트 목록 생성
+      var events = [];
+      for (var i = 0; i < messages.length; i++) {
+        if (messages[i] && messages[i].rowY !== null && messages[i].rowY !== undefined) {
+          var mIdx = messages[i].index !== undefined ? messages[i].index : i;
+          events.push({
+            y: messages[i].rowY,
+            isMessage: true,
+            statementIndex: msgStmtIndices[mIdx] !== undefined ? msgStmtIndices[mIdx] : stmts.length
+          });
+        }
+      }
+      for (var n = 0; n < (notes || []).length; n++) {
+        var nb = notes[n] && notes[n].bbox;
+        if (nb) {
+          events.push({
+            y: nb.y + nb.height / 2,
+            isMessage: false,
+            statementIndex: notes[n].statementIndex
+          });
+        }
+      }
+      events.sort(function (a, b) { return a.y - b.y; });
+
+      // 각 이벤트 앞에 있는 message 수 계산
+      var msgCountBefore = [];
+      var runCount = 0;
+      for (var e = 0; e < events.length; e++) {
+        msgCountBefore.push(runCount);
+        if (events[e].isMessage) runCount++;
+      }
+      var totalMessages = runCount;
 
       var ids = Object.keys(participantMap);
       if (!ids.length) return [];
-
       var sample = participantMap[ids[0]];
       if (!sample) return [];
 
       var slots = [];
       var topY = sample.lifelineTopY + 18;
       var bottomY = sample.lifelineBottomY - 18;
-
       var MIN_SLOT_GAP = 34;
 
-      if (!rows.length) {
-        slots.push({
-          y: (topY + bottomY) / 2,
-          insertIndex: 0
-        });
+      if (!events.length) {
+        slots.push({ y: (topY + bottomY) / 2, insertIndex: 0, stmtInsertAt: 0 });
         return slots;
       }
 
+      // 맨 위 슬롯: 첫 이벤트 앞
       slots.push({
-        y: Math.max(topY + 12, rows[0] - 48),
-        insertIndex: 0
+        y: Math.max(topY + 12, events[0].y - 48),
+        insertIndex: 0,
+        stmtInsertAt: events[0].statementIndex
       });
 
-      for (var r = 0; r < rows.length - 1; r++) {
-        var midY = (rows[r] + rows[r + 1]) / 2;
-        slots.push({
-          y: midY,
-          insertIndex: r + 1
-        });
+      // 이벤트 사이 슬롯
+      // 두 이벤트 사이에 end 문이 있으면 블록 안/밖 슬롯 두 개 생성
+      for (var r = 0; r < events.length - 1; r++) {
+        var midY = (events[r].y + events[r + 1].y) / 2;
+        var lastEndIdx = -1;
+        for (var si = events[r].statementIndex + 1; si < events[r + 1].statementIndex; si++) {
+          if (stmts[si] && stmts[si].type === 'end') {
+            lastEndIdx = si; // 마지막 end → outermost block 직전
+          }
+        }
+
+        if (lastEndIdx !== -1) {
+          // 블록 경계: 안쪽(end 앞)과 바깥쪽(다음 이벤트 앞) 두 슬롯
+          slots.push({
+            y: midY - 20,
+            insertIndex: msgCountBefore[r + 1],
+            stmtInsertAt: lastEndIdx,
+            _nomerge: true
+          });
+          slots.push({
+            y: midY + 20,
+            insertIndex: msgCountBefore[r + 1],
+            stmtInsertAt: events[r + 1].statementIndex,
+            _nomerge: true
+          });
+        } else {
+          slots.push({
+            y: midY,
+            insertIndex: msgCountBefore[r + 1],
+            stmtInsertAt: events[r + 1].statementIndex
+          });
+        }
       }
 
-      // 맨 아래보다는 중간 삽입을 우선하지만, 마지막 뒤에 추가할 슬롯도 유지한다.
+      // 맨 아래 슬롯: 마지막 이벤트 뒤
       slots.push({
-        y: Math.min(bottomY - 12, rows[rows.length - 1] + 48),
-        insertIndex: rows.length
+        y: Math.min(bottomY - 12, events[events.length - 1].y + 48),
+        insertIndex: totalMessages,
+        stmtInsertAt: events[events.length - 1].statementIndex + 1
       });
 
-      // 맨 위/맨 아래 슬롯은 항상 유지하고,
-      // 중간 슬롯끼리만 합쳐 + 버튼 겹침을 줄인다.
       if (slots.length <= 2) return slots;
 
+      // 중간 슬롯 간격 병합 (맨 위/아래 및 _nomerge 플래그 슬롯은 유지)
       var deduped = [slots[0]];
-      for (var s = 1; s < slots.length - 1; s++) {
-        var current = slots[s];
+      for (var d = 1; d < slots.length - 1; d++) {
+        var cur = slots[d];
         var prev = deduped[deduped.length - 1];
-        if (prev !== slots[0] && Math.abs(current.y - prev.y) < MIN_SLOT_GAP) {
-          prev.y = (prev.y + current.y) / 2;
-          prev.insertIndex = Math.max(prev.insertIndex, current.insertIndex);
+        if (!cur._nomerge && !prev._nomerge && prev !== slots[0] && Math.abs(cur.y - prev.y) < MIN_SLOT_GAP) {
+          prev.y = (prev.y + cur.y) / 2;
+          prev.insertIndex = Math.max(prev.insertIndex, cur.insertIndex);
+          prev.stmtInsertAt = Math.max(prev.stmtInsertAt, cur.stmtInsertAt);
         } else {
-          deduped.push(current);
+          deduped.push(cur);
         }
       }
       deduped.push(slots[slots.length - 1]);
 
-      // 끝 슬롯은 항상 남기되, 바로 옆 슬롯과 최소 간격을 강제로 확보한다.
       if (deduped.length >= 2) {
-        var first = deduped[0];
-        var second = deduped[1];
+        var first = deduped[0], second = deduped[1];
         if (Math.abs(second.y - first.y) < MIN_SLOT_GAP) {
           first.y = Math.max(topY + 8, second.y - MIN_SLOT_GAP);
         }
       }
-
       if (deduped.length >= 2) {
-        var last = deduped[deduped.length - 1];
-        var beforeLast = deduped[deduped.length - 2];
+        var last = deduped[deduped.length - 1], beforeLast = deduped[deduped.length - 2];
         if (Math.abs(last.y - beforeLast.y) < MIN_SLOT_GAP) {
           last.y = Math.min(bottomY - 8, beforeLast.y + MIN_SLOT_GAP);
         }
       }
 
       return deduped;
+    },
+
+    collectNotePositions: function (svgEl, model) {
+      var statements = (model && model.statements) || [];
+      var noteStatements = [];
+      for (var i = 0; i < statements.length; i++) {
+        if (statements[i] && statements[i].type === 'note') {
+          noteStatements.push({ statementIndex: i });
+        }
+      }
+
+      var noteRects = Array.prototype.slice.call(svgEl.querySelectorAll('rect.note'));
+      var seenGroups = [], noteGroups = [];
+      for (var r = 0; r < noteRects.length; r++) {
+        var g = noteRects[r].parentNode;
+        if (g && seenGroups.indexOf(g) === -1) { seenGroups.push(g); noteGroups.push(g); }
+      }
+
+      var results = [];
+      for (var j = 0; j < Math.min(noteGroups.length, noteStatements.length); j++) {
+        var bbox = null;
+        try { bbox = noteGroups[j].getBBox(); } catch (e) {}
+        if (!bbox) continue;
+        results.push({ statementIndex: noteStatements[j].statementIndex, bbox: bbox });
+      }
+      return results;
     },
 
     refineParticipantLifelines: function (participantMap, messages) {

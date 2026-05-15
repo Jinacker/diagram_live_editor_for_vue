@@ -92,6 +92,27 @@ body {
   flex-direction: column;
 }
 
+.live-editor-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+mermaid-editor,
+mermaid-preview {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+mermaid-toolbar {
+  display: block;
+  flex: 0 0 auto;
+}
+
 /* ============================================
    앱 헤더 (다크 네이비)
    ============================================ */
@@ -217,8 +238,15 @@ body {
 .editor-container {
   display: flex;
   flex: 1;
+  min-height: 0;
+  height: calc(100vh - 52px);
   overflow: hidden;
   position: relative;
+  gap: 18px;
+  padding: 18px;
+  background:
+    radial-gradient(circle at top left, rgba(21, 101, 192, 0.08), transparent 34%),
+    linear-gradient(180deg, #f7f9fd 0%, #eef3f9 100%);
 }
 
 /* ============================================
@@ -228,18 +256,23 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xl);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-md);
 }
 
 .panel--editor {
-  width: 38%;
-  min-width: 280px;
+  flex: 1 1 50%;
+  min-height: 620px;
   background: var(--bg-editor);
-  border-right: 1px solid rgba(0, 0, 0, 0.3);
 }
 
 .panel--preview {
-  flex: 1;
-  background: var(--bg-main);
+  flex: 1 1 50%;
+  min-height: 620px;
+  background: var(--bg-surface);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -249,9 +282,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
-  height: 40px;
-  background: var(--bg-editor-panel);
+  padding: 12px 16px;
+  min-height: 54px;
+  background: #fbfcfe;
   border-bottom: 1px solid var(--border-dark);
   flex-shrink: 0;
 }
@@ -276,6 +309,13 @@ body {
   animation: pulse 2.5s ease-in-out infinite;
 }
 
+.panel__meta {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
@@ -289,10 +329,55 @@ body {
   overflow: hidden;
 }
 
-.code-editor__textarea {
+.code-editor__stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.code-editor__highlight-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.code-editor__highlight-content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  min-width: 100%;
+  margin: 0;
+  padding: 16px 20px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.75;
+  letter-spacing: 0.2px;
+  white-space: pre;
+  color: transparent;
+}
+
+.code-editor__highlight-line {
+  display: block;
+  min-height: 1.75em;
+  border-radius: 4px;
+}
+
+.code-editor__highlight-line--active {
+  background: linear-gradient(180deg, rgba(250, 204, 21, 0.28), rgba(250, 204, 21, 0.18));
+  box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.16);
+}
+
+.code-editor__textarea {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  background: var(--bg-editor);
+  background: transparent;
   color: var(--text-primary);
   border: none;
   outline: none;
@@ -308,7 +393,7 @@ body {
 }
 
 .code-editor__textarea:focus {
-  background: var(--bg-editor-focus);
+  background: transparent;
 }
 
 .code-editor__textarea::placeholder {
@@ -349,31 +434,143 @@ body {
   flex-shrink: 0;
 }
 
+
 /* ============================================
    툴바 (라이트)
    ============================================ */
 .toolbar {
   display: flex;
-  align-items: center;
-  padding: 6px 14px;
-  gap: 4px;
+  flex-direction: column;
+  padding: 10px 16px 12px;
+  gap: 8px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
-  flex-wrap: wrap;
 }
 
 .toolbar__group {
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+
+.toolbar__main,
+.toolbar__sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.toolbar__main {
+  display: none;
+}
+
+.toolbar__title-block {
+  display: flex;
+  flex-direction: column;
   gap: 2px;
 }
 
-.toolbar__separator {
-  width: 1px;
-  height: 20px;
-  background: var(--border-light);
-  margin: 0 8px;
+.toolbar__eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.toolbar__title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.toolbar__group--zoom {
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+.toolbar__add-node-wrap {
+  position: relative;
+}
+
+.toolbar__shape-picker {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 260px;
+  padding: 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  z-index: 300;
+}
+
+.toolbar__shape-picker-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 4px 6px 8px;
+}
+
+.toolbar__shape-picker-title--compact {
+  padding-top: 0;
+}
+
+.toolbar__shape-input {
+  width: 100%;
+  height: 34px;
+  margin-bottom: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.toolbar__shape-input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--accent-blue-glow);
+}
+
+.toolbar__shape-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.toolbar__shape-color-row {
+  padding: 0 2px 10px;
+}
+
+.toolbar__shape-picker-btn {
+  min-height: 58px;
+  padding: 7px 4px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-toolbar);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.toolbar__shape-picker-btn:hover {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+  color: #fff;
 }
 
 .toolbar__btn {
@@ -393,6 +590,31 @@ body {
   transition: all var(--transition-fast);
   white-space: nowrap;
   height: 30px;
+}
+
+.toolbar__icon-btn {
+  height: 32px;
+  min-width: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: #f6f8fc;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.toolbar__icon-btn:hover {
+  background: var(--bg-light-hover);
+  color: var(--text-primary);
+  border-color: #b8c4dc;
+}
+
+.toolbar__icon-btn--wide {
+  min-width: 54px;
 }
 
 .toolbar__btn:hover {
@@ -469,31 +691,45 @@ body {
    ============================================ */
 .preview-area {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  background: var(--bg-main);
+  min-height: 0;
+  padding: 16px;
+  background:
+    linear-gradient(180deg, rgba(245, 248, 252, 0.92), rgba(237, 242, 249, 0.92)),
+    repeating-linear-gradient(
+      0deg,
+      rgba(27, 42, 74, 0.028) 0,
+      rgba(27, 42, 74, 0.028) 1px,
+      transparent 1px,
+      transparent 28px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(27, 42, 74, 0.028) 0,
+      rgba(27, 42, 74, 0.028) 1px,
+      transparent 1px,
+      transparent 28px
+    );
 }
 
 .preview-area__canvas {
-  background: var(--bg-surface);
+  position: absolute;
+  inset: 16px;
+  background: #ffffff;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-light);
-  min-width: 300px;
-  min-height: 200px;
-  width: 100%;
-  height: 100%;
-  padding: 0;
+  min-width: 0;
+  min-height: 0;
   box-shadow: var(--shadow-md);
-  position: relative;
   overflow: hidden;
-  display: flex;
-  align-items: stretch;
-  justify-content: stretch;
+  display: block;
   transition: box-shadow var(--transition-normal);
+}
+
+.preview-area__svg-host {
+  position: absolute;
+  inset: 0;
 }
 
 .preview-area__canvas:hover {
@@ -505,12 +741,24 @@ body {
 }
 
 .preview-area__canvas svg {
-  width: 100%;
-  height: 100%;
   display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  will-change: transform;
+  /* CSS transform이 위치/크기를 관리. absolute로 레이아웃 흐름에서 분리 */
+}
+
+.preview-area__canvas svg text,
+.preview-area__canvas svg tspan {
+  text-rendering: geometricPrecision;
+  paint-order: stroke fill;
 }
 
 .preview-area__empty {
+  position: absolute;
+  inset: 16px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -519,6 +767,9 @@ body {
   color: var(--text-muted);
   padding: 40px;
   text-align: center;
+  border: 1px dashed rgba(21, 101, 192, 0.24);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.78);
 }
 
 .preview-area__empty-icon {
@@ -556,14 +807,20 @@ body {
    노드 인라인 편집
    ============================================ */
 .node-edit-overlay {
-  position: fixed;
+  position: absolute;
   z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: none;
+  overflow: visible;
+  background: transparent;
 }
 
 .node-edit-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
   background: var(--bg-surface);
   color: var(--text-primary);
   border: 2px solid var(--accent-blue);
@@ -607,7 +864,7 @@ body {
    컨텍스트 메뉴
    ============================================ */
 .context-menu {
-  position: fixed;
+  position: absolute;
   z-index: 2000;
   background: var(--bg-surface);
   border: 1px solid var(--border-light);
@@ -704,12 +961,219 @@ body {
 
 .context-menu__shapes-grid .context-menu__shape-btn {
   flex: none;
+  min-height: 58px;
+  padding: 7px 4px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: normal;
+  overflow: visible;
+}
+
+.context-menu__shape-icon {
+  width: 28px;
+  height: 20px;
+  position: relative;
+  display: inline-block;
+  border: 1.5px solid currentColor;
+  background: rgba(255, 255, 255, 0.9);
+  color: inherit;
+}
+
+.context-menu__shape-text {
+  font-size: 10px;
+  line-height: 1.1;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: inherit;
+  text-align: center;
+}
+
+.context-menu__color-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 12px 10px;
+  flex-wrap: wrap;
+}
+
+.context-menu__color-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(27, 42, 74, 0.18);
+  background: transparent;
+  cursor: pointer;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.context-menu__color-btn:hover {
+  transform: scale(1.08);
+  box-shadow: 0 0 0 2px rgba(21, 101, 192, 0.18);
+}
+
+.context-menu__color-btn--selected {
+  transform: scale(1.08);
+  box-shadow: 0 0 0 2px rgba(21, 101, 192, 0.22), 0 0 0 4px rgba(21, 101, 192, 0.08);
+}
+
+.context-menu__color-btn--clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  font-size: 0;
+  background: #fff;
+  border-color: rgba(27, 42, 74, 0.18);
+  position: relative;
+}
+
+.context-menu__color-btn--clear::before {
+  content: 'x';
+  color: #64748b;
   font-size: 11px;
-  padding: 5px 4px;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.context-menu__shape-icon--rect {
+  border-radius: 2px;
+}
+
+.context-menu__shape-icon--round {
+  border-radius: 8px;
+}
+
+.context-menu__shape-icon--stadium {
+  border-radius: 999px;
+}
+
+.context-menu__shape-icon--subroutine::before,
+.context-menu__shape-icon--subroutine::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 1.5px;
+  background: currentColor;
+}
+
+.context-menu__shape-icon--subroutine::before {
+  left: 4px;
+}
+
+.context-menu__shape-icon--subroutine::after {
+  right: 4px;
+}
+
+.context-menu__shape-icon--cylinder {
+  border-radius: 999px / 6px;
+}
+
+.context-menu__shape-icon--cylinder::before,
+.context-menu__shape-icon--cylinder::after {
+  content: '';
+  position: absolute;
+  left: -1.5px;
+  right: -1.5px;
+  height: 6px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.context-menu__shape-icon--cylinder::before {
+  top: -3px;
+}
+
+.context-menu__shape-icon--cylinder::after {
+  bottom: -3px;
+  clip-path: inset(50% 0 0 0);
+}
+
+.context-menu__shape-icon--rhombus {
+  width: 20px;
+  height: 20px;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+.context-menu__shape-icon--hexagon {
+  border: none;
+  background: currentColor;
+  clip-path: polygon(20% 0, 80% 0, 100% 50%, 80% 100%, 20% 100%, 0 50%);
+}
+
+.context-menu__shape-icon--hexagon::before {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  background: rgba(255, 255, 255, 0.9);
+  clip-path: polygon(20% 0, 80% 0, 100% 50%, 80% 100%, 20% 100%, 0 50%);
+}
+
+.context-menu__shape-icon--parallelogram {
+  transform: skewX(-18deg);
+}
+
+.context-menu__shape-icon--parallelogram_alt {
+  transform: skewX(18deg);
+}
+
+.context-menu__shape-icon--trapezoid {
+  border: none;
+  background: currentColor;
+  clip-path: polygon(18% 0, 82% 0, 100% 100%, 0 100%);
+}
+
+.context-menu__shape-icon--trapezoid::before {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  background: rgba(255, 255, 255, 0.9);
+  clip-path: polygon(18% 0, 82% 0, 100% 100%, 0 100%);
+}
+
+.context-menu__shape-icon--trapezoid_alt {
+  border: none;
+  background: currentColor;
+  clip-path: polygon(0 0, 100% 0, 82% 100%, 18% 100%);
+}
+
+.context-menu__shape-icon--trapezoid_alt::before {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  background: rgba(255, 255, 255, 0.9);
+  clip-path: polygon(0 0, 100% 0, 82% 100%, 18% 100%);
+}
+
+.context-menu__shape-icon--double_circle {
+  border-radius: 50%;
+}
+
+.context-menu__shape-icon--double_circle::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.context-menu__shape-icon--asymmetric {
+  border: none;
+  background: currentColor;
+  clip-path: polygon(0 0, 78% 0, 100% 50%, 78% 100%, 0 100%, 12% 50%);
+}
+
+.context-menu__shape-icon--asymmetric::before {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  background: rgba(255, 255, 255, 0.9);
+  clip-path: polygon(0 0, 78% 0, 100% 50%, 78% 100%, 0 100%, 12% 50%);
 }
 
 /* ============================================
@@ -859,9 +1323,18 @@ body {
 }
 
 .preview-area__canvas .edgePath path.edge-hovered {
-  filter: drop-shadow(0 0 6px rgba(21, 101, 192, 0.6));
-  stroke: #1565c0 !important;
-  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 8px rgba(21, 101, 192, 0.28));
+}
+
+.preview-area__canvas .edgePath.edge-hovered path,
+.preview-area__canvas .edgePath.edge-hovered .path,
+.preview-area__canvas .edgePath.edge-selected path,
+.preview-area__canvas .edgePath.edge-selected .path {
+  filter: drop-shadow(0 0 8px rgba(21, 101, 192, 0.28));
+}
+
+.preview-area__canvas .edgePath path.edge-selected {
+  filter: drop-shadow(0 0 8px rgba(21, 101, 192, 0.28));
 }
 
 /* Mermaid 기본 pointer-events 오버라이드 */
@@ -877,6 +1350,15 @@ body {
   fill: none !important;
 }
 
+.preview-area__canvas #edge-ghost-overlay .edge-hit-selected {
+  stroke: #2563eb !important;
+  stroke-opacity: 0.18 !important;
+  stroke-width: 16px !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+  fill: none !important;
+}
+
 .preview-area__canvas .edgePath path:not(.edge-click-area) {
   pointer-events: none !important;
 }
@@ -886,14 +1368,14 @@ body {
 }
 
 .preview-area__canvas .edgeLabel {
-  pointer-events: auto !important;
+  pointer-events: none !important;
 }
 
 /* ============================================
    엣지 플로팅 툴바
    ============================================ */
 .edge-toolbar {
-  position: fixed;
+  position: absolute;
   transform: translate(-50%, calc(-100% - 10px));
   display: flex;
   align-items: center;
@@ -906,6 +1388,7 @@ body {
   z-index: 500;
   animation: fadeScaleIn var(--transition-fast) both;
   pointer-events: all;
+  max-width: calc(100% - 16px);
 }
 
 .edge-toolbar__btn {
@@ -938,6 +1421,16 @@ body {
   margin: 0 2px;
 }
 
+.edge-toolbar__btn--active {
+  background: var(--bg-light-hover);
+  color: var(--text-primary);
+}
+
+.edge-toolbar__btn--line-opt {
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+}
+
 /* ============================================
    시퀀스 다이어그램 인터랙션
    ============================================ */
@@ -949,7 +1442,8 @@ body {
   filter: drop-shadow(0 0 8px rgba(21, 101, 192, 0.28));
 }
 
-.preview-area__canvas .sequence-message-selected {
+.preview-area__canvas .sequence-message-selected,
+.preview-area__canvas .sequence-message-multi-selected {
   stroke: #1565c0 !important;
   stroke-width: 4px !important;
   filter: drop-shadow(0 0 10px rgba(21, 101, 192, 0.45));
@@ -961,17 +1455,20 @@ body {
 }
 
 .preview-area__canvas .sequence-message-text-selected,
+.preview-area__canvas .sequence-message-text-multi-selected,
 .preview-area__canvas .sequence-message-text-hovered {
   fill: #1a4070 !important;
   font-weight: 600 !important;
 }
 
-.preview-area__canvas .sequence-message-text-selected {
+.preview-area__canvas .sequence-message-text-selected,
+.preview-area__canvas .sequence-message-text-multi-selected {
   fill: #1565c0 !important;
   font-weight: 700 !important;
 }
 
-#sequence-message-hit-overlay .sequence-hit-selected {
+#sequence-message-hit-overlay .sequence-hit-selected,
+#sequence-message-hit-overlay .sequence-hit-multi-selected {
   fill: rgba(21, 101, 192, 0.08) !important;
   fill-opacity: 1 !important;
   stroke: rgba(21, 101, 192, 0.3) !important;
@@ -989,7 +1486,7 @@ body {
   border-radius: var(--radius-lg);
   padding: 5px 8px;
   box-shadow: var(--shadow-md);
-  z-index: 550;
+  z-index: 9000;
   animation: fadeScaleIn var(--transition-fast) both;
 }
 
@@ -1025,19 +1522,69 @@ body {
 }
 
 .sequence-target-line {
-  stroke: #1565c0;
-  stroke-width: 6px;
+  stroke: #2563eb;
+  stroke-width: 4px;
   stroke-linecap: round;
-  opacity: 0.3;
-  filter: drop-shadow(0 0 8px rgba(21, 101, 192, 0.4));
+  opacity: 1;
+  filter: drop-shadow(0 0 6px rgba(37, 99, 235, 0.7));
+}
+.sequence-block-selection-rect {
+  fill: rgba(37, 99, 235, 0.08);
+  stroke: rgba(37, 99, 235, 0.5);
+  stroke-width: 1.5px;
+  stroke-dasharray: 6 4;
+}
+.sequence-block-selection-highlight {
+  fill: rgba(37, 99, 235, 0.08);
+  stroke: rgba(37, 99, 235, 0.6);
+  stroke-width: 1.5px;
+}
+.preview-area__canvas .sequence-note-multi-selected rect {
+  stroke: #1565c0 !important;
+  stroke-width: 2px !important;
+  filter: drop-shadow(0 0 6px rgba(21, 101, 192, 0.3));
+}
+.sequence-block-badge-hit {
+  fill: rgba(255, 255, 255, 0.96);
+  stroke: #64748b;
+  stroke-width: 1;
+  filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.12));
+}
+.sequence-block-badge-text {
+  fill: #0f172a;
+  font-size: 11px;
+  font-weight: 700;
+  user-select: none;
+}
+.sequence-block-badge--selected .sequence-block-badge-hit {
+  stroke: #2563eb;
+  stroke-width: 1.8px;
+}
+.sequence-block-badge--selected .sequence-block-badge-text {
+  fill: #1d4ed8;
+}
+
+.edge-toolbar__btn--active {
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-color: #93c5fd;
+  font-weight: 700;
+}
+.edge-toolbar__btn--branch {
+  border: 1px solid #d1d5db;
+}
+
+.preview-area__canvas .labelText,
+.preview-area__canvas .loopText {
+  cursor: pointer;
 }
 
 .preview-area__canvas .sequence-participant-drag-target rect,
 .preview-area__canvas .sequence-participant-drag-target polygon,
 .preview-area__canvas .sequence-participant-drag-target path {
-  stroke: #1565c0 !important;
-  stroke-width: 2.5px !important;
-  filter: drop-shadow(0 0 8px rgba(21, 101, 192, 0.3));
+  stroke: #2563eb !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 10px rgba(37, 99, 235, 0.6));
 }
 
 /* 포트 드래그 스냅 타깃 */
@@ -1058,4 +1605,29 @@ body {
 /* Mermaid SVG 폰트 오버라이드 */
 .preview-area__canvas .mermaid-output .label {
   font-family: var(--font-sans) !important;
+}
+
+.edge-toolbar__palette {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+@media (max-width: 1080px) {
+  .editor-container {
+    flex-direction: column;
+  }
+
+  .panel--editor,
+  .panel--preview {
+    flex: 1 1 auto;
+    min-height: 320px;
+  }
+
+  .panel__header,
+  .toolbar__main,
+  .toolbar__sub {
+    align-items: flex-start;
+  }
 }

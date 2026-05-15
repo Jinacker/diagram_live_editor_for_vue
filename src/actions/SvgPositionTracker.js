@@ -93,6 +93,8 @@
         'path[id^="L_"]'
       );
       var seenPathEls = [];
+      var expectedEdges = [];
+      var pairToExpectedEdges = {};
 
       // 노드 id 정리 규칙은 extractNodeId와 동일하게 맞춘다.
       var sanitize = function (id) {
@@ -110,6 +112,26 @@
       };
 
       var edgeOccurrences = {};
+      var scanIndex = 0;
+
+      for (var me = 0; me < modelEdges.length; me++) {
+        var modelEdge = modelEdges[me];
+        if (!modelEdge) continue;
+
+        var pairKey = modelEdge.from + '::' + modelEdge.to;
+        var repeatCount = modelEdge.from === modelEdge.to ? 3 : 1;
+        if (!pairToExpectedEdges[pairKey]) pairToExpectedEdges[pairKey] = [];
+
+        for (var copy = 0; copy < repeatCount; copy++) {
+          var expected = {
+            from: modelEdge.from,
+            to: modelEdge.to,
+            modelIndex: me
+          };
+          expectedEdges.push(expected);
+          pairToExpectedEdges[pairKey].push(expected);
+        }
+      }
 
       for (var i = 0; i < pathCandidates.length; i++) {
         var pathEl = pathCandidates[i];
@@ -145,25 +167,33 @@
         }
 
         // DOM에서 시작/끝점을 못 읽으면 마지막 보정으로 모델 순서를 쓴다.
-        if ((!fId || !tId) && i < modelEdges.length) {
-          fId = modelEdges[i].from;
-          tId = modelEdges[i].to;
+        if ((!fId || !tId) && scanIndex < expectedEdges.length) {
+          fId = expectedEdges[scanIndex].from;
+          tId = expectedEdges[scanIndex].to;
         }
 
-        // 같은 from/to 쌍이 여러 개 있어도 등장 순서까지 맞춰서
-        // 가능한 한 정확한 모델 index를 찾는다.
-        var modelIdx = i;
+        // 같은 from/to 쌍이 여러 개 있어도, self-loop는 3슬롯을 같은 model edge로 매핑한다.
+        var modelIdx = scanIndex;
         if (fId && tId) {
           var key = fId + '::' + tId;
+          var matchingExpected = pairToExpectedEdges[key] || [];
           edgeOccurrences[key] = edgeOccurrences[key] || 0;
-          var found = 0;
-          for (var m = 0; m < modelEdges.length; m++) {
-            if (modelEdges[m].from === fId && modelEdges[m].to === tId) {
-              if (found === edgeOccurrences[key]) { modelIdx = m; break; }
-              found++;
+
+          if (matchingExpected.length) {
+            var occurrence = Math.min(edgeOccurrences[key], matchingExpected.length - 1);
+            modelIdx = matchingExpected[occurrence].modelIndex;
+          } else {
+            var found = 0;
+            for (var m = 0; m < modelEdges.length; m++) {
+              if (modelEdges[m].from === fId && modelEdges[m].to === tId) {
+                if (found === edgeOccurrences[key]) { modelIdx = m; break; }
+                found++;
+              }
             }
           }
           edgeOccurrences[key]++;
+        } else if (scanIndex < expectedEdges.length) {
+          modelIdx = expectedEdges[scanIndex].modelIndex;
         }
 
         results.push(pathEl ? {
@@ -173,6 +203,8 @@
           toId:   tId,
           index:  modelIdx
         } : null);
+
+        scanIndex++;
       }
 
       return results;

@@ -1,10 +1,9 @@
 (function (global) {
   'use strict';
 
-  // 파서가 지원하는 13개 shape 목록
+  // UI에서 노출하는 shape 목록
   var SHAPES = [
     { key: 'rect',              label: '[ ]',     name: 'Rectangle' },
-    { key: 'round',             label: '( )',     name: 'Rounded' },
     { key: 'stadium',           label: '([ ])',   name: 'Stadium' },
     { key: 'subroutine',        label: '[[ ]]',   name: 'Subroutine' },
     { key: 'cylinder',          label: '[( )]',   name: 'Cylinder' },
@@ -18,8 +17,58 @@
     { key: 'asymmetric',        label: '>  ]',    name: 'Asymmetric' }
   ];
 
+  function isStaticModel(model) {
+    return !!(model && model.profile === 'static');
+  }
+
+  function toEditableText(model, text) {
+    text = String(text || '');
+    return isStaticModel(model)
+      ? text.replace(/<br\s*\/?>/gi, '\n')
+      : text;
+  }
+
+  function toModelText(model, text) {
+    text = String(text || '');
+    return isStaticModel(model)
+      ? text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '<br>')
+      : text;
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function buildStaticEditStyle(targetRect, previewRect, text) {
+    var localLeft = previewRect ? targetRect.left - previewRect.left : targetRect.left;
+    var localTop = previewRect ? targetRect.top - previewRect.top : targetRect.top;
+    var lines = String(text || '').split(/\n/);
+    var longest = 0;
+    for (var i = 0; i < lines.length; i++) {
+      longest = Math.max(longest, lines[i].length);
+    }
+
+    var width = clamp(Math.max(240, targetRect.width + 32, longest * 7.5 + 32), 240, 500);
+    var height = clamp(Math.max(100, lines.length * 18 + 24, targetRect.height + 18), 100, 460);
+    var maxLeft = previewRect ? Math.max(8, previewRect.width - width - 8) : localLeft + targetRect.width / 2;
+    var maxTop = previewRect ? Math.max(8, previewRect.height - height - 8) : localTop + targetRect.height / 2;
+
+    return {
+      position: 'absolute',
+      left: clamp(localLeft + targetRect.width / 2 - width / 2, 8, maxLeft) + 'px',
+      top: clamp(localTop + targetRect.height / 2 - height / 2, 8, maxTop) + 'px',
+      zIndex: 1000,
+      width: width + 'px',
+      height: height + 'px'
+    };
+  }
+
   var SvgNodeHandler = {
     SHAPES: SHAPES,
+    isStaticModel: isStaticModel,
+    toEditableText: toEditableText,
+    toModelText: toModelText,
+    buildStaticEditStyle: buildStaticEditStyle,
 
     // svgEl 안의 모든 .node에 인터랙션 연결
     // ctx = MermaidPreview._buildCtx()가 만든 bridge 객체
@@ -35,6 +84,26 @@
       if (!nodeId) return;
 
       nodeEl.style.cursor = 'pointer';
+
+      // model에 없는 노드 = 미지원 문법. 클릭 시 안내만 표시하고 편집 인터랙션은 연결하지 않는다.
+      if (!ctx.findNode(nodeId)) {
+        nodeEl.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (ctx.showUnsupportedHint) ctx.showUnsupportedHint();
+        });
+        nodeEl.addEventListener('dblclick', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (ctx.showUnsupportedHint) ctx.showUnsupportedHint();
+        });
+        nodeEl.addEventListener('contextmenu', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (ctx.showUnsupportedHint) ctx.showUnsupportedHint();
+        });
+        return;
+      }
 
       // hover 중에만 포트를 띄워 canvas를 과하게 복잡하게 만들지 않는다.
       nodeEl.addEventListener('mouseenter', function () {
@@ -71,11 +140,18 @@
         if (e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
+        var rect = nodeEl.getBoundingClientRect();
+        var previewRect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
         ctx.setState({
           selectedNodeId:    nodeId,
           selectedEdgeIndex: null,
           edgeToolbar:   null,
-          contextMenu:   { nodeId: nodeId, x: e.clientX, y: e.clientY }
+          contextMenu:   {
+            nodeId: nodeId,
+            anchorType: 'node',
+            x: Math.round((previewRect ? rect.left - previewRect.left : rect.left) + rect.width + 10),
+            y: Math.round((previewRect ? rect.top - previewRect.top : rect.top) + Math.min(24, rect.height * 0.5))
+          }
         });
         ctx.emit('node-selected', nodeId);
       });
@@ -92,8 +168,15 @@
       nodeEl.addEventListener('contextmenu', function (e) {
         e.preventDefault();
         e.stopPropagation();
+        var rect = nodeEl.getBoundingClientRect();
+        var previewRect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
         ctx.setState({
-          contextMenu: { nodeId: nodeId, x: e.clientX, y: e.clientY },
+          contextMenu: {
+            nodeId: nodeId,
+            anchorType: 'node',
+            x: Math.round((previewRect ? rect.left - previewRect.left : rect.left) + rect.width + 10),
+            y: Math.round((previewRect ? rect.top - previewRect.top : rect.top) + Math.min(24, rect.height * 0.5))
+          },
           edgeToolbar: null
         });
       });
@@ -107,16 +190,25 @@
       if (!node) return;
 
       var rect = nodeEl.getBoundingClientRect();
+      var previewRect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+      var localLeft = previewRect ? rect.left - previewRect.left : rect.left;
+      var localTop = previewRect ? rect.top - previewRect.top : rect.top;
+      var model = ctx.getModel ? ctx.getModel() : null;
+      var editText = toEditableText(model, node.text || node.id);
+      var editStyle = isStaticModel(model)
+        ? buildStaticEditStyle(rect, previewRect, editText)
+        : {
+          position: 'absolute',
+          left:  (localLeft + rect.width  / 2 - 70) + 'px',
+          top:   (localTop  + rect.height / 2 - 16) + 'px',
+          zIndex: 1000,
+          width: '240px'
+        };
       ctx.setState({
         editingNodeId:  nodeId,
-        editingText:    node.text || node.id,
-        editInputStyle: {
-          position: 'fixed',
-          left:  (rect.left + rect.width  / 2 - 70) + 'px',
-          top:   (rect.top  + rect.height / 2 - 16) + 'px',
-          zIndex: 1000,
-          width: Math.max(140, rect.width + 24) + 'px'
-        }
+        editingText:    editText,
+        editingNodeColor: node.fill || '#e2e8f0',
+        editInputStyle: editStyle
       });
       ctx.focusEditInput();
     }

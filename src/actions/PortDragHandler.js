@@ -118,9 +118,12 @@
       self._dragLine.style.display = '';
 
       var currentTarget = null;
+      var pointerClientX = 0;
+      var pointerClientY = 0;
+      var autoPanFrame = null;
 
-      var onMove = function (me) {
-        var svgPt = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
+      var updateDragAtClient = function (clientX, clientY) {
+        var svgPt = SvgPositionTracker.getSVGPoint(svgEl, clientX, clientY);
         self._dragLine.setAttribute('x2', svgPt.x);
         self._dragLine.setAttribute('y2', svgPt.y);
 
@@ -132,17 +135,87 @@
         }
       };
 
+      var getAutoPanDelta = function (clientX, clientY) {
+        var rect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+        var threshold = 56;
+        var maxStep = 8;
+        var dx = 0;
+        var dy = 0;
+        var progress = 0;
+
+        if (!rect) return { dx: 0, dy: 0 };
+
+        if (clientX <= rect.left + threshold) {
+          progress = Math.min(1, (rect.left + threshold - clientX) / threshold);
+          dx = Math.ceil(progress * maxStep);
+        } else if (clientX >= rect.right - threshold) {
+          progress = Math.min(1, (clientX - (rect.right - threshold)) / threshold);
+          dx = -Math.ceil(progress * maxStep);
+        }
+
+        if (clientY <= rect.top + threshold) {
+          progress = Math.min(1, (rect.top + threshold - clientY) / threshold);
+          dy = Math.ceil(progress * maxStep);
+        } else if (clientY >= rect.bottom - threshold) {
+          progress = Math.min(1, (clientY - (rect.bottom - threshold)) / threshold);
+          dy = -Math.ceil(progress * maxStep);
+        }
+
+        return { dx: dx, dy: dy };
+      };
+
+      var stopAutoPan = function () {
+        if (!autoPanFrame) return;
+        cancelAnimationFrame(autoPanFrame);
+        autoPanFrame = null;
+      };
+
+      var autoPanTick = function () {
+        autoPanFrame = null;
+        if (!ctx.getState().portDragging) return;
+
+        var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+        if (!delta.dx && !delta.dy) return;
+
+        if (ctx.panPreviewBy) {
+          ctx.panPreviewBy(delta.dx, delta.dy);
+          updateDragAtClient(pointerClientX, pointerClientY);
+        }
+
+        autoPanFrame = requestAnimationFrame(autoPanTick);
+      };
+
+      var scheduleAutoPan = function () {
+        if (autoPanFrame) return;
+        var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+        if (!delta.dx && !delta.dy) return;
+        autoPanFrame = requestAnimationFrame(autoPanTick);
+      };
+
+      var startScreenPt = SvgPositionTracker.svgToScreen(svgEl, fromPt.x, fromPt.y);
+      pointerClientX = startScreenPt.x;
+      pointerClientY = startScreenPt.y;
+
+      var onMove = function (me) {
+        pointerClientX = me.clientX;
+        pointerClientY = me.clientY;
+        updateDragAtClient(pointerClientX, pointerClientY);
+        scheduleAutoPan();
+      };
+
       var onUp = function (me) {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
 
+        stopAutoPan();
         self._dragLine.style.display = 'none';
         if (currentTarget) self._clearTargetHighlight(svgEl, currentTarget);
         ctx.setState({ portDragging: false });
 
         var svgPt = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
-        var target = self._findHitNode(svgPt.x, svgPt.y, fromNodeId, positions);
-        if (target && target !== fromNodeId) {
+        // onUp 시에는 excludeId=null 로 source 노드도 포함해 self-loop를 허용한다.
+        var target = self._findHitNode(svgPt.x, svgPt.y, null, positions);
+        if (target) {
           ctx.emit('add-edge', { from: fromNodeId, to: target });
         }
 
@@ -160,13 +233,14 @@
 
     // 포트 드래그 중에는 target node를 약간 관대하게 판정한다.
     // 정확히 bbox 안이 아니어도 center 근처면 snap 대상으로 본다.
+    // excludeId가 null이면 모든 노드를 검색 대상으로 포함한다 (self-loop 판정 시 사용).
     _findHitNode: function (x, y, excludeId, positions) {
       var SNAP = 28;
       var best = null;
       var bestDist = Infinity;
 
       for (var nodeId in positions) {
-        if (nodeId === excludeId) continue;
+        if (excludeId !== null && nodeId === excludeId) continue;
         var p = positions[nodeId];
 
         // bbox 안이면 즉시 target으로 인정
