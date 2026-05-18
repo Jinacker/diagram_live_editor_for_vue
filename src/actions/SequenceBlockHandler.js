@@ -76,7 +76,7 @@
       var participantMap = SequencePositionTracker.collectParticipants(svgEl, model);
       var messages = SequencePositionTracker.collectMessages(svgEl, model);
       var notes    = SequencePositionTracker.collectNotePositions(svgEl, model);
-      this._renderBlockBadges(svgEl, model, participantMap, ctx);
+      this._renderBlockBadges(svgEl, model, participantMap, ctx, messages, notes);
       this._attachSelection(svgEl, messages, notes, ctx, canvas);
 
       if (ctx.watchSequenceSelectionHighlight) {
@@ -234,12 +234,13 @@
       this._selectionRect.setAttribute('height', height);
     },
 
-    _renderBlockBadges: function (svgEl, model, participantMap, ctx) {
+    _renderBlockBadges: function (svgEl, model, participantMap, ctx, messages, notes) {
       var blocks = SequenceStatementUtils.listBlocks(model && model.statements);
-      var labelTextEls = this._sortTextElementsByPosition(Array.prototype.slice.call(svgEl.querySelectorAll('.labelText')));
-      var allLoopTextEls = this._sortTextElementsByPosition(Array.prototype.slice.call(svgEl.querySelectorAll('.loopText')));
+      var labelTextEls = this._sortTextElementsByPosition(Array.prototype.slice.call(svgEl.querySelectorAll('.labelText')), svgEl);
+      var allLoopTextEls = this._sortTextElementsByPosition(Array.prototype.slice.call(svgEl.querySelectorAll('.loopText')), svgEl);
       var usedLoopIndices = {};
       var stmts = model && model.statements;
+      var stmtYByIndex = this._collectStatementYByIndex(model, messages, notes);
       var blockBindings = [];
 
       // block title + 버튼용 overlay 및 공유 hover 상태
@@ -273,7 +274,7 @@
       for (var i = 0; i < blocks.length; i++) {
         var block = blocks[i];
         var labelEl = labelTextEls[i] || null;
-        var mainTitleEl = this._findMatchingLoopText(labelEl, allLoopTextEls, usedLoopIndices);
+        var mainTitleEl = this._findMatchingLoopText(svgEl, labelEl, allLoopTextEls, usedLoopIndices);
         blockBindings.push({
           block: block,
           labelEl: labelEl,
@@ -308,6 +309,9 @@
         branchElByStmt[assign.si] = btelEl;
 
         var bBlock = blockBindings[assign.bindingIdx].block;
+        var fallbackBranchY = this._estimateBranchSeparatorY(bBlock, assign.branchIdx, stmtYByIndex);
+        var fallbackTitleBox = this._getElementBBoxInSvg(svgEl, blockBindings[assign.bindingIdx].mainTitleEl);
+        var fallbackTitleCx = fallbackTitleBox ? (fallbackTitleBox.x + fallbackTitleBox.width / 2) : null;
         var bInfo = {
           blockId: bBlock.id,
           statementIndex: assign.si,
@@ -319,31 +323,45 @@
           branchElRefs.push({ el: btelEl, info: bInfo });
           if (btelEl.getBBox) {
             try {
-              var bbb = btelEl.getBBox();
+              var bbb = this._getElementBBoxInSvg(svgEl, btelEl);
+              if (!bbb) continue;
+              var rangeY = fallbackBranchY !== null && fallbackBranchY !== undefined
+                ? fallbackBranchY
+                : (bbb.y + Math.max(bbb.height, 16) / 2);
+              var rangeCx = fallbackTitleCx !== null ? fallbackTitleCx : (bbb.x + bbb.width / 2);
+              var rangeHalfWidth = Math.max(90, (bbb.width + 48) / 2);
               allBranchClickRanges.push(Object.assign({
                 el: btelEl,
-                yMin: bbb.y - 14,
-                yMax: bbb.y + Math.max(bbb.height, 16) + 14
+                xMin: rangeCx - rangeHalfWidth,
+                xMax: rangeCx + rangeHalfWidth,
+                yMin: rangeY - 16,
+                yMax: rangeY + 16
               }, bInfo));
             } catch (eBBox) {}
           }
+        } else if (fallbackBranchY !== null && fallbackBranchY !== undefined) {
+          var fallbackHalfWidth = fallbackTitleBox ? Math.max(90, (fallbackTitleBox.width + 48) / 2) : 90;
+          allBranchClickRanges.push(Object.assign({
+            xMin: fallbackTitleCx !== null ? fallbackTitleCx - fallbackHalfWidth : undefined,
+            xMax: fallbackTitleCx !== null ? fallbackTitleCx + fallbackHalfWidth : undefined,
+            yMin: fallbackBranchY - 16,
+            yMax: fallbackBranchY + 16
+          }, bInfo));
         }
       }
 
-      // 안전 필터: block header의 labelText와 같은 부모 g를 공유하는 loopText는
-      // block main title이므로 branch separator 목록에서 제거한다.
-      // (_findMatchingLoopText가 잘못 소비했거나 pass 2가 잘못 가져간 경우 방어)
-      var labelParentEls = [];
-      for (var lpi = 0; lpi < labelTextEls.length; lpi++) {
-        var lpEl = labelTextEls[lpi];
-        if (lpEl && lpEl.parentNode) labelParentEls.push(lpEl.parentNode);
+      // 안전 필터: Mermaid가 else/and loopText를 block label과 같은 SVG 그룹에
+      // 넣는 경우가 있어, 부모가 아니라 실제 main title element만 제거한다.
+      var mainTitleEls = [];
+      for (var mpi = 0; mpi < blockBindings.length; mpi++) {
+        if (blockBindings[mpi].mainTitleEl) mainTitleEls.push(blockBindings[mpi].mainTitleEl);
       }
-      if (labelParentEls.length) {
+      if (mainTitleEls.length) {
         branchElRefs = branchElRefs.filter(function (ref) {
-          return !ref.el.parentNode || labelParentEls.indexOf(ref.el.parentNode) === -1;
+          return mainTitleEls.indexOf(ref.el) === -1;
         });
         allBranchClickRanges = allBranchClickRanges.filter(function (range) {
-          return !range.el || !range.el.parentNode || labelParentEls.indexOf(range.el.parentNode) === -1;
+          return !range.el || mainTitleEls.indexOf(range.el) === -1;
         });
       }
 
@@ -373,6 +391,7 @@
           ctx,
           model,
           participantMap,
+          stmtYByIndex,
           btnOverlay,
           shared,
           sharedCancelHide,
@@ -385,8 +404,73 @@
       // svgEl에 capture 단계 리스너를 달아 어떤 element보다 먼저 분기 클릭을 잡는다.
       // 전략1(Y범위) → 전략2(element identity) → 전략3(텍스트 매칭) 순서로 시도
       if (allBranchItems.length) {
+        var branchMouseDownHandled = false;
+        var findBranchRangeMatch = function (e, requireX) {
+          if (!allBranchClickRanges.length) return null;
+          var svgPt = SvgPositionTracker.getSVGPoint(svgEl, e.clientX, e.clientY);
+          if (!svgPt) return null;
+
+          var bestRange = null, bestRangeDist = Infinity;
+          for (var ri = 0; ri < allBranchClickRanges.length; ri++) {
+            var range = allBranchClickRanges[ri];
+            if (svgPt.y < range.yMin || svgPt.y > range.yMax) continue;
+            if (requireX) {
+              if (range.xMin === undefined || range.xMax === undefined) continue;
+              if (svgPt.x < range.xMin || svgPt.x > range.xMax) continue;
+            }
+
+            var midY = (range.yMin + range.yMax) / 2;
+            var midX = (range.xMin !== undefined && range.xMax !== undefined) ? (range.xMin + range.xMax) / 2 : svgPt.x;
+            var dist = Math.abs(svgPt.y - midY) + Math.abs(svgPt.x - midX) * 0.2;
+            if (dist < bestRangeDist) { bestRangeDist = dist; bestRange = range; }
+          }
+          return bestRange;
+        };
+        var openMatchedBranchToolbar = function (e, matched, preventDefault) {
+          if (preventDefault) e.preventDefault();
+          e.stopPropagation();
+          ctx.setState({
+            selectedSequenceParticipantId: null,
+            selectedSequenceMessageIndex: null,
+            selectedSequenceMessageIndices: [],
+            selectedSequenceBlockId: matched.blockId,
+            sequenceToolbar: {
+              type: 'branch-title',
+              blockId: matched.blockId,
+              statementIndex: matched.statementIndex,
+              text: matched.text,
+              x: e.clientX,
+              y: e.clientY
+            }
+          });
+        };
+        var suppressNextDocumentClick = function () {
+          var suppressClick = function (clickEvent) {
+            clickEvent.preventDefault();
+            clickEvent.stopPropagation();
+            document.removeEventListener('click', suppressClick, true);
+          };
+          document.addEventListener('click', suppressClick, true);
+        };
+
+        svgEl.addEventListener('mousedown', function (e) {
+          if (e.button !== 0) return;
+          var downMatched = findBranchRangeMatch(e, true);
+          if (!downMatched) return;
+          branchMouseDownHandled = true;
+          openMatchedBranchToolbar(e, downMatched, true);
+          suppressNextDocumentClick();
+        }, true);
+
         svgEl.addEventListener('click', function (e) {
           try {
+            if (branchMouseDownHandled) {
+              branchMouseDownHandled = false;
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+
             var matched = null;
 
             // 전략1: element identity — 클릭 위치의 element가 branch loopText 본체인지 직접 확인
@@ -403,19 +487,7 @@
 
             // 전략2: pre-computed Y 범위 (element identity 실패 시 fallback)
             if (!matched && allBranchClickRanges.length) {
-              var svgPt = SvgPositionTracker.getSVGPoint(svgEl, e.clientX, e.clientY);
-              if (svgPt) {
-                var bestRange = null, bestRangeDist = Infinity;
-                for (var ri = 0; ri < allBranchClickRanges.length; ri++) {
-                  var range = allBranchClickRanges[ri];
-                  if (svgPt.y >= range.yMin && svgPt.y <= range.yMax) {
-                    var midY = (range.yMin + range.yMax) / 2;
-                    var dist = Math.abs(svgPt.y - midY);
-                    if (dist < bestRangeDist) { bestRangeDist = dist; bestRange = range; }
-                  }
-                }
-                if (bestRange) matched = bestRange;
-              }
+              matched = findBranchRangeMatch(e, true);
             }
 
             // 전략3: 텍스트 내용 매칭 (loopText 클래스 한정), 중복 텍스트는 Y위치로 가장 가까운 것 선택
@@ -426,7 +498,10 @@
                 if (!pel || !pel.classList || !pel.classList.contains('loopText')) continue;
                 var pelText = pel.textContent ? pel.textContent.trim().replace(/^\[|\]$/g, '') : '';
                 var pelY = null;
-                try { pelY = pel.getBBox ? pel.getBBox().y : null; } catch (eY) {}
+                try {
+                  var pelBox = SequenceBlockHandler._getElementBBoxInSvg(svgEl, pel);
+                  pelY = pelBox ? pelBox.y : null;
+                } catch (eY) {}
 
                 var textMatches = [];
                 for (var bi3 = 0; bi3 < allBranchItems.length; bi3++) {
@@ -455,21 +530,7 @@
             }
 
             if (matched) {
-              e.stopPropagation();
-              ctx.setState({
-                selectedSequenceParticipantId: null,
-                selectedSequenceMessageIndex: null,
-                selectedSequenceMessageIndices: [],
-                selectedSequenceBlockId: matched.blockId,
-                sequenceToolbar: {
-                  type: 'branch-title',
-                  blockId: matched.blockId,
-                  statementIndex: matched.statementIndex,
-                  text: matched.text,
-                  x: e.clientX,
-                  y: e.clientY
-                }
-              });
+              openMatchedBranchToolbar(e, matched, false);
             }
           } catch (eCapture) {}
         }, true); // capture 단계 — overlay보다 먼저 실행
@@ -490,13 +551,106 @@
       }
     },
 
-    _sortTextElementsByPosition: function (elements) {
+    _collectStatementYByIndex: function (model, messages, notes) {
+      var stmts = (model && model.statements) || [];
+      var byIndex = {};
+      var msgCursor = 0;
+
+      for (var i = 0; i < stmts.length; i++) {
+        var stmt = stmts[i];
+        if (!stmt) continue;
+        if (stmt.type === 'message') {
+          var msg = messages && messages[msgCursor];
+          if (msg && msg.rowY !== null && msg.rowY !== undefined) byIndex[i] = msg.rowY;
+          msgCursor++;
+        }
+      }
+
+      for (var n = 0; n < (notes || []).length; n++) {
+        var note = notes[n];
+        if (!note || note.statementIndex === undefined || !note.bbox) continue;
+        byIndex[note.statementIndex] = note.bbox.y + note.bbox.height / 2;
+      }
+
+      return byIndex;
+    },
+
+    _estimateBranchSeparatorY: function (block, branchIdx, stmtYByIndex) {
+      if (!block || !block.branchIndices || branchIdx < 0 || branchIdx >= block.branchIndices.length) return null;
+      var branchStmtIndex = block.branchIndices[branchIdx];
+      var prevY = null;
+      var nextY = null;
+      var start = block.statementIndex + 1;
+      var end = block.endIndex !== -1 ? block.endIndex : branchStmtIndex + 1;
+
+      for (var i = start; i < branchStmtIndex; i++) {
+        if (stmtYByIndex[i] !== undefined && stmtYByIndex[i] !== null) prevY = stmtYByIndex[i];
+      }
+
+      for (var j = branchStmtIndex + 1; j < end; j++) {
+        if (stmtYByIndex[j] !== undefined && stmtYByIndex[j] !== null) {
+          nextY = stmtYByIndex[j];
+          break;
+        }
+      }
+
+      if (prevY !== null && nextY !== null) return (prevY + nextY) / 2;
+      return null;
+    },
+
+    _getElementBBoxInSvg: function (svgEl, el) {
+      if (!el || !el.getBBox) return null;
+
+      var box;
+      try { box = el.getBBox(); } catch (e) { return null; }
+      if (!box) return null;
+
+      if (!svgEl || !svgEl.createSVGPoint || !el.getScreenCTM || !svgEl.getScreenCTM) return box;
+
+      var elMatrix = null;
+      var svgMatrix = null;
+      try {
+        elMatrix = el.getScreenCTM();
+        svgMatrix = svgEl.getScreenCTM();
+      } catch (e2) {
+        return box;
+      }
+      if (!elMatrix || !svgMatrix) return box;
+
+      var invSvg;
+      try { invSvg = svgMatrix.inverse(); } catch (e3) { return box; }
+
+      var pt = svgEl.createSVGPoint();
+      var corners = [
+        [box.x, box.y],
+        [box.x + box.width, box.y],
+        [box.x, box.y + box.height],
+        [box.x + box.width, box.y + box.height]
+      ];
+      var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+
+      for (var i = 0; i < corners.length; i++) {
+        pt.x = corners[i][0];
+        pt.y = corners[i][1];
+        var rootPt = pt.matrixTransform(elMatrix).matrixTransform(invSvg);
+        left = Math.min(left, rootPt.x);
+        top = Math.min(top, rootPt.y);
+        right = Math.max(right, rootPt.x);
+        bottom = Math.max(bottom, rootPt.y);
+      }
+
+      if (!isFinite(left)) return box;
+      return { x: left, y: top, width: right - left, height: bottom - top };
+    },
+
+    _sortTextElementsByPosition: function (elements, svgEl) {
+      var self = this;
       return (elements || []).slice().sort(function (a, b) {
         var boxA = null;
         var boxB = null;
 
-        try { boxA = a && a.getBBox ? a.getBBox() : null; } catch (e1) {}
-        try { boxB = b && b.getBBox ? b.getBBox() : null; } catch (e2) {}
+        try { boxA = self._getElementBBoxInSvg(svgEl, a); } catch (e1) {}
+        try { boxB = self._getElementBBoxInSvg(svgEl, b); } catch (e2) {}
 
         if (!boxA && !boxB) return 0;
         if (!boxA) return 1;
@@ -509,7 +663,7 @@
       });
     },
 
-    _findMatchingLoopText: function (labelEl, allLoopTextEls, usedLoopIndices) {
+    _findMatchingLoopText: function (svgEl, labelEl, allLoopTextEls, usedLoopIndices) {
       if (!labelEl) return null;
 
       // 전략1: labelEl과 동일한 부모 g를 공유하는 loopText → Mermaid SVG에서
@@ -528,9 +682,8 @@
       // 전략2: Y 근접 fallback (임계값 40 이내만 허용)
       // else/and separator loopText가 다음 block header보다 Y가 근접할 수 있으므로
       // _findNextUnusedLoopText 호출(무조건 소비)은 하지 않는다.
-      if (!labelEl.getBBox) return null;
-      var labelBox;
-      try { labelBox = labelEl.getBBox(); } catch (e) { return null; }
+      var labelBox = this._getElementBBoxInSvg(svgEl, labelEl);
+      if (!labelBox) return null;
 
       var bestEl = null;
       var bestIdx = -1;
@@ -540,8 +693,8 @@
         if (usedLoopIndices[j]) continue;
         var loopEl = allLoopTextEls[j];
         if (!loopEl || !loopEl.getBBox) continue;
-        var loopBox;
-        try { loopBox = loopEl.getBBox(); } catch (e2) { continue; }
+        var loopBox = this._getElementBBoxInSvg(svgEl, loopEl);
+        if (!loopBox) continue;
         var dist = Math.abs(loopBox.y - labelBox.y);
         if (dist < bestDist) { bestDist = dist; bestEl = loopEl; bestIdx = j; }
       }
@@ -559,17 +712,31 @@
       return null;
     },
 
-    _attachBlockElementInteractions: function (svgEl, block, labelEl, titleEl, branchTitleEls, branchStatements, ctx, model, participantMap, btnOverlay, shared, sharedCancelHide, sharedHideNow, sharedScheduleHide) {
+    _attachBlockElementInteractions: function (svgEl, block, labelEl, titleEl, branchTitleEls, branchStatements, ctx, model, participantMap, stmtYByIndex, btnOverlay, shared, sharedCancelHide, sharedHideNow, sharedScheduleHide) {
       // 분기 title Y 범위를 미리 계산 — labelGroup 클릭 핸들러 안에서 Y 라우팅에 사용
       var branchYRanges = [];
+      var titleBoxForBranch = this._getElementBBoxInSvg(svgEl, titleEl);
+      var titleCenterX = titleBoxForBranch ? (titleBoxForBranch.x + titleBoxForBranch.width / 2) : null;
       for (var pre = 0; pre < branchTitleEls.length; pre++) {
         var bel = branchTitleEls[pre];
-        if (!bel || !bel.getBBox) continue;
+        var fallbackBranchY = this._estimateBranchSeparatorY(block, pre, stmtYByIndex || {});
         try {
-          var bbb = bel.getBBox();
+          var bbb = bel && bel.getBBox ? this._getElementBBoxInSvg(svgEl, bel) : null;
+          var rangeY = fallbackBranchY !== null && fallbackBranchY !== undefined
+            ? fallbackBranchY
+            : (bbb ? bbb.y + Math.max(bbb.height, 16) / 2 : null);
+          if (rangeY === null || rangeY === undefined) continue;
+          var rangeCx = titleCenterX !== null
+            ? titleCenterX
+            : (bbb ? bbb.x + bbb.width / 2 : null);
+          var rangeHalfWidth = bbb
+            ? Math.max(90, (bbb.width + 48) / 2)
+            : (titleBoxForBranch ? Math.max(90, (titleBoxForBranch.width + 48) / 2) : 90);
           branchYRanges.push({
-            yMin: bbb.y - 12,
-            yMax: bbb.y + Math.max(bbb.height, 16) + 12,
+            xMin: rangeCx !== null ? rangeCx - rangeHalfWidth : undefined,
+            xMax: rangeCx !== null ? rangeCx + rangeHalfWidth : undefined,
+            yMin: rangeY - 16,
+            yMax: rangeY + 16,
             statementIndex: block.branchIndices[pre],
             branchStmt: branchStatements[pre] || {}
           });
@@ -578,6 +745,23 @@
 
       // labelText의 부모 그룹(labelBox rect 포함)을 클릭 → Y 위치 기반 라우팅
       // labelGroup의 배경 rect가 else/and 행도 덮으므로, 클릭 Y로 분기 여부 판단한다.
+      var openBranchToolbar = function (statementIndex, branchStmt, clientX, clientY) {
+        ctx.setState({
+          selectedSequenceParticipantId: null,
+          selectedSequenceMessageIndex: null,
+          selectedSequenceMessageIndices: [],
+          selectedSequenceBlockId: block.id,
+          sequenceToolbar: {
+            type: 'branch-title',
+            blockId: block.id,
+            statementIndex: statementIndex,
+            text: (branchStmt && branchStmt.text) || '',
+            x: clientX,
+            y: clientY
+          }
+        });
+      };
+
       var labelGroup = labelEl && (labelEl.closest ? labelEl.closest('g') : labelEl.parentNode);
       if (labelGroup) {
         labelGroup.style.cursor = 'pointer';
@@ -591,21 +775,10 @@
               if (svgPt) {
                 for (var bi = 0; bi < branchYRanges.length; bi++) {
                   var range = branchYRanges[bi];
-                  if (svgPt.y >= range.yMin && svgPt.y <= range.yMax) {
-                    ctx.setState({
-                      selectedSequenceParticipantId: null,
-                      selectedSequenceMessageIndex: null,
-                      selectedSequenceMessageIndices: [],
-                      selectedSequenceBlockId: block.id,
-                      sequenceToolbar: {
-                        type: 'branch-title',
-                        blockId: block.id,
-                        statementIndex: range.statementIndex,
-                        text: range.branchStmt.text || '',
-                        x: e.clientX,
-                        y: e.clientY
-                      }
-                    });
+                  var inBranchX = range.xMin !== undefined && range.xMax !== undefined &&
+                    svgPt.x >= range.xMin && svgPt.x <= range.xMax;
+                  if (inBranchX && svgPt.y >= range.yMin && svgPt.y <= range.yMax) {
+                    openBranchToolbar(range.statementIndex, range.branchStmt, e.clientX, e.clientY);
                     return;
                   }
                 }
