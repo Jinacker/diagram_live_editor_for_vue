@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-05-18T06:36:46.217Z
+ * Built: 2026-05-18T06:46:01.027Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -486,16 +486,30 @@
 
   function insertBranchStatement(model, messageIndices, keyword, text, noteStatementIndices) {
     var statements = cloneStatements(model);
+    var selectedStmtIndices = [];
     var firstStmtIndex = -1;
 
     if (messageIndices && messageIndices.length) {
       var sorted = messageIndices.slice().sort(function (a, b) { return a - b; });
-      firstStmtIndex = messageIndexToStatementIndex(statements, sorted[0]);
-    } else if (noteStatementIndices && noteStatementIndices.length) {
-      var sortedNotes = noteStatementIndices.slice().sort(function (a, b) { return a - b; });
-      firstStmtIndex = sortedNotes[0];
+      for (var m = 0; m < sorted.length; m++) {
+        var msgStmtIndex = messageIndexToStatementIndex(statements, sorted[m]);
+        if (msgStmtIndex !== -1) selectedStmtIndices.push(msgStmtIndex);
+      }
     }
 
+    if (noteStatementIndices && noteStatementIndices.length) {
+      for (var n = 0; n < noteStatementIndices.length; n++) {
+        var noteStmtIndex = noteStatementIndices[n];
+        if (noteStmtIndex >= 0 && noteStmtIndex < statements.length) {
+          selectedStmtIndices.push(noteStmtIndex);
+        }
+      }
+    }
+
+    if (selectedStmtIndices.length) {
+      selectedStmtIndices.sort(function (a, b) { return a - b; });
+      firstStmtIndex = selectedStmtIndices[0];
+    }
     if (firstStmtIndex === -1) return statements;
 
     var enclosing = findEnclosingBranchBlock(model, messageIndices || [], noteStatementIndices);
