@@ -792,8 +792,27 @@ Vue.component('mermaid-preview', {
       return !!(this.model && this.model.profile === 'static');
     },
 
+    isGraphProfile: function () {
+      return !!(this.model && (this.model.headerKeyword === 'graph' || this.model.profile === 'graph'));
+    },
+
     isStaticNodeEditing: function () {
       return !!(this.editingNodeId && this.isStaticDiagram());
+    },
+
+    isGraphEdgeEditing: function () {
+      return this.editingEdgeIndex !== null && this.isGraphProfile();
+    },
+
+    getGraphEdgeEditBoxSize: function (text) {
+      var lines = String(text || '').split(/\r\n|\r|\n/).length;
+      if (lines <= 1) {
+        return { width: 260, height: 56 };
+      }
+      return {
+        width: lines >= 4 ? 320 : 300,
+        height: Math.min(130, Math.max(76, lines * 20 + 30))
+      };
     },
 
     confirmNodeEdit: function () {
@@ -836,7 +855,9 @@ Vue.component('mermaid-preview', {
       if (this.editingEdgeIndex !== null) {
         this.$emit('update-edge-text', {
           index: this.editingEdgeIndex,
-          text:  this.editingEdgeText.trim()
+          text:  this.isGraphProfile()
+            ? SvgNodeHandler.toModelText(this.model, this.editingEdgeText.trim())
+            : this.editingEdgeText.trim()
         });
       }
       this.editingEdgeIndex = null;
@@ -857,6 +878,17 @@ Vue.component('mermaid-preview', {
     onEdgeEditKeyDown: function (e) {
       if (e.key === 'Enter')  { e.preventDefault(); this.confirmEdgeEdit(); }
       if (e.key === 'Escape') { this.cancelEdgeEdit(); }
+    },
+
+    onGraphEdgeEditKeyDown: function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        this.confirmEdgeEdit();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.cancelEdgeEdit();
+      }
     },
 
     // 공통 시퀀스 편집 유틸
@@ -1158,16 +1190,20 @@ Vue.component('mermaid-preview', {
       var edge = (this.model.edges || [])[idx];
       if (!edge) return;
 
+      var graphMode = this.isGraphProfile();
+      var editText = graphMode ? SvgNodeHandler.toEditableText(this.model, edge.text || '') : (edge.text || '');
+      var editBox = graphMode ? this.getGraphEdgeEditBoxSize(editText) : { width: 160, height: 0 };
       this.selectedEdgeIndex = idx;
       this.editingEdgeIndex = idx;
-      this.editingEdgeText = edge.text || '';
+      this.editingEdgeText = editText;
       this.editingEdgeColor = edge.color || '#5c7ab0';
       this.edgeEditInputStyle = {
         position: 'absolute',
-        left: Math.max(8, clickX - 80) + 'px',
+        left: Math.max(8, clickX - (graphMode ? Math.round(editBox.width / 2) : 80)) + 'px',
         top: Math.max(8, clickY - 18) + 'px',
         zIndex: 1000,
-        width: '160px'
+        width: graphMode ? editBox.width + 'px' : '160px',
+        height: graphMode ? editBox.height + 'px' : undefined
       };
       this.flowEdgeColorPicker = false;
       this.flowEdgeBodyPicker = false;
@@ -1792,7 +1828,8 @@ Vue.component('mermaid-preview', {
           <input v-else ref="editInput" class="node-edit-input" v-model="editingText" @keydown="onNodeEditKeyDown" @blur="confirmNodeEdit" />\
         </div>\
         <div v-if="editingEdgeIndex !== null" class="node-edit-overlay" :style="edgeEditInputStyle">\
-          <input ref="editEdgeInput" class="node-edit-input" v-model="editingEdgeText" placeholder="Edge label" @keydown="onEdgeEditKeyDown" @blur="confirmEdgeEdit" />\
+          <textarea v-if="isGraphEdgeEditing()" ref="editEdgeInput" class="node-edit-input node-edit-textarea edge-edit-textarea--graph" v-model="editingEdgeText" placeholder="Edge label" @keydown="onGraphEdgeEditKeyDown" @blur="confirmEdgeEdit"></textarea>\
+          <input v-else ref="editEdgeInput" class="node-edit-input" v-model="editingEdgeText" placeholder="Edge label" @keydown="onEdgeEditKeyDown" @blur="confirmEdgeEdit" />\
         </div>\
         <div v-if="editingSequenceParticipantId" class="node-edit-overlay" :style="sequenceParticipantEditStyle">\
           <input ref="sequenceParticipantInput" class="node-edit-input" v-model="editingSequenceParticipantText" @keydown="onSequenceParticipantEditKeyDown" @blur="confirmSequenceParticipantEdit" />\

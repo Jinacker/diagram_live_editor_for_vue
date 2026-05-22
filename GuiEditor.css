@@ -686,6 +686,21 @@
   font-size: 13px;
 }
 
+.gui-editor-shell .edge-edit-textarea--graph {
+  height: 100%;
+  min-width: 240px;
+  min-height: 56px;
+  max-width: 620px;
+  max-height: 360px;
+  resize: both;
+  overflow: auto;
+  text-align: center;
+  white-space: pre;
+  line-height: 1.45;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+}
+
 /* ============================================
    엣지 생성 모드 오버레이
    ============================================ */
