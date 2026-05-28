@@ -20,12 +20,14 @@
   function generateSubgraphHeader(subgraph) {
     if (!subgraph) return 'subgraph';
     var id = subgraph.id;
-    var title = subgraph.title || id;
-    if (!title || title === id) return 'subgraph ' + id;
+    var hasTitle = Object.prototype.hasOwnProperty.call(subgraph, 'title');
+    var title = hasTitle ? String(subgraph.title) : id;
 
     if (subgraph.titleBracketStyle === 'quoted') {
       return 'subgraph ' + id + '["' + escapeQuoted(title) + '"]';
     }
+
+    if (!title || title === id) return 'subgraph ' + id;
 
     return 'subgraph ' + id + ' [' + title + ']';
   }

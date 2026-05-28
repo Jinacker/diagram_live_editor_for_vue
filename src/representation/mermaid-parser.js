@@ -241,6 +241,14 @@
     }
   }
 
+  function enableStaticProfile(model, reason, pendingDirectives) {
+    if (!StaticFlowchartParser || !model) return;
+    StaticFlowchartParser.markStatic(model, reason);
+    if (pendingDirectives && pendingDirectives.length && (!model.directives || !model.directives.length)) {
+      model.directives = pendingDirectives.slice();
+    }
+  }
+
   function countSourceOccurrence(model, line) {
     return ParserHighlight.nextOccurrence(model._sourceTextCounts, line);
   }
@@ -438,8 +446,7 @@
           model.headerKeyword = parsedHeader ? parsedHeader.keyword : (/^graph\b/i.test(line) ? 'graph' : 'flowchart');
           model.direction = parsedHeader ? parsedHeader.direction : headerMatch[1].toUpperCase();
           if (model.headerKeyword === 'graph' && StaticFlowchartParser) {
-            StaticFlowchartParser.markStatic(model, 'graph-keyword');
-            model.directives = pendingDirectives.slice();
+            enableStaticProfile(model, 'graph-keyword', pendingDirectives);
           }
           if (model.profile !== 'static' && model.direction === 'TB') model.direction = 'TD';
           started = true;
@@ -448,8 +455,7 @@
         if (/^(?:graph|flowchart)\s*$/.test(line)) {
           model.headerKeyword = /^graph\b/i.test(line) ? 'graph' : 'flowchart';
           if (model.headerKeyword === 'graph' && StaticFlowchartParser) {
-            StaticFlowchartParser.markStatic(model, 'graph-keyword');
-            model.directives = pendingDirectives.slice();
+            enableStaticProfile(model, 'graph-keyword', pendingDirectives);
           }
           started = true;
           continue;
@@ -461,8 +467,16 @@
       // subgraph open: "subgraph id [title]" or "subgraph title" or "subgraph"
       if (/^subgraph\b/.test(line)) {
         var sgRest = line.slice('subgraph'.length).trim();
+        if (model.profile !== 'static' && StaticFlowchartParser &&
+            StaticFlowchartParser.requiresStaticSubgraphProfile &&
+            StaticFlowchartParser.requiresStaticSubgraphProfile(sgRest)) {
+          enableStaticProfile(model, 'static-subgraph', pendingDirectives);
+        }
         if (model.profile === 'static' && StaticFlowchartParser) {
           var staticSg = StaticFlowchartParser.parseSubgraphOpen(sgRest, model.subgraphs.length + 1);
+          if (model._subgraphStack.length) {
+            staticSg.parentId = model._subgraphStack[model._subgraphStack.length - 1].id;
+          }
           if (model.profile === 'static' && staticSg && (staticSg.titleBracketStyle === 'quoted' || staticSg.titleBracketStyle === 'title-only')) {
             StaticFlowchartParser.markStatic(model, 'static-subgraph');
           }

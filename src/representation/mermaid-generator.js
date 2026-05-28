@@ -191,6 +191,67 @@
     if (!subgraphs.length) return;
     var statements = model.statements || [];
     var useStaticOutput = isStaticProfile(model);
+
+    var childrenByParent = {};
+    if (useStaticOutput) {
+      for (var c = 0; c < subgraphs.length; c++) {
+        var parentId = subgraphs[c].parentId || '';
+        if (!childrenByParent[parentId]) childrenByParent[parentId] = [];
+        childrenByParent[parentId].push(subgraphs[c]);
+      }
+    }
+
+    function writeSubgraph(sg, depth) {
+      var indent = new Array(depth + 1).join('    ');
+      var childIndent = indent + '    ';
+      var header = useStaticOutput && StaticFlowchartGenerator
+        ? StaticFlowchartGenerator.generateSubgraphHeader(sg)
+        : (sg.title && sg.title !== sg.id ? 'subgraph ' + sg.id + ' [' + sg.title + ']' : 'subgraph ' + sg.id);
+      lines.push(indent + header);
+      if (useStaticOutput && sg.direction) {
+        var sgDir = sg.direction.toUpperCase() === 'TD' ? 'TB' : sg.direction;
+        lines.push(childIndent + 'direction ' + sgDir);
+      }
+
+      var wroteStatement = false;
+      if (useStaticOutput) {
+        for (var s = 0; s < statements.length; s++) {
+          if (statements[s].subgraphId !== sg.id) continue;
+          var statementLine = generateStatementLine(statements[s], model, usedNodes, usedEdges);
+          if (statementLine) {
+            lines.push(childIndent + statementLine);
+            wroteStatement = true;
+          }
+        }
+
+        var children = childrenByParent[sg.id] || [];
+        for (var child = 0; child < children.length; child++) {
+          writeSubgraph(children[child], depth + 1);
+          wroteStatement = true;
+        }
+      }
+
+      if (!wroteStatement) {
+        for (var j = 0; j < sg.nodeIds.length; j++) {
+          var nid = sg.nodeIds[j];
+          var node = findNode(model.nodes, nid);
+          if (node) {
+            lines.push(childIndent + generateNode(node));
+            usedNodes[nid] = true;
+          }
+        }
+      }
+      lines.push(indent + 'end');
+    }
+
+    if (useStaticOutput) {
+      var roots = childrenByParent[''] || [];
+      for (var root = 0; root < roots.length; root++) {
+        writeSubgraph(roots[root], 1);
+      }
+      return;
+    }
+
     for (var i = 0; i < subgraphs.length; i++) {
       var sg = subgraphs[i];
       var header = useStaticOutput && StaticFlowchartGenerator

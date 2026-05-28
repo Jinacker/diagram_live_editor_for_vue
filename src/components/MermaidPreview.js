@@ -682,6 +682,7 @@ Vue.component('mermaid-preview', {
       }
 
       canvas.onwheel = function (e) {
+        if (self._shouldLetEditTextScroll(e.target)) return;
         e.preventDefault();
         self._zoomAtClient(e.deltaY < 0 ? 1.1 : 0.9, e.clientX, e.clientY);
       };
@@ -715,6 +716,15 @@ Vue.component('mermaid-preview', {
       }
       this._panMouseUpHandler = function () { self._endPan(); };
       document.addEventListener('mouseup', this._panMouseUpHandler);
+    },
+
+    _shouldLetEditTextScroll: function (target) {
+      if (!this.isStaticDiagram()) return false;
+      if (!target || !target.closest) return false;
+      var overlay = target.closest('.node-edit-overlay');
+      if (!overlay) return false;
+      var editor = target.closest('textarea') || (overlay.querySelector && overlay.querySelector('textarea'));
+      return !!(editor && editor.scrollHeight > editor.clientHeight);
     },
 
     _canPreparePan: function (target, svgEl) {
@@ -1497,66 +1507,185 @@ Vue.component('mermaid-preview', {
       var sgById = {};
       for (var k = 0; k < subgraphs.length; k++) sgById[subgraphs[k].id] = subgraphs[k];
 
+      function normalizeClusterId(rawId) {
+        rawId = String(rawId || '');
+        if (!rawId) return '';
+        if (sgById[rawId]) return rawId;
+
+        var candidates = [
+          rawId.replace(/^cluster_/, ''),
+          rawId.replace(/^subGraph/i, ''),
+          rawId.replace(/^.*flowchart-/, '').replace(/-\d+$/, '')
+        ];
+        for (var c = 0; c < candidates.length; c++) {
+          if (sgById[candidates[c]]) return candidates[c];
+        }
+        return '';
+      }
+
+      function getSubgraphIdFromDom(clusterEl) {
+        var rawIds = [
+          clusterEl.getAttribute('data-id'),
+          clusterEl.getAttribute('data-node'),
+          clusterEl.id
+        ];
+        for (var r = 0; r < rawIds.length; r++) {
+          var normalized = normalizeClusterId(rawIds[r]);
+          if (normalized) return normalized;
+        }
+        return '';
+      }
+
+      function usableRect(el) {
+        if (!el || !el.getBoundingClientRect) return null;
+        var rect = el.getBoundingClientRect();
+        return rect && rect.width > 0 && rect.height > 0 ? rect : null;
+      }
+
+      function getLabelText(labelEl) {
+        if (!labelEl) return '';
+        var text = labelEl.textContent || '';
+        return String(text).replace(/\u00a0/g, ' ').trim();
+      }
+
+      function getSubgraphIdFromLabel(labelEl) {
+        var labelText = getLabelText(labelEl);
+        if (!labelText) return '';
+        for (var s = 0; s < subgraphs.length; s++) {
+          var title = String(subgraphs[s].title || subgraphs[s].id || '').trim();
+          if (title && title === labelText) return subgraphs[s].id;
+        }
+        return '';
+      }
+
+      function sameNodeSet(a, b) {
+        if (!a || !b || a.length !== b.length) return false;
+        var seen = {};
+        for (var i = 0; i < a.length; i++) seen[a[i]] = true;
+        for (var j = 0; j < b.length; j++) {
+          if (!seen[b[j]]) return false;
+        }
+        return true;
+      }
+
+      function getSubgraphIdFromContainedNodes(nodeIdsInCluster) {
+        if (!nodeIdsInCluster || !nodeIdsInCluster.length) return '';
+
+        for (var exact = 0; exact < subgraphs.length; exact++) {
+          if (sameNodeSet(subgraphs[exact].nodeIds || [], nodeIdsInCluster)) {
+            return subgraphs[exact].id;
+          }
+        }
+
+        var bestId = '';
+        var bestScore = 0;
+        var tied = false;
+        for (var j = 0; j < subgraphs.length; j++) {
+          var nodeIds = subgraphs[j].nodeIds || [];
+          var score = 0;
+          for (var m = 0; m < nodeIdsInCluster.length; m++) {
+            if (nodeIds.indexOf(nodeIdsInCluster[m]) !== -1) score++;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestId = subgraphs[j].id;
+            tied = false;
+          } else if (score > 0 && score === bestScore) {
+            tied = true;
+          }
+        }
+
+        return tied ? '' : bestId;
+      }
+
+      function openSubgraphToolbar(e, sgId, clusterEl, labelEl) {
+        e.preventDefault();
+        e.stopPropagation();
+        var canvas = self.$refs.canvas;
+        var cr = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+        var labelRect = usableRect(labelEl);
+        var clusterRect = usableRect(clusterEl);
+        var anchorX = e.clientX;
+        var anchorY = e.clientY;
+
+        if (labelRect) {
+          anchorX = labelRect.left + labelRect.width / 2;
+          anchorY = labelRect.top + labelRect.height / 2;
+        } else if (clusterRect) {
+          anchorX = clusterRect.left + clusterRect.width / 2;
+          anchorY = clusterRect.top + 12;
+        }
+
+        self.subgraphTitleToolbar = {
+          sgId: sgId,
+          x: Math.round(anchorX - cr.left),
+          y: Math.round(anchorY - cr.top)
+        };
+      }
+
+      function attachTitleHit(clusterEl, labelEl, sgId) {
+        var rectEl = clusterEl.querySelector('rect');
+        if (!rectEl || !rectEl.parentNode || rectEl.parentNode !== clusterEl) return;
+
+        var x = parseFloat(rectEl.getAttribute('x') || '0');
+        var y = parseFloat(rectEl.getAttribute('y') || '0');
+        var width = parseFloat(rectEl.getAttribute('width') || '0');
+        if (!width) return;
+
+        var hit = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        hit.setAttribute('class', 'subgraph-title-hit');
+        hit.setAttribute('x', x);
+        hit.setAttribute('y', y);
+        hit.setAttribute('width', width);
+        hit.setAttribute('height', '28');
+        hit.setAttribute('fill', '#000');
+        hit.setAttribute('fill-opacity', '0.003');
+        hit.setAttribute('stroke', 'none');
+        hit.style.cursor = 'pointer';
+        hit.style.pointerEvents = 'all';
+        hit.addEventListener('click', function (e) {
+          openSubgraphToolbar(e, sgId, clusterEl, labelEl);
+        });
+        clusterEl.appendChild(hit);
+      }
+
       var clusters = svgEl.querySelectorAll('.cluster');
       for (var i = 0; i < clusters.length; i++) {
         (function (clusterEl) {
           var labelEl = clusterEl.querySelector('.cluster-label');
-          if (!labelEl) return;
+          var sgId = getSubgraphIdFromDom(clusterEl) || getSubgraphIdFromLabel(labelEl);
 
-          // Mermaid SVG에서 .node는 .cluster의 DOM 자식이 아닌 형제다.
-          // postRenderSetup에서 이미 수집된 _elements(nodeId → DOM el)와
-          // getBoundingClientRect으로 화면 좌표 기준 기하학적 포함 여부를 확인해 매핑.
-          var sgId = null;
-          var clusterRect = clusterEl.getBoundingClientRect();
-          var nodeIdsInCluster = [];
-          var elements = self._elements || {};
-          for (var nodeId in elements) {
-            var nodeEl = elements[nodeId];
-            if (!nodeEl) continue;
-            var nr = nodeEl.getBoundingClientRect();
-            var nCx = nr.left + nr.width  / 2;
-            var nCy = nr.top  + nr.height / 2;
-            if (nCx >= clusterRect.left && nCx <= clusterRect.right &&
-                nCy >= clusterRect.top  && nCy <= clusterRect.bottom) {
-              nodeIdsInCluster.push(nodeId);
-            }
-          }
-          if (nodeIdsInCluster.length > 0) {
-            var bestScore = 0;
-            for (var j = 0; j < subgraphs.length; j++) {
-              var nodeIds = subgraphs[j].nodeIds || [];
-              var score = 0;
-              for (var m = 0; m < nodeIdsInCluster.length; m++) {
-                if (nodeIds.indexOf(nodeIdsInCluster[m]) !== -1) score++;
-              }
-              if (score > bestScore) { bestScore = score; sgId = subgraphs[j].id; }
-            }
-          }
-
-          // fallback: cluster DOM id (Mermaid 버전에 따라 subgraph id 그대로이거나 cluster_ 접두사)
           if (!sgId) {
-            var rawId = clusterEl.getAttribute('data-id') || clusterEl.id || '';
-            if (rawId && sgById[rawId]) {
-              sgId = rawId;
-            } else if (rawId) {
-              var stripped = rawId.replace(/^cluster_/, '');
-              if (sgById[stripped]) sgId = stripped;
+            // Mermaid SVG에서 .node는 .cluster의 DOM 자식이 아닌 형제다.
+            // DOM id가 없는 구버전/특수 렌더만 화면 좌표 기준 포함 여부로 fallback 매핑.
+            var clusterRect = clusterEl.getBoundingClientRect();
+            var nodeIdsInCluster = [];
+            var elements = self._elements || {};
+            for (var nodeId in elements) {
+              var nodeEl = elements[nodeId];
+              if (!nodeEl) continue;
+              var nr = nodeEl.getBoundingClientRect();
+              var nCx = nr.left + nr.width  / 2;
+              var nCy = nr.top  + nr.height / 2;
+              if (nCx >= clusterRect.left && nCx <= clusterRect.right &&
+                  nCy >= clusterRect.top  && nCy <= clusterRect.bottom) {
+                nodeIdsInCluster.push(nodeId);
+              }
+            }
+            if (nodeIdsInCluster.length > 0) {
+              sgId = getSubgraphIdFromContainedNodes(nodeIdsInCluster);
             }
           }
 
           if (!sgId) return;
 
-          labelEl.style.cursor = 'pointer';
-          labelEl.addEventListener('click', function (e) {
-            e.stopPropagation();
-            var canvas = self.$refs.canvas;
-            var cr = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
-            self.subgraphTitleToolbar = {
-              sgId: sgId,
-              x: e.clientX - cr.left,
-              y: e.clientY - cr.top
-            };
-          });
+          if (labelEl) {
+            labelEl.style.cursor = 'pointer';
+            labelEl.addEventListener('click', function (e) {
+              openSubgraphToolbar(e, sgId, clusterEl, labelEl);
+            });
+          }
+          attachTitleHit(clusterEl, labelEl, sgId);
         })(clusters[i]);
       }
     },

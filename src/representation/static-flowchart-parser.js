@@ -80,15 +80,23 @@
     };
   }
 
+  function parseQuotedSubgraphOpen(rest) {
+    return new RegExp(
+      '^(' + IDENT_SOURCE + ')\\s*\\[\\s*"((?:\\\\.|[^"])*)"\\s*\\]$'
+    ).exec(String(rest || '').trim());
+  }
+
+  function requiresStaticSubgraphProfile(rest) {
+    return !!parseQuotedSubgraphOpen(rest);
+  }
+
   function parseSubgraphOpen(rest, index) {
     rest = String(rest || '').trim();
-    var idTitleQuoted = new RegExp(
-      '^(' + IDENT_SOURCE + ')\\s*\\[\\s*"((?:\\\\.|[^"])*)"\\s*\\]$'
-    ).exec(rest);
+    var idTitleQuoted = parseQuotedSubgraphOpen(rest);
     if (idTitleQuoted) {
       return {
         id: idTitleQuoted[1],
-        title: decodeEscapedText(idTitleQuoted[2]).trim() || idTitleQuoted[1],
+        title: decodeEscapedText(idTitleQuoted[2]),
         nodeIds: [],
         titleBracketStyle: 'quoted'
       };
@@ -179,6 +187,7 @@
     markStatic: markStatic,
     parseDirectiveLine: parseDirectiveLine,
     parseHeaderLine: parseHeaderLine,
+    requiresStaticSubgraphProfile: requiresStaticSubgraphProfile,
     parseSubgraphOpen: parseSubgraphOpen,
     parseSubgraphDirection: parseSubgraphDirection,
     parseStyleLine: parseStyleLine,
