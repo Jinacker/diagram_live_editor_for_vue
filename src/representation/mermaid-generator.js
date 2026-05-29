@@ -193,11 +193,19 @@
     var useStaticOutput = isStaticProfile(model);
 
     var childrenByParent = {};
+    var subgraphById = {};
+    var orderedSubgraphs = {};
     if (useStaticOutput) {
       for (var c = 0; c < subgraphs.length; c++) {
         var parentId = subgraphs[c].parentId || '';
         if (!childrenByParent[parentId]) childrenByParent[parentId] = [];
         childrenByParent[parentId].push(subgraphs[c]);
+        subgraphById[subgraphs[c].id] = subgraphs[c];
+      }
+      for (var os = 0; os < statements.length; os++) {
+        if (statements[os] && statements[os].type === 'subgraph' && statements[os].id) {
+          orderedSubgraphs[statements[os].id] = true;
+        }
       }
     }
 
@@ -216,8 +224,18 @@
       var wroteStatement = false;
       if (useStaticOutput) {
         for (var s = 0; s < statements.length; s++) {
-          if (statements[s].subgraphId !== sg.id) continue;
-          var statementLine = generateStatementLine(statements[s], model, usedNodes, usedEdges);
+          var statement = statements[s];
+          if (!statement) continue;
+          if (statement.type === 'subgraph' && statement.parentSubgraphId === sg.id) {
+            var childSg = subgraphById[statement.id];
+            if (childSg) {
+              writeSubgraph(childSg, depth + 1);
+              wroteStatement = true;
+            }
+            continue;
+          }
+          if (statement.subgraphId !== sg.id) continue;
+          var statementLine = generateStatementLine(statement, model, usedNodes, usedEdges);
           if (statementLine) {
             lines.push(childIndent + statementLine);
             wroteStatement = true;
@@ -226,6 +244,7 @@
 
         var children = childrenByParent[sg.id] || [];
         for (var child = 0; child < children.length; child++) {
+          if (orderedSubgraphs[children[child].id]) continue;
           writeSubgraph(children[child], depth + 1);
           wroteStatement = true;
         }
@@ -246,7 +265,16 @@
 
     if (useStaticOutput) {
       var roots = childrenByParent[''] || [];
+      var emittedRoots = {};
+      for (var rs = 0; rs < statements.length; rs++) {
+        if (!statements[rs] || statements[rs].type !== 'subgraph' || statements[rs].parentSubgraphId) continue;
+        var rootSg = subgraphById[statements[rs].id];
+        if (!rootSg || emittedRoots[rootSg.id]) continue;
+        writeSubgraph(rootSg, 1);
+        emittedRoots[rootSg.id] = true;
+      }
       for (var root = 0; root < roots.length; root++) {
+        if (emittedRoots[roots[root].id]) continue;
         writeSubgraph(roots[root], 1);
       }
       return;

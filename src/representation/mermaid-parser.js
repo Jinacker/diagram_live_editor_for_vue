@@ -3,6 +3,7 @@
 
   var FlowEdgeCodec = global.FlowEdgeCodec;
   var StaticFlowchartParser = global.StaticFlowchartParser;
+  var IDENT_SOURCE = '[A-Za-z0-9_\\u3131-\\uD79D]+';
 
   var SHAPE_MAP = [
     { open: '((', close: '))', shape: 'double_circle' },
@@ -105,7 +106,7 @@
     str = str.trim();
     if (!str) return null;
 
-    var idMatch = str.match(/^([a-zA-Z_\u3131-\uD79D][a-zA-Z0-9_\u3131-\uD79D]*)/);
+    var idMatch = str.match(new RegExp('^(' + IDENT_SOURCE + ')'));
     if (!idMatch) return null;
 
     var id = idMatch[1];
@@ -213,7 +214,7 @@
       return;
     }
 
-    var match = line.match(/^style\s+([A-Za-z_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D]*)\s+(.+)$/);
+    var match = line.match(new RegExp('^style\\s+(' + IDENT_SOURCE + ')\\s+(.+)$'));
     if (!match || !model._nodeMap[match[1]]) return;
     var node = model._nodeMap[match[1]];
     var declarations = match[2].split(',');
@@ -273,6 +274,15 @@
       statement.subgraphId = model._subgraphStack[model._subgraphStack.length - 1].id;
     }
     model.statements.push(statement);
+  }
+
+  function pushSubgraphStatement(model, subgraphId, parentSubgraphId) {
+    if (!model || !subgraphId) return;
+    model.statements.push({
+      type: 'subgraph',
+      id: subgraphId,
+      parentSubgraphId: parentSubgraphId || ''
+    });
   }
 
   function nextEdgeRef(model, from, to) {
@@ -474,14 +484,17 @@
         }
         if (model.profile === 'static' && StaticFlowchartParser) {
           var staticSg = StaticFlowchartParser.parseSubgraphOpen(sgRest, model.subgraphs.length + 1);
+          var staticParentId = '';
           if (model._subgraphStack.length) {
-            staticSg.parentId = model._subgraphStack[model._subgraphStack.length - 1].id;
+            staticParentId = model._subgraphStack[model._subgraphStack.length - 1].id;
+            staticSg.parentId = staticParentId;
           }
           if (model.profile === 'static' && staticSg && (staticSg.titleBracketStyle === 'quoted' || staticSg.titleBracketStyle === 'title-only')) {
             StaticFlowchartParser.markStatic(model, 'static-subgraph');
           }
           model.subgraphs.push(staticSg);
           model._subgraphMap[staticSg.id] = staticSg;
+          pushSubgraphStatement(model, staticSg.id, staticParentId);
           model._subgraphStack.push(staticSg);
           continue;
         }

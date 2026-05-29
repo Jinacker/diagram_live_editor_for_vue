@@ -1,7 +1,7 @@
 (function (global) {
   'use strict';
 
-  var IDENT_SOURCE = '[A-Za-z_\\u3131-\\uD79D][A-Za-z0-9_\\u3131-\\uD79D]*';
+  var IDENT_SOURCE = '[A-Za-z0-9_\\u3131-\\uD79D]+';
   var IDENT_RE = new RegExp('^(' + IDENT_SOURCE + ')$');
 
   function markStatic(model, reason) {

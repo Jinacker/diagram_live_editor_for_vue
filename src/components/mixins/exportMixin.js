@@ -51,28 +51,31 @@
       },
 
       exportSvg: function () {
-        var svgStr = this.getSvgText();
-        if (!svgStr) return;
+        var svgEl = this.getSvgElement();
+        var svgSource = svgEl || this.getSvgText();
+        if (!svgSource) return;
         return this._runExport(
-          SvgExport.exportSvg(svgStr, { filename: 'diagram.svg' }),
+          SvgExport.exportSvg(svgSource, { filename: 'diagram.svg', sourceElement: svgEl }),
           'SVG exported!'
         );
       },
 
       exportPng: function () {
-        var svgStr = this.getSvgText();
-        if (!svgStr) return;
+        var svgEl = this.getSvgElement();
+        var svgSource = svgEl || this.getSvgText();
+        if (!svgSource) return;
         return this._runExport(
-          SvgExport.exportPng(svgStr, { filename: 'diagram.png', scale: 2, padding: 20 }),
+          SvgExport.exportPng(svgSource, { filename: 'diagram.png', scale: 2, padding: 20, sourceElement: svgEl }),
           'PNG exported!'
         );
       },
 
       exportJpg: function () {
-        var svgStr = this.getSvgText();
-        if (!svgStr) return;
+        var svgEl = this.getSvgElement();
+        var svgSource = svgEl || this.getSvgText();
+        if (!svgSource) return;
         return this._runExport(
-          SvgExport.exportJpg(svgStr, { filename: 'diagram.jpg', scale: 2, padding: 20, quality: 0.92 }),
+          SvgExport.exportJpg(svgSource, { filename: 'diagram.jpg', scale: 2, padding: 20, quality: 0.92, sourceElement: svgEl }),
           'JPG exported!'
         );
       },
