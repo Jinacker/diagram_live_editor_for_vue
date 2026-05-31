@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-05-31T12:42:39.526Z
+ * Built: 2026-05-31T12:54:58.142Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -4094,7 +4094,7 @@
       var colon = parts[i].indexOf(':');
       if (colon === -1) continue;
       var key = parts[i].slice(0, colon).trim().toLowerCase();
-      if (key === name) return parts[i].slice(colon + 1).trim();
+      if (key === name) return cleanStyleValue(parts[i].slice(colon + 1));
     }
     return '';
   }
@@ -4104,11 +4104,15 @@
     var value = readInlineStyleValue(el, name);
     if (value) return value;
     value = el.getAttribute(name);
-    return value ? String(value).trim() : '';
+    return value ? cleanStyleValue(value) : '';
+  }
+
+  function cleanStyleValue(value) {
+    return String(value || '').replace(/!important/gi, '').trim();
   }
 
   function isUsableStyleValue(value) {
-    value = String(value || '').trim();
+    value = cleanStyleValue(value);
     if (!value) return false;
     var lowered = value.toLowerCase();
     return lowered !== 'inherit' &&
@@ -4124,7 +4128,7 @@
 
   function firstUsableStyleValue() {
     for (var i = 0; i < arguments.length; i++) {
-      if (isUsableStyleValue(arguments[i])) return String(arguments[i]).trim();
+      if (isUsableStyleValue(arguments[i])) return cleanStyleValue(arguments[i]);
     }
     return '';
   }
@@ -4249,7 +4253,11 @@
       fontWeight: (computed && computed.fontWeight) || readInlineStyleValue(target, 'font-weight') || '',
       fontStyle: (computed && computed.fontStyle) || readInlineStyleValue(target, 'font-style') || '',
       lineHeight: lineHeight,
-      fill: fill
+      fill: fill,
+      backgroundColor: firstUsableStyleValue(
+        readStyleValue(target, 'background-color'),
+        computed ? computed.backgroundColor : ''
+      )
     };
   }
 
@@ -4370,156 +4378,8 @@
     }
   }
 
-  function createMeasureContext(fontSize, fontFamily) {
-    var canvas = document.createElement('canvas');
-    var ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    ctx.font = fontSize + 'px ' + fontFamily;
-    return ctx;
-  }
-
-  function isCodeLikeToken(token) {
-    return /[(){}\[\]<>=&|+\-/*_:.,]/.test(String(token || ''));
-  }
-
-  function getLongTokenBreakAt(text, index) {
-    var pairOps = ['&&', '||', '==', '!=', '>=', '<=', '->', '=>', '+=', '-=', '*=', '/='];
-    for (var i = 0; i < pairOps.length; i++) {
-      var op = pairOps[i];
-      if (text.substr(index, op.length) === op) return op;
-    }
-
-    var singleOps = '()[]{}<>+-/*%=!?:,._';
-    var ch = text.charAt(index);
-    return singleOps.indexOf(ch) !== -1 ? ch : '';
-  }
-
-  function splitLongToken(token) {
-    var pieces = [];
-    var current = '';
-    var i = 0;
-
-    while (i < token.length) {
-      var breakToken = getLongTokenBreakAt(token, i);
-      if (breakToken) {
-        current += breakToken;
-        pieces.push(current);
-        current = '';
-        i += breakToken.length;
-        continue;
-      }
-
-      current += token.charAt(i);
-      i += 1;
-    }
-
-    if (current) pieces.push(current);
-    return pieces.length ? pieces : [token];
-  }
-
-  function wrapLongToken(token, maxWidth, ctx) {
-    var pieces = splitLongToken(token);
-    var lines = [];
-    var current = '';
-
-    for (var i = 0; i < pieces.length; i++) {
-      var piece = pieces[i];
-      if (ctx.measureText(piece).width > maxWidth) {
-        if (current) {
-          lines.push(current);
-          current = '';
-        }
-
-        var charCurrent = '';
-        for (var c = 0; c < piece.length; c++) {
-          var candidateChar = charCurrent + piece.charAt(c);
-          if (!charCurrent || ctx.measureText(candidateChar).width <= maxWidth) {
-            charCurrent = candidateChar;
-          } else {
-            lines.push(charCurrent);
-            charCurrent = piece.charAt(c);
-          }
-        }
-        if (charCurrent) lines.push(charCurrent);
-        continue;
-      }
-
-      var candidate = current + piece;
-      if (!current || ctx.measureText(candidate).width <= maxWidth) {
-        current = candidate;
-      } else {
-        lines.push(current);
-        current = piece;
-      }
-    }
-
-    if (current) lines.push(current);
-    return lines.length ? lines : [token];
-  }
-
-  function wrapLineToWidth(line, maxWidth, fontSize, fontFamily) {
-    var normalized = String(line || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-    if (!normalized) return [''];
-
-    var ctx = createMeasureContext(fontSize, fontFamily);
-    if (!ctx) return [normalized];
-    var hasSpaces = normalized.indexOf(' ') !== -1;
-    var relaxedMaxWidth = hasSpaces ? (maxWidth + Math.max(12, fontSize)) : maxWidth;
-    if (ctx.measureText(normalized).width <= relaxedMaxWidth) return [normalized];
-
-    if (!hasSpaces) {
-      return isCodeLikeToken(normalized) ? wrapLongToken(normalized, maxWidth, ctx) : [normalized];
-    }
-
-    var words = normalized.split(' ');
-    var lines = [];
-    var current = '';
-
-    for (var i = 0; i < words.length; i++) {
-      var word = words[i];
-      var candidate = current ? (current + ' ' + word) : word;
-      if (!current || ctx.measureText(candidate).width <= maxWidth) {
-        current = candidate;
-      } else {
-        lines.push(current);
-        if (ctx.measureText(word).width <= maxWidth || !isCodeLikeToken(word)) {
-          current = word;
-        } else {
-          var wrappedWordLines = wrapLongToken(word, maxWidth, ctx);
-          for (var j = 0; j < wrappedWordLines.length - 1; j++) {
-            lines.push(wrappedWordLines[j]);
-          }
-          current = wrappedWordLines[wrappedWordLines.length - 1] || '';
-        }
-      }
-    }
-
-    if (current) lines.push(current);
-    return lines.length ? lines : [normalized];
-  }
-
-  function wrapTextToLines(text, maxWidth, fontSize, fontFamily) {
-    var rawLines = String(text || '')
-      .trim()
-      .split('\n')
-      .map(function (line) { return line.trim(); })
-      .filter(function (line) { return line.length > 0; });
-
-    if (!rawLines.length) return [''];
-
-    var lines = [];
-    for (var i = 0; i < rawLines.length; i++) {
-      var wrapped = wrapLineToWidth(rawLines[i], maxWidth, fontSize, fontFamily);
-      for (var j = 0; j < wrapped.length; j++) {
-        lines.push(wrapped[j]);
-      }
-    }
-
-    return lines.length ? lines : [''];
-  }
-
   function applyTextPaint(el, color) {
-    color = firstUsableStyleValue(color) || '#333';
+    color = cleanStyleValue(firstUsableStyleValue(color) || '#333');
     el.setAttribute('fill', color);
     el.setAttribute('color', color);
     if (el.style && el.style.setProperty) {
@@ -4546,7 +4406,7 @@
       var fontSize = textStyle.fontSize;
       var fontFamily = textStyle.fontFamily;
       var lineHeight = textStyle.lineHeight;
-      var lines = wrapTextToLines(getForeignObjectText(fo, sourceFo), Math.max(16, fw - 10), fontSize, fontFamily);
+      var lines = normalizeTextLines(getForeignObjectText(fo, sourceFo));
       if (!lines.length) lines = [''];
 
       var textEl = doc.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -4579,7 +4439,20 @@
       }
 
       if (fo.parentNode) {
-        fo.parentNode.replaceChild(textEl, fo);
+        if (textStyle.backgroundColor && lines.join('').trim()) {
+          var groupEl = doc.createElementNS('http://www.w3.org/2000/svg', 'g');
+          var backgroundEl = doc.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          backgroundEl.setAttribute('x', fx);
+          backgroundEl.setAttribute('y', fy);
+          backgroundEl.setAttribute('width', fw);
+          backgroundEl.setAttribute('height', fh);
+          backgroundEl.setAttribute('fill', textStyle.backgroundColor);
+          groupEl.appendChild(backgroundEl);
+          groupEl.appendChild(textEl);
+          fo.parentNode.replaceChild(groupEl, fo);
+        } else {
+          fo.parentNode.replaceChild(textEl, fo);
+        }
       }
     }
   }
