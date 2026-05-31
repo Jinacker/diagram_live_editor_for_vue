@@ -1641,6 +1641,11 @@ Vue.component('mermaid-preview', {
         hit.setAttribute('fill', '#000');
         hit.setAttribute('fill-opacity', '0.003');
         hit.setAttribute('stroke', 'none');
+        // Mermaid의 `.cluster rect` 규칙이 presentation attribute보다 우선하므로
+        // 제목 클릭용 hit rect는 inline priority로 다시 투명하게 고정한다.
+        hit.style.setProperty('fill', '#000', 'important');
+        hit.style.setProperty('fill-opacity', '0.003', 'important');
+        hit.style.setProperty('stroke', 'none', 'important');
         hit.style.cursor = 'pointer';
         hit.style.pointerEvents = 'all';
         hit.addEventListener('click', function (e) {
