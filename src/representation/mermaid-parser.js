@@ -169,9 +169,16 @@
       var labelStart = operator.length + leadMatch[0].length;
       var pipeEnd = findPipeClose(str, labelStart);
       if (pipeEnd === -1) continue;
+      var label = decodeEscapedText(str.substring(labelStart, pipeEnd)).trim();
+      var labelQuoted = label.charAt(0) === '"';
+      var repairLabelQuote = labelQuoted && label.charAt(label.length - 1) !== '"';
+      if (labelQuoted) label = label.slice(1);
+      if (labelQuoted && !repairLabelQuote) label = label.slice(0, -1);
       return {
         type: operator,
-        label: decodeEscapedText(str.substring(labelStart, pipeEnd)).trim(),
+        label: label,
+        labelQuoted: labelQuoted,
+        repairLabelQuote: repairLabelQuote,
         endIndex: pipeEnd + 1
       };
     }
@@ -209,13 +216,13 @@
   function parseStyleLine(line, model) {
     if (StaticFlowchartParser && model.profile === 'static') {
       var style = StaticFlowchartParser.parseStyleLine(line);
-      if (!style) return;
+      if (!style) return null;
       StaticFlowchartParser.attachStyleToTarget(model, style, { staticProfile: model.profile === 'static' });
-      return;
+      return style;
     }
 
     var match = line.match(new RegExp('^style\\s+(' + IDENT_SOURCE + ')\\s+(.+)$'));
-    if (!match || !model._nodeMap[match[1]]) return;
+    if (!match || !model._nodeMap[match[1]]) return null;
     var node = model._nodeMap[match[1]];
     var declarations = match[2].split(',');
     for (var i = 0; i < declarations.length; i++) {
@@ -225,13 +232,15 @@
       var value = parts.slice(1).join(':').trim();
       if (key === 'fill') node.fill = value;
     }
+    return null;
   }
 
   function parseLinkStyleLine(line, model) {
     var match = line.match(/^linkStyle\s+(\d+)\s+(.+)$/);
-    if (!match) return;
-    var edge = model.edges[parseInt(match[1], 10)];
-    if (!edge) return;
+    if (!match) return null;
+    var edgeIndex = parseInt(match[1], 10);
+    var edge = model.edges[edgeIndex];
+    if (!edge) return null;
     var declarations = match[2].split(',');
     for (var i = 0; i < declarations.length; i++) {
       var parts = declarations[i].split(':');
@@ -240,6 +249,10 @@
       var value = parts.slice(1).join(':').trim();
       if (key === 'stroke') edge.color = value;
     }
+    return {
+      edgeIndex: edgeIndex,
+      edgeLayoutId: edge._staticLayoutId || ''
+    };
   }
 
   function enableStaticProfile(model, reason, pendingDirectives) {
@@ -285,6 +298,16 @@
     });
   }
 
+  function pushStaticLayout(model, type, raw, details) {
+    if (!model || !model.staticLayout) return null;
+    var item = Object.assign({
+      type: type,
+      raw: raw
+    }, details || {});
+    model.staticLayout.push(item);
+    return item;
+  }
+
   function nextEdgeRef(model, from, to) {
     var key = from + '->' + to;
     var occurrence = (model._edgeRefCounts[key] || 0) + 1;
@@ -296,6 +319,104 @@
     };
   }
 
+  function findEdgeByRef(edges, ref) {
+    if (!ref || !edges) return null;
+    if (ref.layoutId) {
+      for (var byId = 0; byId < edges.length; byId++) {
+        if (edges[byId] && edges[byId]._staticLayoutId === ref.layoutId) return edges[byId];
+      }
+      return null;
+    }
+    var occurrence = 0;
+    for (var i = 0; i < edges.length; i++) {
+      var edge = edges[i];
+      if (!edge || edge.from !== ref.from || edge.to !== ref.to) continue;
+      occurrence++;
+      if (occurrence === ref.occurrence) return edge;
+    }
+    return null;
+  }
+
+  function nextStaticEdgeLayoutId(model) {
+    model._nextStaticEdgeLayoutId++;
+    return 'E' + model._nextStaticEdgeLayoutId;
+  }
+
+  function compactNode(node) {
+    if (!node) return null;
+    return {
+      id: node.id,
+      text: node.text,
+      shape: node.shape
+    };
+  }
+
+  function compactEdge(edge) {
+    if (!edge) return null;
+    return {
+      from: edge.from,
+      to: edge.to,
+      text: edge.text,
+      type: edge.type,
+      color: edge.color
+    };
+  }
+
+  function compactFlowEdge(edge) {
+    if (!edge) return null;
+    return {
+      from: edge.from,
+      to: edge.to,
+      text: edge.text,
+      type: edge.type
+    };
+  }
+
+  function buildFlowLayoutSignature(model, statement) {
+    var nodes = [];
+    var edges = [];
+    var nodeIds = statement && statement.nodeIds ? statement.nodeIds : [];
+    var nodeDefinitions = statement && statement.nodeDefinitions ? statement.nodeDefinitions : [];
+    var edgeRefs = statement && statement.edgeRefs ? statement.edgeRefs : [];
+    for (var i = 0; i < nodeIds.length; i++) {
+      var node = model._nodeMap[nodeIds[i]];
+      nodes.push(nodeDefinitions[i] === false && node ? { id: node.id } : compactNode(node));
+    }
+    for (var j = 0; j < edgeRefs.length; j++) {
+      edges.push(compactFlowEdge(findEdgeByRef(model.edges, edgeRefs[j])));
+    }
+    return JSON.stringify({ nodes: nodes, edges: edges });
+  }
+
+  function buildStyleTargetSignature(model, targetId) {
+    var target = model._nodeMap[targetId] || model._subgraphMap[targetId];
+    if (!target) return '';
+    return JSON.stringify({
+      fill: target.fill,
+      stroke: target.stroke,
+      color: target.color
+    });
+  }
+
+  function finalizeStaticLayout(model) {
+    if (!model || model.profile !== 'static' || !model.staticLayout) return;
+    for (var i = 0; i < model.staticLayout.length; i++) {
+      var item = model.staticLayout[i];
+      if (item.type === 'flow') {
+        item.baselineSignature = buildFlowLayoutSignature(model, model.statements[item.statementIndex]);
+      } else if (item.type === 'style') {
+        item.baselineSignature = buildStyleTargetSignature(model, item.target);
+      } else if (item.type === 'link-style') {
+        item.baselineSignature = JSON.stringify(compactEdge(findEdgeByRef(model.edges, {
+          layoutId: item.edgeLayoutId
+        }) || model.edges[item.edgeIndex]));
+      }
+    }
+    model.staticLayoutSubgraphIds = model.subgraphs.map(function (subgraph) {
+      return subgraph.id;
+    });
+  }
+
   function parseFlowLine(line, model) {
     line = line.trim();
     if (!line) return true;
@@ -304,12 +425,15 @@
     var prevNodeId = null;
     var consumedAny = false;
     var nodeIds = [];
+    var nodeDefinitions = [];
     var edgeRefs = [];
 
     while (remaining.length > 0) {
       remaining = remaining.trim();
       if (!remaining) {
-        return consumedAny ? { type: 'flow', nodeIds: nodeIds, edgeRefs: edgeRefs } : false;
+        return consumedAny
+          ? { type: 'flow', nodeIds: nodeIds, nodeDefinitions: nodeDefinitions, edgeRefs: edgeRefs }
+          : false;
       }
 
       var node = parseNodeDef(remaining);
@@ -338,17 +462,24 @@
         consumedAny = true;
       }
       nodeIds.push(node.id);
+      nodeDefinitions.push(node.raw !== node.id);
 
       remaining = restAfterNode;
 
       if (prevNodeId !== null && model._pendingEdge) {
-        model.edges.push({
+        var edgeObj = {
           from: prevNodeId,
           to: node.id,
           text: model._pendingEdge.label,
           type: model._pendingEdge.type
-        });
-        edgeRefs.push(nextEdgeRef(model, prevNodeId, node.id));
+        };
+        if (model._pendingEdge.labelQuoted) edgeObj.labelQuoted = true;
+        if (model._pendingEdge.repairLabelQuote) edgeObj._repairLabelQuote = true;
+        edgeObj._staticLayoutId = nextStaticEdgeLayoutId(model);
+        model.edges.push(edgeObj);
+        var edgeRef = nextEdgeRef(model, prevNodeId, node.id);
+        if (edgeObj._staticLayoutId) edgeRef.layoutId = edgeObj._staticLayoutId;
+        edgeRefs.push(edgeRef);
         model._pendingEdge = null;
         consumedAny = true;
       }
@@ -362,11 +493,15 @@
       } else {
         prevNodeId = null;
         model._pendingEdge = null;
-        return !remaining ? { type: 'flow', nodeIds: nodeIds, edgeRefs: edgeRefs } : false;
+        return !remaining
+          ? { type: 'flow', nodeIds: nodeIds, nodeDefinitions: nodeDefinitions, edgeRefs: edgeRefs }
+          : false;
       }
     }
 
-    return consumedAny ? { type: 'flow', nodeIds: nodeIds, edgeRefs: edgeRefs } : false;
+    return consumedAny
+      ? { type: 'flow', nodeIds: nodeIds, nodeDefinitions: nodeDefinitions, edgeRefs: edgeRefs }
+      : false;
   }
 
   function parseMermaid(script) {
@@ -400,9 +535,11 @@
       subgraphs: [],
       styles: [],
       statements: [],
+      staticLayout: [],
       _nodeMap: {},
       _pendingEdge: null,
       _edgeRefCounts: {},
+      _nextStaticEdgeLayoutId: 0,
       _sourceTextCounts: {},
       _subgraphStack: [],
       _subgraphMap: {},
@@ -419,33 +556,50 @@
     var pendingDirectives = [];
 
     for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim();
+      var rawLine = lines[i];
+      var line = rawLine.trim();
       var sourceInfo = countSourceOccurrence(model, line);
 
-      if (!line) continue;
+      if (!line) {
+        pushStaticLayout(model, 'blank', rawLine);
+        continue;
+      }
 
       if (StaticFlowchartParser) {
         var directive = StaticFlowchartParser.parseDirectiveLine(line);
         if (directive) {
           pendingDirectives.push(directive);
+          pushStaticLayout(model, 'directive', rawLine, { value: directive });
           continue;
         }
       }
 
-      if (line.indexOf('%%') === 0) continue;
+      if (line.indexOf('%%') === 0) {
+        pushStaticLayout(model, 'raw', rawLine);
+        continue;
+      }
       if (line.indexOf('classDef') === 0 || line.indexOf('class ') === 0) {
         pushRawTarget(model, line, i + 1, 'class', sourceInfo);
         pushRawStatement(model, line);
+        pushStaticLayout(model, 'raw', rawLine);
         continue;
       }
 
       if (line.indexOf('style ') === 0) {
-        parseStyleLine(line, model);
+        var parsedStyle = parseStyleLine(line, model);
+        pushStaticLayout(model, 'style', rawLine, {
+          target: parsedStyle ? parsedStyle.target : '',
+          style: parsedStyle
+        });
         continue;
       }
 
       if (line.indexOf('linkStyle ') === 0) {
-        parseLinkStyleLine(line, model);
+        var parsedLinkStyle = parseLinkStyleLine(line, model);
+        pushStaticLayout(model, 'link-style', rawLine, {
+          edgeIndex: parsedLinkStyle ? parsedLinkStyle.edgeIndex : -1,
+          edgeLayoutId: parsedLinkStyle ? parsedLinkStyle.edgeLayoutId : ''
+        });
         continue;
       }
 
@@ -460,6 +614,10 @@
           }
           if (model.profile !== 'static' && model.direction === 'TB') model.direction = 'TD';
           started = true;
+          pushStaticLayout(model, 'header', rawLine, {
+            keyword: model.headerKeyword,
+            direction: model.direction
+          });
           continue;
         }
         if (/^(?:graph|flowchart)\s*$/.test(line)) {
@@ -468,11 +626,18 @@
             enableStaticProfile(model, 'graph-keyword', pendingDirectives);
           }
           started = true;
+          pushStaticLayout(model, 'header', rawLine, {
+            keyword: model.headerKeyword,
+            direction: model.direction
+          });
           continue;
         }
       }
 
-      if (!started) continue;
+      if (!started) {
+        pushStaticLayout(model, 'raw', rawLine);
+        continue;
+      }
 
       // subgraph open: "subgraph id [title]" or "subgraph title" or "subgraph"
       if (/^subgraph\b/.test(line)) {
@@ -495,6 +660,11 @@
           model.subgraphs.push(staticSg);
           model._subgraphMap[staticSg.id] = staticSg;
           pushSubgraphStatement(model, staticSg.id, staticParentId);
+          pushStaticLayout(model, 'subgraph', rawLine, {
+            subgraphId: staticSg.id,
+            baselineTitle: staticSg.title,
+            baselineTitleBracketStyle: staticSg.titleBracketStyle
+          });
           model._subgraphStack.push(staticSg);
           continue;
         }
@@ -518,6 +688,11 @@
         model.subgraphs.push(sg);
         model._subgraphMap[sgId] = sg;
         model._subgraphStack.push(sg);
+        pushStaticLayout(model, 'subgraph', rawLine, {
+          subgraphId: sg.id,
+          baselineTitle: sg.title,
+          baselineTitleBracketStyle: sg.titleBracketStyle
+        });
         continue;
       }
 
@@ -526,13 +701,23 @@
         if (subgraphDirection) {
           model._subgraphStack[model._subgraphStack.length - 1].direction = subgraphDirection;
           StaticFlowchartParser.markStatic(model, 'subgraph-direction');
+          pushStaticLayout(model, 'subgraph-direction', rawLine, {
+            subgraphId: model._subgraphStack[model._subgraphStack.length - 1].id,
+            baselineDirection: subgraphDirection
+          });
           continue;
         }
       }
 
       // subgraph close
       if (line === 'end') {
+        var closingSubgraph = model._subgraphStack.length
+          ? model._subgraphStack[model._subgraphStack.length - 1]
+          : null;
         if (model._subgraphStack.length) model._subgraphStack.pop();
+        pushStaticLayout(model, 'subgraph-end', rawLine, {
+          subgraphId: closingSubgraph ? closingSubgraph.id : ''
+        });
         continue;
       }
 
@@ -540,6 +725,7 @@
       if (!statement) {
         pushRawTarget(model, line, i + 1, 'flow-line', sourceInfo);
         pushRawStatement(model, line);
+        pushStaticLayout(model, 'raw', rawLine);
       } else {
         // 현재 subgraph 안에 있으면 선언된 노드를 subgraph에 등록
         if (model._subgraphStack.length) {
@@ -553,6 +739,9 @@
           }
         }
         model.statements.push(statement);
+        pushStaticLayout(model, 'flow', rawLine, {
+          statementIndex: model.statements.length - 1
+        });
       }
     }
 
@@ -570,15 +759,29 @@
     };
 
     if (model.profile !== 'static') {
+      for (var ei = 0; ei < model.edges.length; ei++) {
+        delete model.edges[ei]._staticLayoutId;
+      }
+      for (var sti = 0; sti < model.statements.length; sti++) {
+        var regularEdgeRefs = model.statements[sti] && model.statements[sti].edgeRefs;
+        for (var eri = 0; regularEdgeRefs && eri < regularEdgeRefs.length; eri++) {
+          delete regularEdgeRefs[eri].layoutId;
+        }
+        delete model.statements[sti].nodeDefinitions;
+      }
       delete model.headerKeyword;
       delete model.profile;
       delete model.directives;
       delete model.styles;
+      delete model.staticLayout;
+    } else {
+      finalizeStaticLayout(model);
     }
 
     delete model._nodeMap;
     delete model._pendingEdge;
     delete model._edgeRefCounts;
+    delete model._nextStaticEdgeLayoutId;
     delete model._sourceTextCounts;
     delete model._diagnostics;
     delete model._subgraphStack;

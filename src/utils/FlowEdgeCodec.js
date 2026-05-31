@@ -142,7 +142,8 @@
         to: source.to,
         type: type,
         text: source.text || '',
-        color: source.color || ''
+        color: source.color || '',
+        labelQuoted: !!source.labelQuoted
       };
     }
 
@@ -151,7 +152,8 @@
       to: source.from,
       type: alias,
       text: source.text || '',
-      color: source.color || ''
+      color: source.color || '',
+      labelQuoted: !!source.labelQuoted
     };
   }
 
