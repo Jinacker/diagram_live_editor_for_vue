@@ -552,10 +552,11 @@
     return Promise.resolve();
   }
 
-  function exportRaster(svgSource, options) {
+  // SVG 소스를 래스터화해 Blob으로 resolve한다. 파일 다운로드 없이 Blob을
+  // 직접 사용해야 하는 경우(서버 업로드 등)를 위한 export PNG의 핵심 경로.
+  function rasterizeToBlob(svgSource, options) {
     options = options || {};
     var format = options.format || 'png';
-    var filename = options.filename || ('diagram.' + format);
     var scale = options.scale || 2;
     var bgColor = options.bgColor || '#ffffff';
     var mime = format === 'jpg' || format === 'jpeg' ? 'image/jpeg' : 'image/png';
@@ -587,8 +588,7 @@
             reject(new Error('Failed to create raster image'));
             return;
           }
-          downloadBlob(rasterBlob, filename);
-          resolve();
+          resolve(rasterBlob);
         }, mime, mime === 'image/jpeg' ? quality : undefined);
       };
       img.onerror = function () {
@@ -596,6 +596,15 @@
         reject(new Error('Failed to load SVG as image'));
       };
       img.src = url;
+    });
+  }
+
+  function exportRaster(svgSource, options) {
+    options = options || {};
+    var format = options.format || 'png';
+    var filename = options.filename || ('diagram.' + format);
+    return rasterizeToBlob(svgSource, options).then(function (rasterBlob) {
+      downloadBlob(rasterBlob, filename);
     });
   }
 
@@ -610,6 +619,14 @@
       options = Object.assign({}, options, { format: 'jpg' });
       if (!options.filename) options.filename = 'diagram.jpg';
       return exportRaster(svgSource, options);
+    },
+    toPngBlob: function (svgSource, options) {
+      options = Object.assign({}, options, { format: 'png' });
+      return rasterizeToBlob(svgSource, options);
+    },
+    toJpgBlob: function (svgSource, options) {
+      options = Object.assign({}, options, { format: 'jpg' });
+      return rasterizeToBlob(svgSource, options);
     }
   };
 })(typeof window !== 'undefined' ? window : this);
