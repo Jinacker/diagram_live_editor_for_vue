@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-06-01T00:37:14.379Z
+ * Built: 2026-06-01T02:11:00.909Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -4074,14 +4074,102 @@
     return normalizeTextLines(lines);
   }
 
+  function extractRenderedTextLines(root) {
+    if (!root || !root.ownerDocument || !root.ownerDocument.createRange) return null;
+
+    var lines = [''];
+    var currentLineY = null;
+    var forceBreak = false;
+    var sawRect = false;
+    var range = root.ownerDocument.createRange();
+
+    function appendBreak() {
+      forceBreak = true;
+    }
+
+    function readCharRect(node, index) {
+      try {
+        range.setStart(node, index);
+        range.setEnd(node, index + 1);
+        var rects = range.getClientRects();
+        for (var i = 0; i < rects.length; i++) {
+          if (rects[i] && rects[i].height) return rects[i];
+        }
+        var rect = range.getBoundingClientRect();
+        return rect && rect.height ? rect : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function appendChar(node, index, ch) {
+      if (ch === '\r') return;
+      if (ch === '\n') {
+        appendBreak();
+        return;
+      }
+
+      var rect = readCharRect(node, index);
+      if (rect) {
+        var lineY = rect.top + rect.height / 2;
+        var movedToNextLine = currentLineY !== null &&
+          Math.abs(lineY - currentLineY) > Math.max(1, rect.height * 0.35);
+        if (forceBreak || movedToNextLine) lines.push('');
+        currentLineY = lineY;
+        forceBreak = false;
+        sawRect = true;
+      } else if (forceBreak) {
+        lines.push('');
+        currentLineY = null;
+        forceBreak = false;
+      }
+
+      lines[lines.length - 1] += ch;
+    }
+
+    function walk(node) {
+      if (!node) return;
+      if (node.nodeType === 3) {
+        var text = node.nodeValue || '';
+        for (var i = 0; i < text.length; i++) {
+          appendChar(node, i, text.charAt(i));
+        }
+        return;
+      }
+      if (node.nodeType !== 1) return;
+
+      if (String(node.tagName || '').toLowerCase() === 'br') {
+        appendBreak();
+        return;
+      }
+
+      var children = node.childNodes || [];
+      for (var i = 0; i < children.length; i++) {
+        walk(children[i]);
+      }
+    }
+
+    walk(root);
+    if (range.detach) range.detach();
+    return sawRect ? normalizeTextLines(lines) : null;
+  }
+
+  function getForeignObjectTextTarget(source) {
+    return source && source.querySelector
+      ? (source.querySelector('.nodeLabel, span.edgeLabel, .edgeLabel, p, span, div') || source)
+      : source;
+  }
+
   function getForeignObjectText(fo, sourceFo) {
     var source = sourceFo || fo;
+    var label = getForeignObjectTextTarget(source);
+    var renderedLines = extractRenderedTextLines(label);
+    if (renderedLines && renderedLines.length) {
+      return renderedLines.join('\n');
+    }
     if (source && typeof source.innerText === 'string' && source.innerText.trim()) {
       return normalizeTextLines(source.innerText).join('\n');
     }
-    var label = source && source.querySelector
-      ? (source.querySelector('.nodeLabel, span.edgeLabel, .edgeLabel, p, span, div') || source)
-      : source;
     return extractDomTextLines(label || fo).join('\n');
   }
 
@@ -4220,9 +4308,7 @@
   }
 
   function readForeignObjectTextStyle(sourceFo) {
-    var target = sourceFo && sourceFo.querySelector
-      ? (sourceFo.querySelector('.nodeLabel, span.edgeLabel, .edgeLabel, p, span, div') || sourceFo)
-      : sourceFo;
+    var target = getForeignObjectTextTarget(sourceFo);
     var computed = null;
     if (target && typeof window !== 'undefined' && window.getComputedStyle) {
       try { computed = window.getComputedStyle(target); } catch (e) {}
