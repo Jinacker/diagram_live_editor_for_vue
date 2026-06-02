@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-06-01T02:11:00.909Z
+ * Built: 2026-06-02T01:35:44.657Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -850,6 +850,12 @@
   var BLOCK_OPEN_RE = /^(loop|alt|opt|par)(?:\s+(.+))?$/i;
   var RAW_BLOCK_OPEN_RE = /^(rect|critical|break|box)\b(?:\s+(.+))?$/i;
   var NOTE_OVER_RE = /^note\s+over\s+([A-Za-z0-9_\u3131-\uD79D][^:]*?)(?:\s*:\s*(.*))?$/i;
+  function parseDirectiveLine(line) {
+    if (global.StaticFlowchartParser && global.StaticFlowchartParser.parseDirectiveLine) {
+      return global.StaticFlowchartParser.parseDirectiveLine(line);
+    }
+    return /^%%\{[\s\S]*\}%%$/.test(line) ? line : null;
+  }
 
   function pushBlock(model, kind, recognized) {
     model._blockStack.push({
@@ -1021,6 +1027,7 @@
       return {
         type: 'sequenceDiagram',
         explicitParticipants: false,
+        directives: [],
         participants: [],
         messages: [],
         statements: [],
@@ -1041,6 +1048,7 @@
     var model = {
       type: 'sequenceDiagram',
       explicitParticipants: false,
+      directives: [],
       participants: [],
       messages: [],
       statements: [],
@@ -1072,6 +1080,8 @@
       if (!line) continue;
 
       if (!started) {
+        var directive = parseDirectiveLine(line);
+        if (directive) model.directives.push(directive);
         if (line.indexOf('%%') === 0) continue;
         if (/^sequenceDiagram$/i.test(line)) {
           started = true;
@@ -1176,7 +1186,8 @@
   function generateSequence(model) {
     if (!model) return '';
 
-    var lines = ['sequenceDiagram'];
+    var lines = model.directives ? model.directives.slice() : [];
+    lines.push('sequenceDiagram');
     if (model.autonumber) lines.push('    autonumber');
     var participants = model.participants || [];
     var messages = model.messages || [];

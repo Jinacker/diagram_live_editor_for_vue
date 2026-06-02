@@ -61,7 +61,8 @@
   function generateSequence(model) {
     if (!model) return '';
 
-    var lines = ['sequenceDiagram'];
+    var lines = model.directives ? model.directives.slice() : [];
+    lines.push('sequenceDiagram');
     if (model.autonumber) lines.push('    autonumber');
     var participants = model.participants || [];
     var messages = model.messages || [];

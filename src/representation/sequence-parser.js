@@ -10,6 +10,12 @@
   var BLOCK_OPEN_RE = /^(loop|alt|opt|par)(?:\s+(.+))?$/i;
   var RAW_BLOCK_OPEN_RE = /^(rect|critical|break|box)\b(?:\s+(.+))?$/i;
   var NOTE_OVER_RE = /^note\s+over\s+([A-Za-z0-9_\u3131-\uD79D][^:]*?)(?:\s*:\s*(.*))?$/i;
+  function parseDirectiveLine(line) {
+    if (global.StaticFlowchartParser && global.StaticFlowchartParser.parseDirectiveLine) {
+      return global.StaticFlowchartParser.parseDirectiveLine(line);
+    }
+    return /^%%\{[\s\S]*\}%%$/.test(line) ? line : null;
+  }
 
   function pushBlock(model, kind, recognized) {
     model._blockStack.push({
@@ -181,6 +187,7 @@
       return {
         type: 'sequenceDiagram',
         explicitParticipants: false,
+        directives: [],
         participants: [],
         messages: [],
         statements: [],
@@ -201,6 +208,7 @@
     var model = {
       type: 'sequenceDiagram',
       explicitParticipants: false,
+      directives: [],
       participants: [],
       messages: [],
       statements: [],
@@ -232,6 +240,8 @@
       if (!line) continue;
 
       if (!started) {
+        var directive = parseDirectiveLine(line);
+        if (directive) model.directives.push(directive);
         if (line.indexOf('%%') === 0) continue;
         if (/^sequenceDiagram$/i.test(line)) {
           started = true;
