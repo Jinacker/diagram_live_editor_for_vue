@@ -1,6 +1,6 @@
 /**
  * gui-editor.component.js
- * Built: 2026-06-02T01:35:44.657Z
+ * Built: 2026-06-02T02:00:26.003Z
  *
  * Concatenation of gui-editor source files (no minification).
  * Requires global Vue 2 and Mermaid loaded separately.
@@ -581,6 +581,7 @@
     insertMessageAtStatementIndex: insertMessageAtStatementIndex,
     removeMessageStatements: removeMessageStatements,
     removeParticipantStatements: removeParticipantStatements,
+    pruneEmptyBlocks: pruneEmptyBlocks,
     wrapMessagesInBlock: wrapMessagesInBlock,
     insertBranchStatement: insertBranchStatement,
     updateBlockText: updateBlockText,
@@ -1108,6 +1109,9 @@
       rawLineNumbers: model._diagnostics.rawLineNumbers.slice(),
       rawTargets: model._diagnostics.rawTargets.slice()
     };
+    if (global.SequenceStatementUtils && global.SequenceStatementUtils.pruneEmptyBlocks) {
+      model.statements = global.SequenceStatementUtils.pruneEmptyBlocks(model.statements);
+    }
     delete model._participantMap;
     delete model._blockStack;
     delete model._sourceTextCounts;

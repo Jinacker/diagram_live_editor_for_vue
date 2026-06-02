@@ -268,6 +268,9 @@
       rawLineNumbers: model._diagnostics.rawLineNumbers.slice(),
       rawTargets: model._diagnostics.rawTargets.slice()
     };
+    if (global.SequenceStatementUtils && global.SequenceStatementUtils.pruneEmptyBlocks) {
+      model.statements = global.SequenceStatementUtils.pruneEmptyBlocks(model.statements);
+    }
     delete model._participantMap;
     delete model._blockStack;
     delete model._sourceTextCounts;
