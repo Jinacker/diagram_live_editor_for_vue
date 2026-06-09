@@ -340,26 +340,62 @@ Vue.component('mermaid-preview', {
       self.renderError = '';
       self.svgContent = '';
 
-      try {
-        window.mermaid.render(containerId, script).then(function (result) {
-          // 가장 최신 render 요청만 반영하고 이전 결과는 버린다.
-          if (renderToken !== self.renderToken) return;
-          self.svgContent  = result.svg;
-          self.renderError = '';
-          self.$emit('svg-rendered', result.svg);
-          self.$nextTick(function () { self.postRenderSetup(); });
-        }).catch(function (err) {
+      var startRender = function () {
+        if (renderToken !== self.renderToken) return;
+
+        try {
+          window.mermaid.render(containerId, script).then(function (result) {
+            // 가장 최신 render 요청만 반영하고 이전 결과는 버린다.
+            if (renderToken !== self.renderToken) return;
+            self.svgContent  = result.svg;
+            self.renderError = '';
+            self.$emit('svg-rendered', result.svg);
+            self.$nextTick(function () { self.postRenderSetup(); });
+          }).catch(function (err) {
+            if (renderToken !== self.renderToken) return;
+            self.svgContent = '';
+            self.renderError = err.message || 'Render error';
+            var errEl = document.getElementById('d' + containerId);
+            if (errEl) errEl.remove();
+          });
+        } catch (e) {
           if (renderToken !== self.renderToken) return;
           self.svgContent = '';
-          self.renderError = err.message || 'Render error';
-          var errEl = document.getElementById('d' + containerId);
-          if (errEl) errEl.remove();
-        });
-      } catch (e) {
-        if (renderToken !== self.renderToken) return;
-        self.svgContent = '';
-        self.renderError = e.message || 'Render error';
+          self.renderError = e.message || 'Render error';
+        }
+      };
+
+      if (typeof Promise === 'undefined') {
+        startRender();
+        return;
       }
+
+      var fontReady = null;
+      if (typeof document !== 'undefined' && document.fonts) {
+        if (document.fonts.status === 'loaded') {
+          startRender();
+          return;
+        }
+        if (document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+          fontReady = Promise.race([
+            document.fonts.ready.then(function () {}, function () {}),
+            new Promise(function (resolve) { setTimeout(resolve, 1200); })
+          ]);
+        }
+      }
+
+      if (!fontReady) {
+        startRender();
+        return;
+      }
+
+      fontReady.then(function () {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(startRender);
+        } else {
+          startRender();
+        }
+      }, startRender);
     },
 
     // 공통 렌더 후 인터랙션 연결 유틸
