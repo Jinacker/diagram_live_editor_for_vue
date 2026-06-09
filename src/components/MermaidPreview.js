@@ -9,6 +9,13 @@
 var FlowEdgeCodec = window.FlowEdgeCodec;
 
 Vue.component('mermaid-preview', {
+  mixins: [
+    previewInlineEditMixin,
+    previewToolbarMixin,
+    previewViewportMixin,
+    previewSubgraphMixin
+  ],
+
   props: {
     model: {
       type: Object,
@@ -289,14 +296,6 @@ Vue.component('mermaid-preview', {
 
   methods: {
 
-    _confirmActiveEdits: function () {
-      if (this.editingNodeId) this.confirmNodeEdit();
-      if (this.editingEdgeIndex !== null) this.confirmEdgeEdit();
-      if (this.editingSequenceParticipantId) this.confirmSequenceParticipantEdit();
-      if (this.editingSequenceMessageIndex !== null) this.confirmSequenceMessageEdit();
-      if (this.editingSequenceBlockId !== null || this.editingSequenceBranchStatementIndex !== null) this.confirmSequenceBlockEdit();
-      if (this.editingSequenceNoteStatementIndex !== null) this.confirmSequenceNoteEdit();
-    },
 
     // 공통 렌더 유틸
 
@@ -340,26 +339,62 @@ Vue.component('mermaid-preview', {
       self.renderError = '';
       self.svgContent = '';
 
-      try {
-        window.mermaid.render(containerId, script).then(function (result) {
-          // 가장 최신 render 요청만 반영하고 이전 결과는 버린다.
-          if (renderToken !== self.renderToken) return;
-          self.svgContent  = result.svg;
-          self.renderError = '';
-          self.$emit('svg-rendered', result.svg);
-          self.$nextTick(function () { self.postRenderSetup(); });
-        }).catch(function (err) {
+      var startRender = function () {
+        if (renderToken !== self.renderToken) return;
+
+        try {
+          window.mermaid.render(containerId, script).then(function (result) {
+            // 가장 최신 render 요청만 반영하고 이전 결과는 버린다.
+            if (renderToken !== self.renderToken) return;
+            self.svgContent  = result.svg;
+            self.renderError = '';
+            self.$emit('svg-rendered', result.svg);
+            self.$nextTick(function () { self.postRenderSetup(); });
+          }).catch(function (err) {
+            if (renderToken !== self.renderToken) return;
+            self.svgContent = '';
+            self.renderError = err.message || 'Render error';
+            var errEl = document.getElementById('d' + containerId);
+            if (errEl) errEl.remove();
+          });
+        } catch (e) {
           if (renderToken !== self.renderToken) return;
           self.svgContent = '';
-          self.renderError = err.message || 'Render error';
-          var errEl = document.getElementById('d' + containerId);
-          if (errEl) errEl.remove();
-        });
-      } catch (e) {
-        if (renderToken !== self.renderToken) return;
-        self.svgContent = '';
-        self.renderError = e.message || 'Render error';
+          self.renderError = e.message || 'Render error';
+        }
+      };
+
+      if (typeof Promise === 'undefined') {
+        startRender();
+        return;
       }
+
+      var fontReady = null;
+      if (typeof document !== 'undefined' && document.fonts) {
+        if (document.fonts.status === 'loaded') {
+          startRender();
+          return;
+        }
+        if (document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+          fontReady = Promise.race([
+            document.fonts.ready.then(function () {}, function () {}),
+            new Promise(function (resolve) { setTimeout(resolve, 1200); })
+          ]);
+        }
+      }
+
+      if (!fontReady) {
+        startRender();
+        return;
+      }
+
+      fontReady.then(function () {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(startRender);
+        } else {
+          startRender();
+        }
+      }, startRender);
     },
 
     // 공통 렌더 후 인터랙션 연결 유틸
@@ -471,9 +506,6 @@ Vue.component('mermaid-preview', {
 
     },
 
-    scheduleFit: function () {
-      this._fitAfterRender = true;
-    },
 
     openContextMenuForNode: function (nodeId) {
       this._pendingContextMenuNodeId = nodeId;
@@ -602,195 +634,14 @@ Vue.component('mermaid-preview', {
       }
     },
 
-    _applyTransform: function () {
-      if (!this._svgEl) return;
-      var snappedPanX = Math.round(this.panX);
-      var snappedPanY = Math.round(this.panY);
-      var snappedZoom = Math.round(this.cfgZoom * 1000) / 1000;
-      // SVG width/height를 zoom에 맞게 조절해 벡터 품질을 유지한다.
-      // CSS scale() 대신 이 방식을 쓰면 foreignObject 내부 텍스트도 선명하게 렌더된다.
-      var intrinsicW = this._intrinsicWidth || 1;
-      var intrinsicH = this._intrinsicHeight || 1;
-      this._svgEl.style.width  = (intrinsicW * snappedZoom) + 'px';
-      this._svgEl.style.height = (intrinsicH * snappedZoom) + 'px';
-      this._svgEl.style.transformOrigin = '0 0';
-      this._svgEl.style.transform = 'translate(' + snappedPanX + 'px, ' + snappedPanY + 'px)';
-      var self = this;
-      requestAnimationFrame(function () { self._refreshFloatingUiPositions(); });
-    },
 
-    _getContentBounds: function () {
-      if (!this._svgEl) return null;
 
-      // viewBox는 Mermaid가 SVG 생성 시 전체 다이어그램 크기로 정확히 설정한다.
-      // getBBox()는 foreignObject 레이아웃 전에 호출되면 부분 bounds를 반환할 수 있어
-      // fitView 계산이 틀려지므로 viewBox를 우선 사용한다.
-      var vb = this._svgEl.viewBox && this._svgEl.viewBox.baseVal;
-      if (vb && vb.width && vb.height) {
-        return { x: vb.x, y: vb.y, width: vb.width, height: vb.height };
-      }
 
-      try {
-        var box = this._svgEl.getBBox();
-        if (box && box.width && box.height) {
-          return { x: box.x, y: box.y, width: box.width, height: box.height };
-        }
-      } catch (e) {}
 
-      return null;
-    },
 
-    _setupViewport: function (svgEl, canvas, forcefit) {
-      var prevZoom = this.cfgZoom;
-      var prevPanX = this.panX;
-      var prevPanY = this.panY;
-      var hadPrev  = !!this._svgEl;
 
-      this._svgEl = svgEl;
-      svgEl.style.overflow = 'visible';
-      svgEl.style.display = 'block';
-      svgEl.style.position = 'absolute';
-      svgEl.style.top = '0';
-      svgEl.style.left = '0';
-      svgEl.style.maxWidth = 'none';
-      svgEl.style.maxHeight = 'none';
-      svgEl.style.backfaceVisibility = 'hidden';
-      svgEl.style.webkitFontSmoothing = 'antialiased';
-      svgEl.setAttribute('text-rendering', 'geometricPrecision');
 
-      var vb = svgEl.viewBox && svgEl.viewBox.baseVal;
-      var bounds = this._getContentBounds();
-      var intrinsicWidth = (vb && vb.width) || (bounds && bounds.width) || 1;
-      var intrinsicHeight = (vb && vb.height) || (bounds && bounds.height) || 1;
 
-      this._intrinsicWidth  = intrinsicWidth;
-      this._intrinsicHeight = intrinsicHeight;
-
-      svgEl.style.width = intrinsicWidth + 'px';
-      svgEl.style.height = intrinsicHeight + 'px';
-
-      var self = this;
-
-      if (forcefit || !hadPrev) {
-        // 브라우저 레이아웃 완료 후 fit 해야 canvas 크기를 정확히 읽을 수 있다.
-        requestAnimationFrame(function () { self.fitView(); });
-      } else {
-        this.cfgZoom = prevZoom;
-        this.panX    = prevPanX;
-        this.panY    = prevPanY;
-        this._applyTransform();
-      }
-
-      canvas.onwheel = function (e) {
-        if (self._shouldLetEditTextScroll(e.target)) return;
-        e.preventDefault();
-        self._zoomAtClient(e.deltaY < 0 ? 1.1 : 0.9, e.clientX, e.clientY);
-      };
-
-      // 패닝은 배경에서만 시작해서 node/edge interaction과 충돌하지 않게 한다.
-      canvas.onmousedown = function (e) {
-        if (e.button !== 0) return;
-        if (!self._canPreparePan(e.target, svgEl)) return;
-        e.preventDefault();
-        self._panCandidate = { startX: e.clientX, startY: e.clientY, panX: self.panX, panY: self.panY };
-      };
-
-      canvas.onmousemove = function (e) {
-        if (!self._panState && self._panCandidate) {
-          var dx = e.clientX - self._panCandidate.startX;
-          var dy = e.clientY - self._panCandidate.startY;
-          if (Math.abs(dx) + Math.abs(dy) >= 4) {
-            self._panState = self._panCandidate;
-            self._panCandidate = null;
-            canvas.classList.add('preview-area__canvas--panning');
-          }
-        }
-        if (!self._panState) return;
-        self.panX = self._panState.panX + (e.clientX - self._panState.startX);
-        self.panY = self._panState.panY + (e.clientY - self._panState.startY);
-        self._applyTransform();
-      };
-
-      if (this._panMouseUpHandler) {
-        document.removeEventListener('mouseup', this._panMouseUpHandler);
-      }
-      this._panMouseUpHandler = function () { self._endPan(); };
-      document.addEventListener('mouseup', this._panMouseUpHandler);
-    },
-
-    _shouldLetEditTextScroll: function (target) {
-      if (!this.isStaticDiagram()) return false;
-      if (!target || !target.closest) return false;
-      var overlay = target.closest('.node-edit-overlay');
-      if (!overlay) return false;
-      var editor = target.closest('textarea') || (overlay.querySelector && overlay.querySelector('textarea'));
-      return !!(editor && editor.scrollHeight > editor.clientHeight);
-    },
-
-    _canPreparePan: function (target, svgEl) {
-      if (!target || !svgEl) return false;
-      if (target.closest && (
-        target.closest('.edge-toolbar') ||
-        target.closest('.sequence-toolbar') ||
-        target.closest('.context-menu') ||
-        target.closest('.node-edit-overlay') ||
-        target.closest('#conn-port-overlay') ||
-        target.closest('#sequence-drag-overlay') ||
-        target.closest('#sequence-block-overlay')
-      )) {
-        return false;
-      }
-      return true;
-    },
-
-    _endPan: function () {
-      var canvas = this.$refs.canvas;
-      if (this._panState) this._suppressClickAfterPan = true;
-      this._panState = null;
-      this._panCandidate = null;
-      if (canvas) canvas.classList.remove('preview-area__canvas--panning');
-    },
-
-    _zoomAtClient: function (factor, clientX, clientY) {
-      var canvas = this.$refs.canvas;
-      if (!canvas) return;
-      var rect = canvas.getBoundingClientRect();
-      var cx = clientX - rect.left;
-      var cy = clientY - rect.top;
-
-      var newZoom = Math.max(0.05, Math.min(5.0, this.cfgZoom * factor));
-      var ratio   = newZoom / this.cfgZoom;
-
-      this.panX    = cx - (cx - this.panX) * ratio;
-      this.panY    = cy - (cy - this.panY) * ratio;
-      this.cfgZoom = newZoom;
-      this._applyTransform();
-    },
-
-    _allPositionsZero: function (positions) {
-      var ids = Object.keys(positions);
-      if (!ids.length) return false;
-      for (var i = 0; i < ids.length; i++) {
-        if (positions[ids[i]].width > 0) return false;
-      }
-      return true;
-    },
-
-    _scheduleRerenderWhenVisible: function () {
-      if (this._visibilityObserver) return;
-      var self = this;
-      var el = this.$el;
-      if (!el || typeof IntersectionObserver === 'undefined') return;
-      this._visibilityObserver = new IntersectionObserver(function (entries) {
-        if (entries[0].isIntersecting) {
-          self._visibilityObserver.disconnect();
-          self._visibilityObserver = null;
-          self.scheduleFit();
-          self.renderDiagram();
-        }
-      }, { threshold: 0 });
-      this._visibilityObserver.observe(el);
-    },
 
     _buildCtx: function (svgEl) {
       return PreviewCtxBuilder.build(this, svgEl);
@@ -798,201 +649,34 @@ Vue.component('mermaid-preview', {
 
     // 공통 노드 편집 유틸
 
-    isStaticDiagram: function () {
-      return !!(this.model && this.model.profile === 'static');
-    },
 
-    isGraphProfile: function () {
-      return !!(this.model && (this.model.headerKeyword === 'graph' || this.model.profile === 'graph'));
-    },
 
-    isStaticNodeEditing: function () {
-      return !!(this.editingNodeId && this.isStaticDiagram());
-    },
 
-    isGraphEdgeEditing: function () {
-      return this.editingEdgeIndex !== null && this.isGraphProfile();
-    },
 
-    getGraphEdgeEditBoxSize: function (text) {
-      var lines = String(text || '').split(/\r\n|\r|\n/).length;
-      if (lines <= 1) {
-        return { width: 260, height: 56 };
-      }
-      return {
-        width: lines >= 4 ? 320 : 300,
-        height: Math.min(130, Math.max(76, lines * 20 + 30))
-      };
-    },
 
-    confirmNodeEdit: function () {
-      if (this.editingNodeId && this.editingText.trim()) {
-        this.$emit('update-node-text', {
-          nodeId: this.editingNodeId,
-          text:   SvgNodeHandler.toModelText(this.model, this.editingText.trim())
-        });
-      }
-      this.editingNodeId = null;
-      this.editingText   = '';
-      this.editingNodeColor = '#e2e8f0';
-    },
 
-    cancelNodeEdit: function () {
-      this.editingNodeId = null;
-      this.editingText   = '';
-      this.editingNodeColor = '#e2e8f0';
-    },
 
-    onNodeEditKeyDown: function (e) {
-      if (e.key === 'Enter')  { e.preventDefault(); this.confirmNodeEdit(); }
-      if (e.key === 'Escape') { this.cancelNodeEdit(); }
-    },
 
-    onStaticNodeEditKeyDown: function (e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        this.confirmNodeEdit();
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        this.cancelNodeEdit();
-      }
-    },
 
     // 공통 엣지 편집 유틸
 
-    confirmEdgeEdit: function () {
-      if (this.editingEdgeIndex !== null) {
-        this.$emit('update-edge-text', {
-          index: this.editingEdgeIndex,
-          text:  this.isGraphProfile()
-            ? SvgNodeHandler.toModelText(this.model, this.editingEdgeText.trim())
-            : this.editingEdgeText.trim()
-        });
-      }
-      this.editingEdgeIndex = null;
-      this.editingEdgeText  = '';
-      this.editingEdgeColor = '#5c7ab0';
-      this.selectedEdgeIndex = null;
-      this._clearEdgeVisualState();
-    },
 
-    cancelEdgeEdit: function () {
-      this.editingEdgeIndex = null;
-      this.editingEdgeText  = '';
-      this.editingEdgeColor = '#5c7ab0';
-      this.selectedEdgeIndex = null;
-      this._clearEdgeVisualState();
-    },
 
-    onEdgeEditKeyDown: function (e) {
-      if (e.key === 'Enter')  { e.preventDefault(); this.confirmEdgeEdit(); }
-      if (e.key === 'Escape') { this.cancelEdgeEdit(); }
-    },
 
-    onGraphEdgeEditKeyDown: function (e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        this.confirmEdgeEdit();
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        this.cancelEdgeEdit();
-      }
-    },
 
     // 공통 시퀀스 편집 유틸
 
-    confirmSequenceParticipantEdit: function () {
-      if (this.editingSequenceParticipantId && this.editingSequenceParticipantText.trim()) {
-        this.$emit('update-sequence-participant-text', {
-          participantId: this.editingSequenceParticipantId,
-          text: this.editingSequenceParticipantText.trim()
-        });
-      }
-      this.editingSequenceParticipantId = null;
-      this.editingSequenceParticipantText = '';
-    },
 
-    cancelSequenceParticipantEdit: function () {
-      this.editingSequenceParticipantId = null;
-      this.editingSequenceParticipantText = '';
-    },
 
-    onSequenceParticipantEditKeyDown: function (e) {
-      if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceParticipantEdit(); }
-      if (e.key === 'Escape') { this.cancelSequenceParticipantEdit(); }
-    },
 
-    confirmSequenceMessageEdit: function () {
-      if (this.editingSequenceMessageIndex !== null) {
-        this.$emit('update-sequence-message-text', {
-          index: this.editingSequenceMessageIndex,
-          text: this.editingSequenceMessageText.trim()
-        });
-      }
-      this.editingSequenceMessageIndex = null;
-      this.editingSequenceMessageText = '';
-    },
 
-    cancelSequenceMessageEdit: function () {
-      this.editingSequenceMessageIndex = null;
-      this.editingSequenceMessageText = '';
-    },
 
-    onSequenceMessageEditKeyDown: function (e) {
-      if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceMessageEdit(); }
-      if (e.key === 'Escape') { this.cancelSequenceMessageEdit(); }
-    },
 
-    confirmSequenceBlockEdit: function () {
-      if (this.editingSequenceBlockId !== null) {
-        this.$emit('update-sequence-block-text', {
-          blockId: this.editingSequenceBlockId,
-          text: this.editingSequenceBlockText.trim()
-        });
-      } else if (this.editingSequenceBranchStatementIndex !== null) {
-        this.$emit('update-sequence-branch-text', {
-          statementIndex: this.editingSequenceBranchStatementIndex,
-          text: this.editingSequenceBlockText.trim()
-        });
-      }
-      this.editingSequenceBlockId = null;
-      this.editingSequenceBranchStatementIndex = null;
-      this.editingSequenceBlockText = '';
-    },
 
-    cancelSequenceBlockEdit: function () {
-      this.editingSequenceBlockId = null;
-      this.editingSequenceBranchStatementIndex = null;
-      this.editingSequenceBlockText = '';
-    },
 
-    onSequenceBlockEditKeyDown: function (e) {
-      if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceBlockEdit(); }
-      if (e.key === 'Escape') { this.cancelSequenceBlockEdit(); }
-    },
 
-    confirmSequenceNoteEdit: function () {
-      if (this.editingSequenceNoteStatementIndex !== null) {
-        this.$emit('update-sequence-note-text', {
-          statementIndex: this.editingSequenceNoteStatementIndex,
-          text: this.editingSequenceNoteText.trim()
-        });
-      }
-      this.editingSequenceNoteStatementIndex = null;
-      this.editingSequenceNoteText = '';
-    },
 
-    cancelSequenceNoteEdit: function () {
-      this.editingSequenceNoteStatementIndex = null;
-      this.editingSequenceNoteText = '';
-    },
 
-    onSequenceNoteEditKeyDown: function (e) {
-      if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceNoteEdit(); }
-      if (e.key === 'Escape') { this.cancelSequenceNoteEdit(); }
-    },
 
     // 공통 노드 컨텍스트 메뉴 액션 유틸
 
@@ -1070,391 +754,59 @@ Vue.component('mermaid-preview', {
       // 1. Remove the instance prefix (anything before 'flowchart-')
       var flowchartIdx = id.indexOf('flowchart-');
       var baseId = flowchartIdx !== -1 ? id.substring(flowchartIdx) : id;
-      
+
       // 2. Remove the standard 'flowchart-' prefix
       baseId = baseId.replace(/^flowchart-/, '');
-      
+
       // 3. Remove the suffix counter (e.g. '-1', '-24')
       baseId = baseId.replace(/-\d+$/, '');
-      
+
       return baseId;
     },
 
-    getFlowEdgeParts: function (type) {
-      return FlowEdgeCodec ? FlowEdgeCodec.parseType(type) : { body: 'solid', head: 'none' };
-    },
 
-    getFlowEdgeType: function () {
-      if (!this.edgeToolbar) return '---';
-      var edge = (this.model.edges || [])[this.edgeToolbar.edgeIndex];
-      return edge && edge.type ? edge.type : '---';
-    },
 
-    getFlowEdgeBodyLabel: function () {
-      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
-      var options = this.$options.FLOW_EDGE_BODY_OPTIONS || [];
-      for (var i = 0; i < options.length; i++) {
-        if (options[i].key === parts.body) return options[i].label;
-      }
-      return '──';
-    },
 
-    getFlowEdgeHeadLabel: function () {
-      var head = this.getFlowEdgeParts(this.getFlowEdgeType()).head;
-      var options = this.$options.FLOW_EDGE_HEAD_OPTIONS || [];
-      for (var i = 0; i < options.length; i++) {
-        if (options[i].key === head) return options[i].label;
-      }
-      return '─';
-    },
 
-    getFlowEdgeColorValue: function () {
-      if (!this.edgeToolbar) return '';
-      var edge = (this.model.edges || [])[this.edgeToolbar.edgeIndex];
-      return edge && edge.color ? edge.color : '';
-    },
 
-    getSequenceMessageLineType: function () {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'message') {
-        return SequenceMessageCodec.DEFAULT_OPERATOR;
-      }
-      var message = (this.model.messages || [])[this.sequenceToolbar.index];
-      var parsed = SequenceMessageCodec.parseOperator(message && message.operator);
-      return parsed.base || SequenceMessageCodec.DEFAULT_OPERATOR;
-    },
 
-    getSequenceMessageLineTypeLabel: function () {
-      var current = this.getSequenceMessageLineType();
-      var options = this.$options.LINE_TYPE_OPTIONS || [];
-      for (var i = 0; i < options.length; i++) {
-        if (options[i].operator === current) return options[i].label;
-      }
-      return '───▶';
-    },
 
-    getAvailableFlowEdgeHeadOptions: function () {
-      return this.$options.FLOW_EDGE_HEAD_OPTIONS || [];
-    },
 
-    composeFlowEdgeType: function (body, head) {
-      return FlowEdgeCodec ? FlowEdgeCodec.composeType(body, head) : '---';
-    },
 
-    toggleFlowEdgeColorPicker: function () {
-      if (!this.edgeToolbar) return;
-      this.flowEdgeColorPicker = !this.flowEdgeColorPicker;
-      if (this.flowEdgeColorPicker) {
-        this.flowEdgeBodyPicker = false;
-        this.flowEdgeHeadPicker = false;
-      }
-    },
 
-    toggleFlowEdgeBodyPicker: function () {
-      if (!this.edgeToolbar) return;
-      this.flowEdgeBodyPicker = !this.flowEdgeBodyPicker;
-      if (this.flowEdgeBodyPicker) {
-        this.flowEdgeColorPicker = false;
-        this.flowEdgeHeadPicker = false;
-      }
-    },
 
-    toggleFlowEdgeHeadPicker: function () {
-      if (!this.edgeToolbar) return;
-      this.flowEdgeHeadPicker = !this.flowEdgeHeadPicker;
-      if (this.flowEdgeHeadPicker) {
-        this.flowEdgeColorPicker = false;
-        this.flowEdgeBodyPicker = false;
-      }
-    },
 
-    edgeToolbarSetType: function (type) {
-      if (!this.edgeToolbar) return;
-      this.$emit('update-edge-type', {
-        index: this.edgeToolbar.edgeIndex,
-        type: type
-      });
-    },
 
-    edgeToolbarSelectLineBody: function (body) {
-      if (!this.edgeToolbar) return;
-      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
-      this.edgeToolbarSetType(this.composeFlowEdgeType(body, parts.head));
-      this.flowEdgeBodyPicker = false;
-    },
 
-    edgeToolbarSelectLineHead: function (head) {
-      if (!this.edgeToolbar) return;
-      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
-      this.edgeToolbarSetType(this.composeFlowEdgeType(parts.body, head));
-      this.flowEdgeHeadPicker = false;
-    },
 
     // 공통 엣지 툴바 액션 유틸
 
-    edgeToolbarEdit: function () {
-      if (!this.edgeToolbar) return;
-      var idx = this.edgeToolbar.edgeIndex;
-      var clickX = this.edgeToolbar.x;
-      var clickY = this.edgeToolbar.y;
-      this.edgeToolbar = null;
-      var edge = (this.model.edges || [])[idx];
-      if (!edge) return;
 
-      var graphMode = this.isGraphProfile();
-      var editText = graphMode ? SvgNodeHandler.toEditableText(this.model, edge.text || '') : (edge.text || '');
-      var editBox = graphMode ? this.getGraphEdgeEditBoxSize(editText) : { width: 160, height: 0 };
-      this.selectedEdgeIndex = idx;
-      this.editingEdgeIndex = idx;
-      this.editingEdgeText = editText;
-      this.editingEdgeColor = edge.color || '#5c7ab0';
-      this.edgeEditInputStyle = {
-        position: 'absolute',
-        left: Math.max(8, clickX - (graphMode ? Math.round(editBox.width / 2) : 80)) + 'px',
-        top: Math.max(8, clickY - 18) + 'px',
-        zIndex: 1000,
-        width: graphMode ? editBox.width + 'px' : '160px',
-        height: graphMode ? editBox.height + 'px' : undefined
-      };
-      this.flowEdgeColorPicker = false;
-      this.flowEdgeBodyPicker = false;
-      this.flowEdgeHeadPicker = false;
-      this.$nextTick(this._buildCtxLite().focusEdgeEditInput);
-    },
 
-    edgeToolbarDelete: function () {
-      if (!this.edgeToolbar) return;
-      this.$emit('delete-selected', { nodeId: null, edgeIndex: this.edgeToolbar.edgeIndex });
-      this.edgeToolbar       = null;
-      this.flowEdgeColorPicker = false;
-      this.flowEdgeBodyPicker = false;
-      this.flowEdgeHeadPicker = false;
-      this.selectedEdgeIndex = null;
-    },
-
-    edgeToolbarChangeColor: function (color) {
-      if (!this.edgeToolbar) return;
-      this.$emit('update-edge-color', {
-        index: this.edgeToolbar.edgeIndex,
-        color: color || ''
-      });
-      this.flowEdgeColorPicker = false;
-    },
 
     // 공통 시퀀스 툴바 액션 유틸
 
-    sequenceToolbarEdit: function () {
-      if (!this.sequenceToolbar) return;
-      var toolbar = this.sequenceToolbar;
-      var canvas = this.$refs.canvas;
-      var svgEl = canvas ? canvas.querySelector('svg') : null;
 
-      if (toolbar.type === 'participant') {
-        var participantMap = SequencePositionTracker.collectParticipants(svgEl, this.model);
-        var participant = participantMap[toolbar.id];
-        if (participant) {
-          var topBox = participant.topBox || participant.bbox;
-          var screenPos = { x: toolbar.x, y: toolbar.y };
-          SequenceSvgHandler.startParticipantEdit(toolbar.id, screenPos, topBox, this._buildCtxLite());
-        }
-      } else if (toolbar.type === 'message') {
-        SequenceSvgHandler.startMessageEdit(toolbar.index, toolbar.x, toolbar.y, svgEl, this._buildCtxLite());
-      } else if (toolbar.type === 'block' || toolbar.type === 'block-title') {
-        this._buildCtxLite().openSequenceBlockEdit(toolbar.blockId, toolbar.text || '', toolbar.x, toolbar.y);
-      } else if (toolbar.type === 'branch-title') {
-        this._buildCtxLite().openSequenceBranchEdit(toolbar.statementIndex, toolbar.text || '', toolbar.x, toolbar.y);
-      } else if (toolbar.type === 'note') {
-        this._buildCtxLite().openSequenceNoteEdit(toolbar.noteStatementIndex, toolbar.text || '', toolbar.x, toolbar.y);
-      }
-    },
 
-    sequenceToolbarDelete: function () {
-      if (!this.sequenceToolbar) return;
-      if (this.sequenceToolbar.type === 'participant') {
-        this.$emit('delete-selected', {
-          sequenceParticipantId: this.sequenceToolbar.id,
-          sequenceMessageIndex: null
-        });
-        this.selectedSequenceParticipantId = null;
-      } else if (this.sequenceToolbar.type === 'message') {
-        this.$emit('delete-selected', {
-          sequenceParticipantId: null,
-          sequenceMessageIndex: this.sequenceToolbar.index
-        });
-        this.selectedSequenceMessageIndex = null;
-      } else if (this.sequenceToolbar.type === 'block' || this.sequenceToolbar.type === 'block-title') {
-        this.$emit('delete-selected', {
-          sequenceParticipantId: null,
-          sequenceMessageIndex: null,
-          sequenceBlockId: this.sequenceToolbar.blockId
-        });
-        this.selectedSequenceBlockId = null;
-      } else if (this.sequenceToolbar.type === 'branch-title') {
-        this.$emit('update-sequence-branch-text', {
-          statementIndex: this.sequenceToolbar.statementIndex,
-          text: ''
-        });
-      } else if (this.sequenceToolbar.type === 'note') {
-        this.$emit('delete-selected', { sequenceNoteStatementIndex: this.sequenceToolbar.noteStatementIndex });
-        this.selectedSequenceNoteStatementIndex = null;
-      }
-      this.sequenceToolbar = null;
-    },
 
-    sequenceToolbarAddMessage: function () {
-      if (!this.sequenceToolbar) return;
-      if (this.sequenceToolbar.type === 'participant') {
-        this.$emit('add-sequence-message', { participantId: this.sequenceToolbar.id });
-      } else if (this.sequenceToolbar.type === 'message') {
-        this.$emit('add-sequence-message', { afterIndex: this.sequenceToolbar.index });
-      }
-      this.sequenceToolbar = null;
-    },
 
-    sequenceToolbarReverse: function () {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'message') return;
-      this.$emit('reverse-sequence-message', this.sequenceToolbar.index);
-      this.sequenceToolbar = null;
-    },
 
-    sequenceToolbarToggleLineType: function () {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'message') return;
-      this.lineTypePicker = !this.lineTypePicker;
-    },
 
-    sequenceToolbarSelectLineType: function (operator) {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'message') return;
-      this.$emit('set-sequence-message-line-type', { index: this.sequenceToolbar.index, operator: operator });
-      this.lineTypePicker = false;
-    },
 
-    sequenceToolbarChangeBlockType: function (kind) {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'block') return;
-      this.$emit('change-sequence-block-type', {
-        blockId: this.sequenceToolbar.blockId,
-        kind: kind
-      });
-      this.sequenceToolbar = null;
-    },
 
-    sequenceToolbarInsertSelfLoop: function () {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'insert') return;
-      var tb = this.sequenceToolbar;
-      var payload = { fromId: tb.participantId, toId: tb.participantId, insertIndex: tb.insertIndex };
-      if (tb.stmtInsertAt !== undefined && tb.stmtInsertAt !== null) {
-        payload.stmtInsertAt = tb.stmtInsertAt;
-      }
-      this.$emit('add-sequence-message', payload);
-      this.sequenceToolbar = null;
-    },
 
-    sequenceToolbarInsertMemo: function () {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'insert') return;
-      var tb = this.sequenceToolbar;
-      if (tb.stmtInsertAt !== undefined && tb.stmtInsertAt !== null) {
-        this.$emit('insert-sequence-note-at', {
-          statementIndex: tb.stmtInsertAt,
-          participantId: tb.participantId,
-          isBefore: true
-        });
-      } else {
-        this.$emit('create-sequence-note', {
-          participantId: tb.participantId,
-          insertIndex: tb.insertIndex
-        });
-      }
-      this.sequenceToolbar = null;
-    },
 
-    sequenceToolbarAddBranch: function (keyword) {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'selection') return;
-      this.$emit('add-sequence-branch', {
-        keyword: keyword,
-        text: keyword === 'else' ? 'else title' : 'and title',
-        messageIndices: (this.sequenceToolbar.messageIndices || []).slice(),
-        noteStatementIndices: (this.sequenceToolbar.noteStatementIndices || []).slice()
-      });
-      this.selectedSequenceMessageIndices = [];
-      this.selectedNoteStatementIndices = [];
-      this.sequenceToolbar = null;
-    },
 
-    sequenceToolbarWrapBlock: function (kind) {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'selection') return;
-      this.$emit('wrap-sequence-messages-in-block', {
-        kind: kind,
-        text: kind + '_title',
-        messageIndices: (this.sequenceToolbar.messageIndices || []).slice(),
-        noteStatementIndices: (this.sequenceToolbar.noteStatementIndices || []).slice()
-      });
-      this.selectedSequenceMessageIndices = [];
-      this.selectedNoteStatementIndices = [];
-      this.sequenceToolbar = null;
-    },
 
-    sequenceToolbarToggleKind: function () {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'participant') return;
-      this.$emit('toggle-participant-kind', { participantId: this.sequenceToolbar.id });
-      this.sequenceToolbar = null;
-    },
 
-    sequenceToolbarMoveLeft: function () {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'participant') return;
-      this.$emit('move-sequence-participant', { participantId: this.sequenceToolbar.id, direction: 'left' });
-      this.sequenceToolbar = null;
-    },
-
-    sequenceToolbarMoveRight: function () {
-      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'participant') return;
-      this.$emit('move-sequence-participant', { participantId: this.sequenceToolbar.id, direction: 'right' });
-      this.sequenceToolbar = null;
-    },
 
     // postRenderSetup 바깥에서도 재사용하는 경량 ctx
     _buildCtxLite: function () {
       return PreviewCtxBuilder.buildLite(this);
     },
 
-    fitView: function () {
-      var canvas = this.$refs.canvas;
-      if (!canvas || !this._svgEl) return;
 
-      var canvasW = canvas.clientWidth  || canvas.offsetWidth;
-      var canvasH = canvas.clientHeight || canvas.offsetHeight;
 
-      if (!canvasW || !canvasH) {
-        var self = this;
-        requestAnimationFrame(function () { self.fitView(); });
-        return;
-      }
-
-      var bounds = this._getContentBounds();
-      if (!bounds || !bounds.width || !bounds.height) return;
-
-      var pad    = Math.max(24, Math.min(canvasW, canvasH) * 0.06);
-      var scaleX = (canvasW - pad * 2) / bounds.width;
-      var scaleY = (canvasH - pad * 2) / bounds.height;
-      var scale  = Math.min(scaleX, scaleY);
-      scale = Math.min(5.0, scale);
-
-      this.cfgZoom = scale;
-      this.panX    = (canvasW - bounds.width * scale) / 2 - bounds.x * scale;
-      this.panY    = (canvasH - bounds.height * scale) / 2 - bounds.y * scale;
-      this._applyTransform();
-    },
-
-    zoomIn: function () {
-      var canvas = this.$refs.canvas;
-      if (!canvas) return;
-      var rect = canvas.getBoundingClientRect();
-      this._zoomAtClient(1.2, rect.left + rect.width / 2, rect.top + rect.height / 2);
-    },
-
-    zoomOut: function () {
-      var canvas = this.$refs.canvas;
-      if (!canvas) return;
-      var rect = canvas.getBoundingClientRect();
-      this._zoomAtClient(0.8, rect.left + rect.width / 2, rect.top + rect.height / 2);
-    },
 
     highlightNewNode: function (nodeId) {
       this._pendingHighlightNodeId = nodeId;
@@ -1498,435 +850,15 @@ Vue.component('mermaid-preview', {
       this._showHint('Unsupported element cannot be edited');
     },
 
-    _attachSubgraphInteractions: function (svgEl) {
-      var self = this;
-      var subgraphs = (this.model && this.model.subgraphs) || [];
-      if (!subgraphs.length) return;
 
-      // id → subgraph 빠른 탐색용 맵
-      var sgById = {};
-      for (var k = 0; k < subgraphs.length; k++) sgById[subgraphs[k].id] = subgraphs[k];
 
-      function normalizeClusterId(rawId) {
-        rawId = String(rawId || '');
-        if (!rawId) return '';
-        if (sgById[rawId]) return rawId;
 
-        var candidates = [
-          rawId.replace(/^cluster_/, ''),
-          rawId.replace(/^subGraph/i, ''),
-          rawId.replace(/^.*flowchart-/, '').replace(/-\d+$/, '')
-        ];
-        for (var c = 0; c < candidates.length; c++) {
-          if (sgById[candidates[c]]) return candidates[c];
-        }
-        return '';
-      }
 
-      function getSubgraphIdFromDom(clusterEl) {
-        var rawIds = [
-          clusterEl.getAttribute('data-id'),
-          clusterEl.getAttribute('data-node'),
-          clusterEl.id
-        ];
-        for (var r = 0; r < rawIds.length; r++) {
-          var normalized = normalizeClusterId(rawIds[r]);
-          if (normalized) return normalized;
-        }
-        return '';
-      }
 
-      function usableRect(el) {
-        if (!el || !el.getBoundingClientRect) return null;
-        var rect = el.getBoundingClientRect();
-        return rect && rect.width > 0 && rect.height > 0 ? rect : null;
-      }
 
-      function getLabelText(labelEl) {
-        if (!labelEl) return '';
-        var text = labelEl.textContent || '';
-        return String(text).replace(/\u00a0/g, ' ').trim();
-      }
 
-      function getSubgraphIdFromLabel(labelEl) {
-        var labelText = getLabelText(labelEl);
-        if (!labelText) return '';
-        for (var s = 0; s < subgraphs.length; s++) {
-          var title = String(subgraphs[s].title || subgraphs[s].id || '').trim();
-          if (title && title === labelText) return subgraphs[s].id;
-        }
-        return '';
-      }
 
-      function sameNodeSet(a, b) {
-        if (!a || !b || a.length !== b.length) return false;
-        var seen = {};
-        for (var i = 0; i < a.length; i++) seen[a[i]] = true;
-        for (var j = 0; j < b.length; j++) {
-          if (!seen[b[j]]) return false;
-        }
-        return true;
-      }
 
-      function getSubgraphIdFromContainedNodes(nodeIdsInCluster) {
-        if (!nodeIdsInCluster || !nodeIdsInCluster.length) return '';
-
-        for (var exact = 0; exact < subgraphs.length; exact++) {
-          if (sameNodeSet(subgraphs[exact].nodeIds || [], nodeIdsInCluster)) {
-            return subgraphs[exact].id;
-          }
-        }
-
-        var bestId = '';
-        var bestScore = 0;
-        var tied = false;
-        for (var j = 0; j < subgraphs.length; j++) {
-          var nodeIds = subgraphs[j].nodeIds || [];
-          var score = 0;
-          for (var m = 0; m < nodeIdsInCluster.length; m++) {
-            if (nodeIds.indexOf(nodeIdsInCluster[m]) !== -1) score++;
-          }
-          if (score > bestScore) {
-            bestScore = score;
-            bestId = subgraphs[j].id;
-            tied = false;
-          } else if (score > 0 && score === bestScore) {
-            tied = true;
-          }
-        }
-
-        return tied ? '' : bestId;
-      }
-
-      function openSubgraphToolbar(e, sgId, clusterEl, labelEl) {
-        e.preventDefault();
-        e.stopPropagation();
-        var canvas = self.$refs.canvas;
-        var cr = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
-        var labelRect = usableRect(labelEl);
-        var clusterRect = usableRect(clusterEl);
-        var anchorX = e.clientX;
-        var anchorY = e.clientY;
-
-        if (labelRect) {
-          anchorX = labelRect.left + labelRect.width / 2;
-          anchorY = labelRect.top + labelRect.height / 2;
-        } else if (clusterRect) {
-          anchorX = clusterRect.left + clusterRect.width / 2;
-          anchorY = clusterRect.top + 12;
-        }
-
-        self.subgraphTitleToolbar = {
-          sgId: sgId,
-          x: Math.round(anchorX - cr.left),
-          y: Math.round(anchorY - cr.top)
-        };
-      }
-
-      function attachTitleHit(clusterEl, labelEl, sgId) {
-        var rectEl = clusterEl.querySelector('rect');
-        if (!rectEl || !rectEl.parentNode || rectEl.parentNode !== clusterEl) return;
-
-        var x = parseFloat(rectEl.getAttribute('x') || '0');
-        var y = parseFloat(rectEl.getAttribute('y') || '0');
-        var width = parseFloat(rectEl.getAttribute('width') || '0');
-        if (!width) return;
-
-        var hit = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        hit.setAttribute('class', 'subgraph-title-hit');
-        hit.setAttribute('x', x);
-        hit.setAttribute('y', y);
-        hit.setAttribute('width', width);
-        hit.setAttribute('height', '28');
-        hit.setAttribute('fill', '#000');
-        hit.setAttribute('fill-opacity', '0.003');
-        hit.setAttribute('stroke', 'none');
-        hit.style.cursor = 'pointer';
-        hit.style.pointerEvents = 'all';
-        hit.addEventListener('click', function (e) {
-          openSubgraphToolbar(e, sgId, clusterEl, labelEl);
-        });
-        clusterEl.appendChild(hit);
-      }
-
-      var clusters = svgEl.querySelectorAll('.cluster');
-      for (var i = 0; i < clusters.length; i++) {
-        (function (clusterEl) {
-          var labelEl = clusterEl.querySelector('.cluster-label');
-          var sgId = getSubgraphIdFromDom(clusterEl) || getSubgraphIdFromLabel(labelEl);
-
-          if (!sgId) {
-            // Mermaid SVG에서 .node는 .cluster의 DOM 자식이 아닌 형제다.
-            // DOM id가 없는 구버전/특수 렌더만 화면 좌표 기준 포함 여부로 fallback 매핑.
-            var clusterRect = clusterEl.getBoundingClientRect();
-            var nodeIdsInCluster = [];
-            var elements = self._elements || {};
-            for (var nodeId in elements) {
-              var nodeEl = elements[nodeId];
-              if (!nodeEl) continue;
-              var nr = nodeEl.getBoundingClientRect();
-              var nCx = nr.left + nr.width  / 2;
-              var nCy = nr.top  + nr.height / 2;
-              if (nCx >= clusterRect.left && nCx <= clusterRect.right &&
-                  nCy >= clusterRect.top  && nCy <= clusterRect.bottom) {
-                nodeIdsInCluster.push(nodeId);
-              }
-            }
-            if (nodeIdsInCluster.length > 0) {
-              sgId = getSubgraphIdFromContainedNodes(nodeIdsInCluster);
-            }
-          }
-
-          if (!sgId) return;
-
-          if (labelEl) {
-            labelEl.style.cursor = 'pointer';
-            labelEl.addEventListener('click', function (e) {
-              openSubgraphToolbar(e, sgId, clusterEl, labelEl);
-            });
-          }
-          attachTitleHit(clusterEl, labelEl, sgId);
-        })(clusters[i]);
-      }
-    },
-
-    subgraphTitleEdit: function () {
-      var tb = this.subgraphTitleToolbar;
-      if (!tb) return;
-      this.subgraphTitleToolbar = null;
-      var currentSg = ((this.model && this.model.subgraphs) || []).filter(function (s) { return s.id === tb.sgId; })[0];
-      var canvas = this.$refs.canvas;
-      var cr = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
-      this.editingSubgraphId   = tb.sgId;
-      this.editingSubgraphText = currentSg ? currentSg.title : tb.sgId;
-      this.editingSubgraphStyle = {
-        position: 'absolute',
-        left:   tb.x + 'px',
-        top:    tb.y + 'px',
-        width:  '140px',
-        zIndex: 1000
-      };
-      var self = this;
-      this.$nextTick(function () {
-        var el = self.$refs.editSubgraphInput;
-        if (el) { el.focus(); el.select(); }
-        var onOutsideDown = function (me) {
-          var inputEl = self.$refs.editSubgraphInput;
-          if (inputEl && inputEl.contains(me.target)) return;
-          document.removeEventListener('mousedown', onOutsideDown, true);
-          self.confirmSubgraphEdit();
-        };
-        document.addEventListener('mousedown', onOutsideDown, true);
-      });
-    },
-
-    subgraphTitleDelete: function () {
-      var tb = this.subgraphTitleToolbar;
-      if (!tb) return;
-      this.subgraphTitleToolbar = null;
-      this.$emit('remove-subgraph', tb.sgId);
-    },
-
-    confirmSubgraphEdit: function () {
-      var id   = this.editingSubgraphId;
-      var text = (this.editingSubgraphText || '').trim();
-      this.editingSubgraphId   = null;
-      this.editingSubgraphText = '';
-      if (!id) return;
-      if (!text) {
-        this.$emit('remove-subgraph', id);
-      } else {
-        this.$emit('update-subgraph-title', { subgraphId: id, title: text });
-      }
-    },
-
-    cancelSubgraphEdit: function () {
-      this.editingSubgraphId   = null;
-      this.editingSubgraphText = '';
-    },
-
-    _onSubgraphEditKeyDown: function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); this.confirmSubgraphEdit(); }
-      if (e.key === 'Escape') { this.cancelSubgraphEdit(); }
-    },
-
-    _attachFlowchartRubberBand: function (canvas, svgEl) {
-      var self = this;
-      var suppressContextMenu = false;
-
-      // 캡처 단계에서 contextmenu를 가로채 브라우저 메뉴와 노드 GUI 메뉴 모두 차단
-      canvas.addEventListener('contextmenu', function (e) {
-        e.preventDefault();                    // 브라우저 기본 메뉴 항상 차단
-        if (suppressContextMenu) {
-          e.stopPropagation();                 // 드래그 후엔 노드 GUI 메뉴도 차단
-          suppressContextMenu = false;
-        }
-      }, true); // capture phase
-
-      canvas.addEventListener('mousedown', function (e) {
-        if (e.button !== 2) return;
-        // 노드 위에서 시작하면 rubber-band 대신 노드 contextmenu로 위임
-        if (e.target && e.target.closest && e.target.closest('.node')) return;
-
-        e.preventDefault();
-        var cr = canvas.getBoundingClientRect();
-        var startX = e.clientX - cr.left;
-        var startY = e.clientY - cr.top;
-        var didDrag = false;
-
-        self._rubberBand = { startX: startX, startY: startY };
-        self.rubberBandRect = null;
-        self.subgraphToolbar = null;
-        self.selectedNodeIds = [];
-
-        var onMove = function (me) {
-          var cr2 = canvas.getBoundingClientRect();
-          var curX = me.clientX - cr2.left;
-          var curY = me.clientY - cr2.top;
-          var w = Math.abs(curX - startX);
-          var h = Math.abs(curY - startY);
-          if (w > 4 || h > 4) {
-            didDrag = true;
-            self.rubberBandRect = {
-              left:   Math.min(startX, curX),
-              top:    Math.min(startY, curY),
-              width:  w,
-              height: h
-            };
-          }
-        };
-
-        var onUp = function (ue) {
-          document.removeEventListener('mousemove', onMove);
-          document.removeEventListener('mouseup', onUp);
-
-          var rb = self.rubberBandRect;
-          self.rubberBandRect = null;
-          self._rubberBand = null;
-
-          if (!didDrag) {
-            // 단순 우클릭 → contextmenu 이벤트 허용 (노드 GUI 메뉴용)
-            suppressContextMenu = false;
-            return;
-          }
-
-          // 드래그였으면 뒤따라오는 contextmenu를 억제
-          suppressContextMenu = true;
-
-          if (!rb || rb.width < 5 || rb.height < 5) return;
-
-          var cr3 = canvas.getBoundingClientRect();
-          var rLeft   = cr3.left + rb.left;
-          var rTop    = cr3.top  + rb.top;
-          var rRight  = rLeft + rb.width;
-          var rBottom = rTop  + rb.height;
-
-          var selectedIds = [];
-          var nodeEls = svgEl.querySelectorAll('.node');
-          for (var i = 0; i < nodeEls.length; i++) {
-            var nodeId = SvgPositionTracker.extractNodeId(nodeEls[i]);
-            if (!nodeId) continue;
-            var nr = nodeEls[i].getBoundingClientRect();
-            var cx = nr.left + nr.width  / 2;
-            var cy = nr.top  + nr.height / 2;
-            if (cx >= rLeft && cx <= rRight && cy >= rTop && cy <= rBottom) {
-              selectedIds.push(nodeId);
-            }
-          }
-
-          if (!selectedIds.length) return;
-
-          self.selectedNodeIds = selectedIds;
-          self._showFlowchartSelectionHighlight(selectedIds);
-          var cr4 = canvas.getBoundingClientRect();
-          self.subgraphToolbar = {
-            x: ue.clientX - cr4.left,
-            y: ue.clientY - cr4.top
-          };
-          self.subgraphTitleInput = '';
-
-          // 다음 mousedown(새 드래그/클릭) 시 툴바 닫기
-          var onNextMouseDown = function () {
-            self._showFlowchartSelectionHighlight([]);
-            self.subgraphToolbar = null;
-            self.selectedNodeIds = [];
-            document.removeEventListener('mousedown', onNextMouseDown);
-          };
-          document.addEventListener('mousedown', onNextMouseDown);
-        };
-
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-      });
-    },
-
-    _showFlowchartSelectionHighlight: function (selectedIds) {
-      var svgEl = this._svgEl;
-      if (!svgEl) return;
-      var old = svgEl.querySelector('#flowchart-sel-highlight');
-      if (old) old.remove();
-      if (!selectedIds || !selectedIds.length) return;
-
-      var pad = 12;
-      var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
-      for (var i = 0; i < selectedIds.length; i++) {
-        var pos = this._positions[selectedIds[i]];
-        if (!pos) continue;
-        var x = pos.origTx + pos.bboxX;
-        var y = pos.origTy + pos.bboxY;
-        left   = Math.min(left,   x);
-        top    = Math.min(top,    y);
-        right  = Math.max(right,  x + pos.width);
-        bottom = Math.max(bottom, y + pos.height);
-      }
-      if (!isFinite(left)) return;
-
-      var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-      rect.setAttribute('id', 'flowchart-sel-highlight');
-      rect.setAttribute('x', left - pad);
-      rect.setAttribute('y', top - pad);
-      rect.setAttribute('width',  right - left + pad * 2);
-      rect.setAttribute('height', bottom - top + pad * 2);
-      rect.setAttribute('rx', '6');
-      rect.setAttribute('class', 'flowchart-sel-highlight');
-      rect.style.pointerEvents = 'none';
-      svgEl.appendChild(rect);
-    },
-
-    confirmWrapSubgraph: function () {
-      if (!this.selectedNodeIds.length) return;
-
-      // 선택된 노드 중 이미 subgraph에 속한 게 있으면 생성 차단
-      var subgraphs = (this.model && this.model.subgraphs) || [];
-      for (var i = 0; i < subgraphs.length; i++) {
-        var sg = subgraphs[i];
-        for (var j = 0; j < sg.nodeIds.length; j++) {
-          if (this.selectedNodeIds.indexOf(sg.nodeIds[j]) !== -1) {
-            this._showHint('Selected nodes are already in a subgraph');
-            this._showFlowchartSelectionHighlight([]);
-            this.subgraphToolbar = null;
-            this.selectedNodeIds = [];
-            return;
-          }
-        }
-      }
-
-      this._showFlowchartSelectionHighlight([]);
-      this.$emit('wrap-nodes-in-subgraph', {
-        nodeIds: this.selectedNodeIds.slice(),
-        title: this.subgraphTitleInput || 'Group'
-      });
-      this.subgraphToolbar = null;
-      this.selectedNodeIds = [];
-      this.subgraphTitleInput = '';
-    },
-
-    cancelSubgraphToolbar: function () {
-      this._showFlowchartSelectionHighlight([]);
-      this.subgraphToolbar = null;
-      this.selectedNodeIds = [];
-      this.subgraphTitleInput = '';
-    }
   },
 
   template: '\

@@ -473,6 +473,7 @@
     insertMessageAtStatementIndex: insertMessageAtStatementIndex,
     removeMessageStatements: removeMessageStatements,
     removeParticipantStatements: removeParticipantStatements,
+    pruneEmptyBlocks: pruneEmptyBlocks,
     wrapMessagesInBlock: wrapMessagesInBlock,
     insertBranchStatement: insertBranchStatement,
     updateBlockText: updateBlockText,

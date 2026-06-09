@@ -15,7 +15,7 @@
 gui-editor/
 ├─ src/
 │  ├─ components/      # 에디터, 툴바, 프리뷰 컴포넌트
-│  │  └─ mixins/       # LiveEditor / FullEditor 공통 액션 wrapper
+│  │  └─ mixins/       # 공통 액션 wrapper와 Preview 세부 책임 mixin
 │  ├─ actions/         # SVG 상호작용 처리 로직
 │  ├─ representation/  # Mermaid script <-> model 변환
 │  ├─ model-editing/   # 순수 model 수정 로직
@@ -147,12 +147,13 @@ script -> model -> svg -> interaction -> model -> script
 - `MermaidEditor.js`
   - 텍스트 편집 영역을 담당합니다.
 - `MermaidPreview.js`
-  - Mermaid SVG 렌더, zoom/pan, 인라인 편집, 이벤트 브리지를 담당합니다.
-  - 여전히 가장 많은 상호작용 로직이 모여 있는 파일이지만, 최근 구조 정리 이후 순수 model 수정 책임은 밖으로 분리되었습니다.
+  - Mermaid SVG 렌더와 렌더 후 interaction handler 연결을 조율합니다.
+  - 인라인 편집, 툴바, viewport, subgraph/rubber-band 세부 로직은 preview mixin으로 분리되어 있습니다.
 - `MermaidToolbar.js`
   - 노드 추가, 메시지 추가, 방향 전환 같은 액션 UI를 담당합니다.
 - `src/components/mixins`
   - LiveEditor / FullEditor가 공유하는 액션과 export, toast 로직을 담당합니다.
+  - MermaidPreview의 세부 책임을 나눈 preview mixin도 이 위치에 있습니다.
   - 여기서 flowchart/sequence mixin은 실제 model 수정 로직을 직접 들고 있기보다, `model-editing` 계층을 호출하는 adapter 역할에 가깝습니다.
 
 ### `src/components/mixins`
@@ -167,8 +168,17 @@ script -> model -> svg -> interaction -> model -> script
   - export / copy 관련 wrapper를 담당합니다.
 - `toastMixin.js`
   - toast 상태와 표시를 담당합니다.
+- `previewInlineEditMixin.js`
+  - node, edge, sequence participant/message/block/note, subgraph title 인라인 편집을 담당합니다.
+- `previewToolbarMixin.js`
+  - flowchart edge toolbar와 sequence toolbar 액션을 담당합니다.
+- `previewViewportMixin.js`
+  - fit view, zoom, pan, transform, visibility 재렌더 보조를 담당합니다.
+- `previewSubgraphMixin.js`
+  - subgraph title toolbar와 rubber-band 다중 선택을 담당합니다.
 
 이 구조 덕분에 `MermaidLiveEditor.js`와 `MermaidFullEditor.js`가 같은 액션 코드를 따로 들고 있을 필요가 없어졌습니다.
+또한 `MermaidPreview.js`는 렌더링과 post-render 조율 중심으로 남고, 실제 편집 UI 세부 동작은 mixin 단위로 찾아볼 수 있습니다.
 
 ### `src/actions`
 
@@ -235,7 +245,7 @@ Mermaid 문자열과 내부 model 사이의 변환을 담당합니다.
 - `StorageManager.js`
   - localStorage 기반 autosave/restore를 담당합니다.
 - `SvgExport.js`
-  - SVG/PNG/JPG export를 담당합니다.
+  - SVG/PNG/JPG 다운로드 export와 PNG/JPG Blob 생성을 담당합니다.
 - `FlowEdgeCodec.js`
   - flowchart edge type 인코딩/디코딩을 담당합니다.
 - `SequenceMessageCodec.js`
@@ -283,12 +293,16 @@ JS 번들에 포함되지 않는 정적 SVG 아이콘 파일을 모아두는 위
 
 ### 2. `src/components/mixins`
 
-editor 두 개가 공통으로 쓰는 액션과 부가 기능을 담당합니다.
+editor 두 개가 공통으로 쓰는 액션과 부가 기능, 그리고 Preview의 세부 책임 분리를 담당합니다.
 
 - flowchart 액션 wrapper
 - sequence 액션 wrapper
 - export / copy
 - toast
+- preview inline edit
+- preview toolbar
+- preview viewport
+- preview subgraph/rubber-band
 
 ### 3. `src/actions`
 
@@ -490,20 +504,40 @@ Mermaid 문자열과 내부 model 사이의 변환을 담당합니다.
 </script>
 ```
 
-## 3. 기존 textarea와 함께 쓰는 방법
+## 3. 기존 textarea는 유지하고 GUI만 붙이는 방법
 
-호스트에 기존 Mermaid textarea가 있다면 같은 상태를 공유하시면 됩니다.
+호스트 프로젝트에 이미 Mermaid용 textarea, Monaco, CodeMirror 같은 텍스트 입력 UI가 있다면 그 입력 UI는 그대로 두고, GUI editor는 시각 편집 영역만 붙이는 방식을 권장합니다.
+
+이때 핵심은 `diagram` 문자열 하나를 호스트가 계속 소유하는 것입니다.
 
 ```html
-<textarea v-model="diagram"></textarea>
+<div id="app">
+  <!-- 기존 프로젝트의 Mermaid 입력 UI -->
+  <textarea
+    v-model="diagram"
+    style="width: 100%; height: 200px;"
+  ></textarea>
 
-<mermaid-full-editor
-  :value="diagram"
-  @input="diagram = $event"
-></mermaid-full-editor>
+  <!-- GUI 편집 영역만 임베드 -->
+  <div style="height: 600px;">
+    <mermaid-full-editor
+      ref="guiEditor"
+      :value="diagram"
+      :hide-editor="true"
+      @input="diagram = $event"
+    ></mermaid-full-editor>
+  </div>
+</div>
 ```
 
-이렇게 구성하시면 textarea와 GUI editor가 같은 Mermaid 문자열을 함께 편집하게 됩니다.
+이 구성에서:
+
+- textarea에서 코드를 수정하면 `diagram`이 바뀌고 GUI가 다시 렌더됩니다.
+- GUI에서 노드/엣지/메시지를 편집하면 `@input`으로 새 Mermaid 문자열이 올라오고 textarea가 같이 갱신됩니다.
+- `:hide-editor="true"` 때문에 GUI editor 내부의 텍스트 패널은 표시되지 않습니다.
+- `ref="guiEditor"`를 달아두면 아래의 외부 호출 메서드/API를 호스트 코드에서 바로 사용할 수 있습니다.
+
+즉 기존 프로젝트 입장에서는 textarea와 저장 로직을 크게 바꾸지 않고, GUI 편집 패널만 옆에 붙이는 형태가 됩니다.
 
 ## 4. 기존 preview/save 로직이 있는 경우
 
@@ -542,44 +576,7 @@ preview DOM은 삭제하지 않으시고, GUI editor가 렌더한 최신 SVG를 
 - 기존 preview DOM이 저장 기준이라면 제거하지 말고 숨기기만 하시는 편이 좋습니다.
 - 최초 오픈 시 Mermaid 문자열이 이미 있다면 초기에 한 번 렌더를 보장해주시는 것이 좋습니다.
 
-## 6. 텍스트 에디터 없이 GUI만 임베드하기
-
-텍스트 입력 영역 없이 GUI 프리뷰 패널만 표시하고 싶을 때는 `:hide-editor="true"` 프롭을 사용하시면 됩니다.
-
-```html
-<mermaid-full-editor
-  :value="diagram"
-  @input="diagram = $event"
-  :hide-editor="true"
-  style="height: 600px;"
-></mermaid-full-editor>
-```
-
-이 방식에서:
-
-- 텍스트 에디터 패널이 완전히 숨겨지고 GUI 편집 영역(툴바 + 프리뷰)만 표시됩니다.
-- `diagram` 문자열은 여전히 호스트가 관리하며, GUI 조작 결과는 `@input`으로 호스트에 전달됩니다.
-- 전체화면(fullscreen) 버튼, undo/redo, 노드 추가, export 등 GUI 기능은 그대로 동작합니다.
-
-호스트에 별도 텍스트 에디터가 있거나, 다이어그램을 코드 없이 GUI로만 조작하는 환경에 적합합니다.
-
-```html
-<div id="app">
-  <!-- 호스트 텍스트 에디터 (별도 운영) -->
-  <textarea v-model="diagram" style="width: 100%; height: 200px;"></textarea>
-
-  <!-- GUI 에디터 단독 임베드 -->
-  <div style="height: 600px;">
-    <mermaid-full-editor
-      :value="diagram"
-      @input="diagram = $event"
-      :hide-editor="true"
-    ></mermaid-full-editor>
-  </div>
-</div>
-```
-
-## 7. 체크리스트
+## 6. 체크리스트
 
 임베드 전에 아래 항목을 확인하시면 됩니다.
 
@@ -590,5 +587,163 @@ preview DOM은 삭제하지 않으시고, GUI editor가 렌더한 최신 SVG를 
 5. 기존 preview/save 경로가 있으면 `@svg-rendered`가 필요한지 확인합니다.
 6. 컨테이너 높이를 지정합니다.
 7. 텍스트 에디터 없이 GUI만 보여줄 경우 `:hide-editor="true"`를 추가합니다.
+8. 기존 textarea를 그대로 쓸 경우 `mermaid-full-editor`에는 `:hide-editor="true"`를 주고 같은 `diagram` 상태를 공유합니다.
+9. 다운로드 없이 PNG/JPG만 필요하면 아래 `외부에서 호출 가능한 메서드/API` 토글의 `window.SvgExport.toPngBlob()` 또는 `toJpgBlob()` 예시를 참고합니다.
+
+</details>
+
+<details>
+  <summary><strong>외부에서 호출 가능한 메서드/API</strong></summary>
+
+## 외부에서 호출 가능한 메서드/API
+
+호스트 코드에서 GUI editor를 제어하거나 렌더된 결과물을 가져오려면 컴포넌트에 `ref`를 달아두면 됩니다.
+
+```html
+<mermaid-full-editor
+  ref="guiEditor"
+  :value="diagram"
+  @input="diagram = $event"
+></mermaid-full-editor>
+```
+
+```js
+const editor = this.$refs.guiEditor;
+```
+
+## 1. `mermaid-full-editor` ref 메서드
+
+아래 메서드는 호스트에서 바로 호출하기 좋은 외부 연동 지점입니다.
+
+| 메서드 | 설명 |
+|---|---|
+| `getSvgElement()` | 현재 preview에 렌더된 `svg` DOM을 반환합니다. 아직 렌더 전이면 `null`일 수 있습니다. |
+| `getSvgText()` | 현재 SVG 문자열을 반환합니다. 아직 렌더 전이면 빈 문자열일 수 있습니다. |
+| `exportSvg()` | 현재 다이어그램을 SVG 파일로 다운로드합니다. |
+| `exportPng()` | 현재 다이어그램을 PNG 파일로 다운로드합니다. |
+| `exportJpg()` | 현재 다이어그램을 JPG 파일로 다운로드합니다. |
+| `copySvg()` | 현재 SVG 문자열을 클립보드에 복사합니다. |
+| `fitView()` | preview를 현재 컨테이너에 맞게 다시 맞춥니다. 모달 오픈 직후나 resize 후에 유용합니다. |
+| `zoomIn()` | preview를 확대합니다. |
+| `zoomOut()` | preview를 축소합니다. |
+| `undo()` | GUI 편집 히스토리를 한 단계 되돌립니다. |
+| `redo()` | GUI 편집 히스토리를 한 단계 다시 적용합니다. |
+| `toggleFullscreen()` | GUI editor의 fullscreen 상태를 토글합니다. |
+
+예시:
+
+```js
+this.$refs.guiEditor.fitView();
+this.$refs.guiEditor.undo();
+await this.$refs.guiEditor.exportPng();
+```
+
+노드 추가, 엣지 수정, sequence message 수정 같은 세부 편집 메서드도 내부적으로는 존재하지만 payload 구조가 다이어그램 타입과 내부 model에 강하게 묶여 있습니다. 호스트 연동 API로는 위 표의 메서드와 `value` / `input` 계약을 우선 사용하시는 편이 안전합니다.
+
+## 2. 버튼 없이 PNG Blob 만들기
+
+툴바의 Export 버튼을 누르지 않고, 호스트 코드에서 현재 다이어그램을 PNG `Blob`으로 만들 수 있습니다. 서버 업로드, 커스텀 저장, 썸네일 생성처럼 다운로드가 목적이 아닌 경우에는 `window.SvgExport.toPngBlob()`을 사용합니다.
+
+```js
+async function createPngBlob() {
+  const editor = this.$refs.guiEditor;
+  const svgEl = editor && editor.getSvgElement && editor.getSvgElement();
+  if (!svgEl) {
+    throw new Error('아직 렌더된 SVG가 없습니다.');
+  }
+
+  return await window.SvgExport.toPngBlob(svgEl, {
+    scale: 2,
+    padding: 20,
+    bgColor: '#ffffff'
+  });
+}
+```
+
+`svgEl`을 직접 넘기면 실제 DOM의 computed style을 읽어 export 결과에 반영할 수 있습니다. 그래서 문자열 SVG만 넘기는 방식보다 화면에 보이는 결과와 더 가깝습니다.
+
+## 3. 서버 업로드 예시
+
+```js
+async function uploadDiagramPng() {
+  const editor = this.$refs.guiEditor;
+  const svgEl = editor && editor.getSvgElement && editor.getSvgElement();
+  if (!svgEl) return;
+
+  const pngBlob = await window.SvgExport.toPngBlob(svgEl, {
+    scale: 2,
+    padding: 20,
+    bgColor: '#ffffff'
+  });
+
+  const form = new FormData();
+  form.append('file', pngBlob, 'diagram.png');
+
+  await fetch('/api/diagram-image', {
+    method: 'POST',
+    body: form
+  });
+}
+```
+
+## 4. JPG Blob 만들기
+
+```js
+const jpgBlob = await window.SvgExport.toJpgBlob(svgEl, {
+  scale: 2,
+  padding: 20,
+  bgColor: '#ffffff',
+  quality: 0.92
+});
+```
+
+## 5. SVG 문자열이나 SVG Blob이 필요할 때
+
+`mermaid-full-editor` 인스턴스에는 `getSvgText()`도 있습니다.
+
+```js
+const svgText = this.$refs.guiEditor.getSvgText();
+const svgBlob = new Blob([svgText], {
+  type: 'image/svg+xml;charset=utf-8'
+});
+```
+
+이 방식은 다운로드를 실행하지 않고 SVG 데이터를 호스트 코드에서 직접 다룰 때 사용합니다.
+
+## 6. `window.SvgExport` API
+
+| 목적 | API | 결과 |
+|---|---|---|
+| SVG 파일 다운로드 | `window.SvgExport.exportSvg(svgSource, options)` | 다운로드 실행 |
+| PNG 파일 다운로드 | `window.SvgExport.exportPng(svgSource, options)` | 다운로드 실행 |
+| JPG 파일 다운로드 | `window.SvgExport.exportJpg(svgSource, options)` | 다운로드 실행 |
+| PNG Blob 생성 | `window.SvgExport.toPngBlob(svgSource, options)` | `Promise<Blob>` |
+| JPG Blob 생성 | `window.SvgExport.toJpgBlob(svgSource, options)` | `Promise<Blob>` |
+
+`toPngBlob()`과 `toJpgBlob()`은 파일 다운로드를 실행하지 않습니다.
+
+주요 옵션:
+
+| 옵션 | 기본값 | 설명 |
+|---|---:|---|
+| `scale` | `2` | canvas 확대 배율 |
+| `padding` | `20` | SVG 주변 여백 |
+| `bgColor` | `'#ffffff'` | 래스터 이미지 배경색 |
+| `quality` | `0.92` | JPG 품질 |
+| `sourceElement` | 없음 | 문자열 SVG를 넘길 때 computed style을 읽을 원본 SVG DOM |
+
+문자열 SVG를 넘기면서 화면의 computed style도 반영하고 싶다면 `sourceElement`를 같이 넘기면 됩니다.
+
+```js
+const svgText = this.$refs.guiEditor.getSvgText();
+const svgEl = this.$refs.guiEditor.getSvgElement();
+
+const pngBlob = await window.SvgExport.toPngBlob(svgText, {
+  sourceElement: svgEl,
+  scale: 2,
+  padding: 20
+});
+```
+
 
 </details>
