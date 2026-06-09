@@ -1,0 +1,11888 @@
+/**
+ * gui-editor.component.js
+ * Built: 2026-06-09T05:46:29.117Z
+ *
+ * Concatenation of gui-editor source files (no minification).
+ * Requires global Vue 2 and Mermaid loaded separately.
+ * Registers the global Vue component <mermaid-full-editor>.
+ */
+
+/* ===== runtime: dependency guard ===== */
+(function (global) {
+  if (!global.Vue || !/^2\./.test(String(global.Vue.version || ''))) {
+    throw new Error('gui-editor component bundle requires global Vue 2 to be loaded first.');
+  }
+})(typeof window !== 'undefined' ? window : this);
+
+/* ===== src/utils/SequenceMessageCodec.js ===== */
+/**
+ * Sequence 메시지 operator 관련 규칙을 한 곳에서 관리하는 공용 헬퍼
+ * - representation/sequence-parser.js  : MESSAGE_RE 사용
+ * - representation/sequence-generator.js : DEFAULT_OPERATOR 사용
+ * - SequenceSvgHandler.js : parseOperator / toggleLineStyle 사용
+ * - MermaidPreview.js     : LINE_TYPE_OPTIONS 사용
+ */
+(function (global) {
+  'use strict';
+
+  var DEFAULT_OPERATOR = '->>';
+
+  // 지원 operator 정규식 (activation suffix +/- 포함)
+  var MESSAGE_RE = /^([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*?)\s*((?:-->>|--x|--\)|-->|->>|-x|-\)|->)[+-]?)\s*([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*?)\s*:(.*)$/;
+
+  // UI 라벨 목록 (MermaidPreview sequence-toolbar 드롭다운)
+  var LINE_TYPE_OPTIONS = [
+    { operator: '->>',  label: '───>' },
+    { operator: '-->>',  label: '···>' },
+    { operator: '->',   label: '───'  },
+    { operator: '-->',  label: '···'  },
+    { operator: '-x',   label: '───X' },
+    { operator: '--x',  label: '···X' },
+    { operator: '-)',   label: '───)' },
+    { operator: '--)',  label: '···)' }
+  ];
+
+  // solid(단일 dash) ↔ dotted(이중 dash) 토글 맵
+  var TOGGLE_MAP = {
+    '->>':  '-->>',  '-->>': '->>',
+    '->':   '-->',   '-->':  '->',
+    '-x':   '--x',   '--x':  '-x',
+    '-)':   '--)',   '--)':  '-)'
+  };
+
+  // operator에서 activation suffix (+/-) 분리
+  function parseOperator(operator) {
+    var op = operator || DEFAULT_OPERATOR;
+    var suffix = '';
+    if (/[+-]$/.test(op)) {
+      suffix = op.slice(-1);
+      op = op.slice(0, -1);
+    }
+    return { base: op || DEFAULT_OPERATOR, suffix: suffix };
+  }
+
+  // solid ↔ dotted 토글 (activation suffix 유지)
+  function toggleLineStyle(operator) {
+    var parts = parseOperator(operator);
+    var nextBase = TOGGLE_MAP.hasOwnProperty(parts.base) ? TOGGLE_MAP[parts.base] : parts.base;
+    return nextBase + parts.suffix;
+  }
+
+  // activation +/- 균형 재계산
+  // GUI에서 메시지를 지운 뒤 남은 -가 inactive participant에 붙어 있으면
+  // Mermaid가 "Trying to inactivate an inactive participant"로 렌더 실패한다.
+  // 실제로 active가 아닌 from에 붙은 -만 떼어내고, 나머지는 그대로 둔다.
+  function normalizeActivations(messages) {
+    var result = [];
+    var activeCounts = {};
+    for (var i = 0; i < messages.length; i++) {
+      var msg = Object.assign({}, messages[i]);
+      var parts = parseOperator(msg.operator);
+      if (parts.suffix === '+') {
+        activeCounts[msg.to] = (activeCounts[msg.to] || 0) + 1;
+      }
+      if (parts.suffix === '-') {
+        if (activeCounts[msg.from] > 0) {
+          activeCounts[msg.from]--;
+        } else {
+          msg.operator = parts.base;
+        }
+      }
+      result.push(msg);
+    }
+    return result;
+  }
+
+  global.SequenceMessageCodec = {
+    DEFAULT_OPERATOR: DEFAULT_OPERATOR,
+    MESSAGE_RE: MESSAGE_RE,
+    LINE_TYPE_OPTIONS: LINE_TYPE_OPTIONS,
+    parseOperator: parseOperator,
+    toggleLineStyle: toggleLineStyle,
+    normalizeActivations: normalizeActivations
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/SequenceStatementUtils.js ===== */
+(function (global) {
+  'use strict';
+
+  function cloneStatement(statement) {
+    return Object.assign({}, statement || {});
+  }
+
+  function cloneStatements(model) {
+    var statements = (model && model.statements) || [];
+    if (statements.length) return statements.map(cloneStatement);
+
+    var messages = (model && model.messages) || [];
+    var fallback = [];
+    for (var i = 0; i < messages.length; i++) {
+      fallback.push({ type: 'message', message: Object.assign({}, messages[i]) });
+    }
+    return fallback;
+  }
+
+  function messageIndexToStatementIndex(statements, messageIndex) {
+    if (messageIndex === null || messageIndex === undefined || messageIndex < 0) return -1;
+    var seen = 0;
+    for (var i = 0; i < statements.length; i++) {
+      if (statements[i] && statements[i].type === 'message') {
+        if (seen === messageIndex) return i;
+        seen++;
+      }
+    }
+    return -1;
+  }
+
+  function insertMessageStatement(model, insertAt, message) {
+    var statements = cloneStatements(model);
+    var statement = { type: 'message', message: Object.assign({}, message || {}) };
+    var statementIndex = messageIndexToStatementIndex(statements, insertAt);
+
+    if (statementIndex === -1) {
+      statements.push(statement);
+    } else {
+      statements.splice(statementIndex, 0, statement);
+    }
+    return statements;
+  }
+
+  // note 사이 등 statement index를 직접 지정해 message를 삽입한다.
+  function insertMessageAtStatementIndex(model, stmtIdx, message) {
+    var statements = cloneStatements(model);
+    var statement = { type: 'message', message: Object.assign({}, message || {}) };
+    var idx = Math.max(0, Math.min(stmtIdx, statements.length));
+    statements.splice(idx, 0, statement);
+    return statements;
+  }
+
+  function removeMessageStatements(model, messageIndices) {
+    var statements = cloneStatements(model);
+    var indices = (messageIndices || []).slice().sort(function (a, b) { return b - a; });
+
+    for (var i = 0; i < indices.length; i++) {
+      var statementIndex = messageIndexToStatementIndex(statements, indices[i]);
+      if (statementIndex !== -1) statements.splice(statementIndex, 1);
+    }
+
+    return pruneEmptyBlocks(statements);
+  }
+
+  function removeParticipantStatements(model, participantId, messageIndices) {
+    var statements = removeMessageStatements(model, messageIndices);
+    if (!participantId) return statements;
+
+    var next = [];
+    for (var i = 0; i < statements.length; i++) {
+      var statement = statements[i];
+      if (
+        statement &&
+        statement.type === 'note' &&
+        statement.participants &&
+        statement.participants.indexOf(participantId) !== -1
+      ) {
+        continue;
+      }
+      next.push(statement);
+    }
+    return pruneEmptyBlocks(next);
+  }
+
+  function pruneEmptyBlocks(statements) {
+    var next = (statements || []).slice();
+    var changed = true;
+
+    while (changed) {
+      changed = false;
+      var removeSet = {};
+      var stack = [];
+
+      for (var i = 0; i < next.length; i++) {
+        var statement = next[i];
+        if (!statement) continue;
+
+        if (/^(loop|alt|opt|par)$/.test(statement.type)) {
+          stack.push({
+            startIndex: i,
+            branchIndices: [],
+            hasContent: false
+          });
+          continue;
+        }
+
+        if (/^(else|and)$/.test(statement.type)) {
+          if (stack.length) stack[stack.length - 1].branchIndices.push(i);
+          continue;
+        }
+
+        if (statement.type === 'end') {
+          if (!stack.length) continue;
+          var block = stack.pop();
+          if (!block.hasContent) {
+            removeSet[block.startIndex] = true;
+            removeSet[i] = true;
+            for (var b = 0; b < block.branchIndices.length; b++) {
+              removeSet[block.branchIndices[b]] = true;
+            }
+            changed = true;
+          } else if (stack.length) {
+            stack[stack.length - 1].hasContent = true;
+          }
+          continue;
+        }
+
+        if (stack.length) stack[stack.length - 1].hasContent = true;
+      }
+
+      if (changed) {
+        next = next.filter(function (_, idx) { return !removeSet[idx]; });
+      }
+    }
+
+    return next;
+  }
+
+  function listBlocks(statements) {
+    var source = (statements || []).map(cloneStatement);
+    var blocks = [];
+    var stack = [];
+    var messageCursor = 0;
+
+    for (var i = 0; i < source.length; i++) {
+      var statement = source[i];
+      if (!statement) continue;
+
+      if (/^(loop|alt|opt|par)$/.test(statement.type)) {
+        stack.push({
+          id: 'block-' + i,
+          kind: statement.type,
+          text: statement.text || '',
+          statementIndex: i,
+          endIndex: -1,
+          branchIndices: [],
+          depth: stack.length,
+          messageStartIndex: null,
+          messageEndIndex: null
+        });
+        continue;
+      }
+
+      if (statement.type === 'message') {
+        for (var s = 0; s < stack.length; s++) {
+          if (stack[s].messageStartIndex === null) stack[s].messageStartIndex = messageCursor;
+          stack[s].messageEndIndex = messageCursor;
+        }
+        messageCursor++;
+        continue;
+      }
+
+      if (statement.type === 'else' || statement.type === 'and') {
+        var top = stack.length ? stack[stack.length - 1] : null;
+        var expected = statement.type === 'else' ? 'alt' : 'par';
+        if (top && top.kind === expected) {
+          top.branchIndices.push(i);
+        }
+        continue;
+      }
+
+      if (statement.type === 'end') {
+        if (!stack.length) continue;
+        var block = stack.pop();
+        block.endIndex = i;
+        blocks.push(block);
+      }
+    }
+
+    blocks.sort(function (a, b) {
+      return a.statementIndex - b.statementIndex;
+    });
+    return blocks;
+  }
+
+  function wrapMessagesInBlock(model, messageIndices, kind, text, noteStatementIndices) {
+    var unique = {};
+    var ordered = [];
+    var statements = cloneStatements(model);
+
+    for (var i = 0; i < (messageIndices || []).length; i++) {
+      var idx = messageIndices[i];
+      if (idx === null || idx === undefined || unique[idx]) continue;
+      unique[idx] = true;
+      ordered.push(idx);
+    }
+
+    if (!ordered.length && !(noteStatementIndices && noteStatementIndices.length)) return statements;
+
+    ordered.sort(function (a, b) { return a - b; });
+
+    var rangeStart = Infinity;
+    var rangeEnd   = -1;
+
+    for (var m = 0; m < ordered.length; m++) {
+      var si = messageIndexToStatementIndex(statements, ordered[m]);
+      if (si === -1) continue;
+      if (si < rangeStart) rangeStart = si;
+      if (si > rangeEnd)   rangeEnd   = si;
+    }
+
+    for (var n = 0; n < (noteStatementIndices || []).length; n++) {
+      var ni = noteStatementIndices[n];
+      if (ni >= 0 && ni < statements.length) {
+        if (ni < rangeStart) rangeStart = ni;
+        if (ni > rangeEnd)   rangeEnd   = ni;
+      }
+    }
+
+    if (!isFinite(rangeStart) || rangeEnd < 0) return statements;
+
+    statements.splice(rangeStart, 0, {
+      type: String(kind || 'loop').toLowerCase(),
+      text: text || ''
+    });
+    statements.splice(rangeEnd + 2, 0, { type: 'end' });
+    return statements;
+  }
+
+  function findBlockById(blocks, blockId) {
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].id === blockId) return blocks[i];
+    }
+    return null;
+  }
+
+  function updateBlockText(model, blockId, text) {
+    var statements = cloneStatements(model);
+    var block = findBlockById(listBlocks(statements), blockId);
+    if (!block) return statements;
+
+    statements[block.statementIndex] = Object.assign({}, statements[block.statementIndex], {
+      text: text || ''
+    });
+    return statements;
+  }
+
+  function deleteBlock(model, blockId) {
+    var statements = cloneStatements(model);
+    var block = findBlockById(listBlocks(statements), blockId);
+    if (!block) return statements;
+
+    var removeSet = {};
+    removeSet[block.statementIndex] = true;
+    removeSet[block.endIndex] = true;
+    for (var b = 0; b < block.branchIndices.length; b++) {
+      removeSet[block.branchIndices[b]] = true;
+    }
+
+    var next = [];
+    for (var s = 0; s < statements.length; s++) {
+      if (!removeSet[s]) next.push(statements[s]);
+    }
+    return next;
+  }
+
+  // alt ↔ else, par ↔ and
+  var BRANCH_KEYWORD = { alt: 'else', par: 'and' };
+
+  function changeBlockKind(model, blockId, newKind) {
+    var statements = cloneStatements(model);
+    var block = findBlockById(listBlocks(statements), blockId);
+    if (!block) return statements;
+
+    var newKindStr = String(newKind || 'loop').toLowerCase();
+    statements[block.statementIndex] = Object.assign({}, statements[block.statementIndex], {
+      type: newKindStr
+    });
+
+    var oldBranch = BRANCH_KEYWORD[block.kind];
+    var newBranch = BRANCH_KEYWORD[newKindStr];
+
+    if (oldBranch && newBranch && oldBranch !== newBranch) {
+      // alt ↔ par: 분기 키워드 변환 (else ↔ and)
+      for (var b = 0; b < block.branchIndices.length; b++) {
+        var bi = block.branchIndices[b];
+        statements[bi] = Object.assign({}, statements[bi], { type: newBranch });
+      }
+    } else if (oldBranch && !newBranch && block.branchIndices.length) {
+      // alt/par → loop/opt: 분기 statement 제거, 메시지는 유지
+      var removeSet = {};
+      for (var b2 = 0; b2 < block.branchIndices.length; b2++) {
+        removeSet[block.branchIndices[b2]] = true;
+      }
+      statements = statements.filter(function (_, idx) { return !removeSet[idx]; });
+    }
+    // loop/opt → alt/par: 타입만 교체 (분기 없는 alt/par는 유효한 문법)
+
+    return statements;
+  }
+
+  function findEnclosingBranchBlock(model, messageIndices, noteStatementIndices) {
+    var hasMessages = messageIndices && messageIndices.length;
+    var hasNotes = noteStatementIndices && noteStatementIndices.length;
+    if (!hasMessages && !hasNotes) return null;
+
+    var blocks = listBlocks((model && model.statements) || []);
+    var best = null;
+
+    if (hasMessages) {
+      var sorted = messageIndices.slice().sort(function (a, b) { return a - b; });
+      var minIdx = sorted[0];
+      var maxIdx = sorted[sorted.length - 1];
+      for (var i = 0; i < blocks.length; i++) {
+        var b = blocks[i];
+        if (b.kind !== 'alt' && b.kind !== 'par') continue;
+        if (b.messageStartIndex === null || b.messageEndIndex === null) continue;
+        if (b.messageStartIndex > minIdx || b.messageEndIndex < maxIdx) continue;
+        if (hasNotes) {
+          var notesInBlock = true;
+          for (var n = 0; n < noteStatementIndices.length; n++) {
+            if (noteStatementIndices[n] <= b.statementIndex || noteStatementIndices[n] >= b.endIndex) {
+              notesInBlock = false;
+              break;
+            }
+          }
+          if (!notesInBlock) continue;
+        }
+        // 가장 안쪽(depth 깊은) 블록 우선
+        if (!best || b.depth > best.depth) best = b;
+      }
+    } else {
+      // note-only: statement index 범위 기준으로 블록 포함 여부 확인
+      var minNoteIdx = noteStatementIndices[0];
+      var maxNoteIdx = noteStatementIndices[0];
+      for (var ni = 1; ni < noteStatementIndices.length; ni++) {
+        if (noteStatementIndices[ni] < minNoteIdx) minNoteIdx = noteStatementIndices[ni];
+        if (noteStatementIndices[ni] > maxNoteIdx) maxNoteIdx = noteStatementIndices[ni];
+      }
+      for (var bi = 0; bi < blocks.length; bi++) {
+        var blk = blocks[bi];
+        if (blk.kind !== 'alt' && blk.kind !== 'par') continue;
+        if (minNoteIdx <= blk.statementIndex || maxNoteIdx >= blk.endIndex) continue;
+        if (!best || blk.depth > best.depth) best = blk;
+      }
+    }
+
+    return best;
+  }
+
+  function findBranchInsertPoint(statements, altBlock, targetStmtIndex) {
+    if (targetStmtIndex === -1 || altBlock.endIndex === -1) return targetStmtIndex;
+    var targetDepth = altBlock.depth + 1;
+    var depth = altBlock.depth;
+    var directChildStart = -1;
+    for (var i = altBlock.statementIndex; i <= altBlock.endIndex; i++) {
+      var stmt = statements[i];
+      if (!stmt) continue;
+      if (i === altBlock.statementIndex) { depth = targetDepth; continue; }
+      if (depth === targetDepth) directChildStart = i;
+      if (/^(loop|alt|opt|par)$/.test(stmt.type)) { depth++; }
+      else if (stmt.type === 'end') { depth--; }
+      if (i === targetStmtIndex) return directChildStart !== -1 ? directChildStart : targetStmtIndex;
+    }
+    return targetStmtIndex;
+  }
+
+  function insertBranchStatement(model, messageIndices, keyword, text, noteStatementIndices) {
+    var statements = cloneStatements(model);
+    var selectedStmtIndices = [];
+    var firstStmtIndex = -1;
+
+    if (messageIndices && messageIndices.length) {
+      var sorted = messageIndices.slice().sort(function (a, b) { return a - b; });
+      for (var m = 0; m < sorted.length; m++) {
+        var msgStmtIndex = messageIndexToStatementIndex(statements, sorted[m]);
+        if (msgStmtIndex !== -1) selectedStmtIndices.push(msgStmtIndex);
+      }
+    }
+
+    if (noteStatementIndices && noteStatementIndices.length) {
+      for (var n = 0; n < noteStatementIndices.length; n++) {
+        var noteStmtIndex = noteStatementIndices[n];
+        if (noteStmtIndex >= 0 && noteStmtIndex < statements.length) {
+          selectedStmtIndices.push(noteStmtIndex);
+        }
+      }
+    }
+
+    if (selectedStmtIndices.length) {
+      selectedStmtIndices.sort(function (a, b) { return a - b; });
+      firstStmtIndex = selectedStmtIndices[0];
+    }
+    if (firstStmtIndex === -1) return statements;
+
+    var enclosing = findEnclosingBranchBlock(model, messageIndices || [], noteStatementIndices);
+    var insertAt = enclosing
+      ? findBranchInsertPoint(statements, enclosing, firstStmtIndex)
+      : firstStmtIndex;
+    statements.splice(insertAt, 0, { type: String(keyword), text: text || '' });
+    return statements;
+  }
+
+  function updateBranchText(model, statementIndex, text) {
+    var statements = cloneStatements(model);
+    if (statementIndex < 0 || statementIndex >= statements.length) return statements;
+    statements[statementIndex] = Object.assign({}, statements[statementIndex], { text: text || '' });
+    return statements;
+  }
+
+  function deleteBranchStatement(model, statementIndex) {
+    var statements = cloneStatements(model);
+    if (statementIndex < 0 || statementIndex >= statements.length) return statements;
+    if (statements[statementIndex].type !== 'else' && statements[statementIndex].type !== 'and') return statements;
+    statements.splice(statementIndex, 1);
+    return statements;
+  }
+
+  function addNoteStatement(model, participantId, insertAtMessageIndex, text) {
+    var statements = cloneStatements(model);
+    var note = { type: 'note', participants: [participantId], text: text || 'Note' };
+    var statementIndex = (insertAtMessageIndex !== null && insertAtMessageIndex !== undefined)
+      ? messageIndexToStatementIndex(statements, insertAtMessageIndex)
+      : -1;
+    if (statementIndex === -1) {
+      statements.push(note);
+    } else {
+      statements.splice(statementIndex, 0, note);
+    }
+    return statements;
+  }
+
+  function updateNoteText(model, statementIndex, text) {
+    var statements = cloneStatements(model);
+    if (statementIndex < 0 || statementIndex >= statements.length) return statements;
+    statements[statementIndex] = Object.assign({}, statements[statementIndex], { text: text || '' });
+    return statements;
+  }
+
+  function deleteNoteStatement(model, statementIndex) {
+    var statements = cloneStatements(model);
+    if (statementIndex < 0 || statementIndex >= statements.length) return statements;
+    statements.splice(statementIndex, 1);
+    return statements;
+  }
+
+  function insertNoteAtStatementIndex(model, statementIndex, participantId, text) {
+    var statements = cloneStatements(model);
+    var note = { type: 'note', participants: [participantId], text: text || 'Note' };
+    var idx = (statementIndex !== null && statementIndex !== undefined)
+      ? Math.max(0, Math.min(statementIndex, statements.length))
+      : statements.length;
+    statements.splice(idx, 0, note);
+    return statements;
+  }
+
+  global.SequenceStatementUtils = {
+    cloneStatements: cloneStatements,
+    listBlocks: listBlocks,
+    findEnclosingBranchBlock: findEnclosingBranchBlock,
+    insertMessageStatement: insertMessageStatement,
+    insertMessageAtStatementIndex: insertMessageAtStatementIndex,
+    removeMessageStatements: removeMessageStatements,
+    removeParticipantStatements: removeParticipantStatements,
+    pruneEmptyBlocks: pruneEmptyBlocks,
+    wrapMessagesInBlock: wrapMessagesInBlock,
+    insertBranchStatement: insertBranchStatement,
+    updateBlockText: updateBlockText,
+    updateBranchText: updateBranchText,
+    deleteBranchStatement: deleteBranchStatement,
+    deleteBlock: deleteBlock,
+    changeBlockKind: changeBlockKind,
+    addNoteStatement: addNoteStatement,
+    updateNoteText: updateNoteText,
+    deleteNoteStatement: deleteNoteStatement,
+    insertNoteAtStatementIndex: insertNoteAtStatementIndex
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/IdAllocator.js ===== */
+/**
+ * IdAllocator
+ * GUI에서 새 노드/참가자를 추가할 때 충돌 없는 ID(`N12`, `P3` 등)를 할당한다.
+ *
+ * - script와 model 양쪽을 모두 살펴 충돌을 피한다 (parser가 누락한 ID도 보호).
+ * - counter는 한 번 올라가면 절대 내려가지 않는다 (단조 증가).
+ * - prefix별 인스턴스 생성: `new IdAllocator('N')` / `new IdAllocator('P')`.
+ */
+(function (global) {
+  'use strict';
+
+  function IdAllocator(prefix) {
+    this.prefix = prefix;
+    this.counter = 0;
+  }
+
+  // script의 prefix+숫자와 modelItems의 ID 끝 숫자를 모두 훑어 counter를 끌어올린다.
+  // 사용자가 수동으로 큰 번호를 쓴 ID를 보존하기 위함.
+  IdAllocator.prototype.seed = function (script, items) {
+    var max = this._scanScriptMax(script);
+    var list = items || [];
+    for (var i = 0; i < list.length; i++) {
+      var id = String(list[i] && list[i].id || '');
+      var nm = id.match(/(\d+)$/);
+      if (nm) {
+        var n = parseInt(nm[1], 10);
+        if (n > max) max = n;
+      }
+    }
+    if (max > this.counter) this.counter = max;
+  };
+
+  // 충돌 없는 다음 ID를 반환. counter를 함께 증가시킴.
+  IdAllocator.prototype.next = function (script, items) {
+    var candidate = '';
+    do {
+      this.counter++;
+      candidate = this.prefix + this.counter;
+    } while (this.scriptContainsId(script, candidate) || this.itemsContainId(items, candidate));
+    return candidate;
+  };
+
+  IdAllocator.prototype.scriptContainsId = function (script, id) {
+    if (!id) return false;
+    var escapedId = String(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('\\b' + escapedId + '\\b').test(script || '');
+  };
+
+  IdAllocator.prototype.itemsContainId = function (items, id) {
+    var list = items || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].id === id) return true;
+    }
+    return false;
+  };
+
+  IdAllocator.prototype._scanScriptMax = function (script) {
+    var src = script || '';
+    var escapedPrefix = String(this.prefix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var regex = new RegExp('\\b' + escapedPrefix + '(\\d+)\\b', 'g');
+    var max = 0;
+    var match;
+    while ((match = regex.exec(src))) {
+      var n = parseInt(match[1], 10);
+      if (n > max) max = n;
+    }
+    return max;
+  };
+
+  global.IdAllocator = IdAllocator;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/ModelDiagnostics.js ===== */
+/**
+ * ModelDiagnostics
+ * raw script와 parsed model을 비교해 사용자가 인지해야 할 경고 문구를 만든다.
+ *
+ * 현재는 두 종류의 보호 신호를 합쳐서 보여준다:
+ *   - script에는 N12 / P3 같은 예약 ID가 있는데 parser가 model에 반영하지 못한 경우
+ *   - sequence parser가 일부 줄을 raw fallback으로 보존했거나 block 균형 이상을 감지한 경우
+ *
+ * StorageManager 스타일의 stateless plain object.
+ */
+(function (global) {
+  'use strict';
+
+  function collectReservedIds(script, prefix) {
+    var src = script || '';
+    var escapedPrefix = String(prefix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var regex = new RegExp('\\b' + escapedPrefix + '(\\d+)\\b', 'g');
+    var ids = {};
+    var match;
+    while ((match = regex.exec(src))) {
+      ids[prefix + match[1]] = true;
+    }
+    return ids;
+  }
+
+  function collectModelIds(items, prefix) {
+    var ids = {};
+    var list = items || [];
+    var idPattern = new RegExp('^' + prefix + '\\d+$');
+    for (var i = 0; i < list.length; i++) {
+      var id = String(list[i] && list[i].id || '');
+      if (idPattern.test(id)) {
+        ids[id] = true;
+      }
+    }
+    return ids;
+  }
+
+  function countMissingIds(reserved, parsed) {
+    var count = 0;
+    var keys = Object.keys(reserved);
+    for (var i = 0; i < keys.length; i++) {
+      if (!parsed[keys[i]]) count++;
+    }
+    return count;
+  }
+
+  function buildSequenceFallbackParts(parsed) {
+    var diagnostics = parsed && parsed.type === 'sequenceDiagram' ? (parsed.diagnostics || {}) : null;
+    var parts = [];
+    if (!diagnostics) return parts;
+
+    if (diagnostics.rawStatementCount) {
+      parts.push('지원하지 않는 sequence 구문 ' + diagnostics.rawStatementCount + '줄 raw 보존');
+    }
+    if (diagnostics.orphanEndCount) {
+      parts.push('짝 없는 end ' + diagnostics.orphanEndCount + '건 raw 보존');
+    }
+    if (diagnostics.unmatchedBlockCount) {
+      parts.push('닫히지 않은 block ' + diagnostics.unmatchedBlockCount + '건 감지');
+    }
+
+    return parts;
+  }
+
+  function buildFlowchartFallbackParts(parsed) {
+    var diagnostics = parsed && parsed.type === 'flowchart' ? (parsed.diagnostics || {}) : null;
+    var parts = [];
+    if (!diagnostics) return parts;
+
+    if (diagnostics.rawStatementCount) {
+      parts.push('지원하지 않는 flowchart 구문 ' + diagnostics.rawStatementCount + '줄 raw 보존');
+    }
+
+    return parts;
+  }
+
+  // script ↔ parsed model 비교 후 경고 문자열 반환 (없으면 빈 문자열).
+  function reservedIdWarning(script, parsed) {
+    if (!parsed) return '';
+    var reservedNodeIds = collectReservedIds(script, 'N');
+    var reservedParticipantIds = collectReservedIds(script, 'P');
+    var parsedNodeIds = collectModelIds(parsed.nodes || [], 'N');
+    var parsedParticipantIds = collectModelIds(parsed.participants || [], 'P');
+    var missingNodeCount = countMissingIds(reservedNodeIds, parsedNodeIds);
+    var missingParticipantCount = countMissingIds(reservedParticipantIds, parsedParticipantIds);
+    var parts = buildSequenceFallbackParts(parsed).concat(buildFlowchartFallbackParts(parsed));
+
+    if (missingNodeCount) parts.push('N ID ' + missingNodeCount + '개 누락 추정');
+    if (missingParticipantCount) parts.push('P ID ' + missingParticipantCount + '개 누락 추정');
+    if (!parts.length) return '';
+
+    return parts.join(', ') + ' 중';
+  }
+
+  global.ModelDiagnostics = {
+    reservedIdWarning: reservedIdWarning
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/ParserHighlight.js ===== */
+/**
+ * ParserHighlight
+ * parser가 수집한 raw highlight target을 textarea 줄에 다시 매핑하는 공통 유틸.
+ *
+ * 역할:
+ * - source 전체에서 같은 text가 몇 번째 등장인지 계산
+ * - highlight target 목록을 현재 script 기준 line map으로 변환
+ */
+(function (global) {
+  'use strict';
+
+  function normalizeLineText(line) {
+    return String(line || '').trim();
+  }
+
+  function nextOccurrence(counterMap, line) {
+    var key = normalizeLineText(line) || '__empty__';
+    var next = (counterMap[key] || 0) + 1;
+    counterMap[key] = next;
+    return {
+      text: normalizeLineText(line),
+      occurrence: next
+    };
+  }
+
+  function buildHighlightLineMap(script, targets) {
+    var map = {};
+    var list = targets || [];
+    if (!list.length) return map;
+
+    var targetCounts = {};
+    for (var i = 0; i < list.length; i++) {
+      var target = list[i] || {};
+      var key = normalizeLineText(target.text) || '__empty__';
+      var occ = target.occurrence || 1;
+      if (!targetCounts[key]) targetCounts[key] = {};
+      targetCounts[key][occ] = true;
+    }
+
+    var lines = String(script || '').split('\n');
+    var seenCounts = {};
+    for (var j = 0; j < lines.length; j++) {
+      var lineKey = normalizeLineText(lines[j]) || '__empty__';
+      var lineOccurrence = (seenCounts[lineKey] || 0) + 1;
+      seenCounts[lineKey] = lineOccurrence;
+      if (targetCounts[lineKey] && targetCounts[lineKey][lineOccurrence]) {
+        map[j + 1] = true;
+      }
+    }
+    return map;
+  }
+
+  global.ParserHighlight = {
+    normalizeLineText: normalizeLineText,
+    nextOccurrence: nextOccurrence,
+    buildHighlightLineMap: buildHighlightLineMap
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/representation/sequence-parser.js ===== */
+/**
+ * Mermaid 시퀀스 다이어그램 파서
+ * sequenceDiagram 문법을 내부 모델로 변환한다.
+ */
+
+(function (global) {
+  'use strict';
+
+  var MESSAGE_RE = SequenceMessageCodec.MESSAGE_RE;
+  var BLOCK_OPEN_RE = /^(loop|alt|opt|par)(?:\s+(.+))?$/i;
+  var RAW_BLOCK_OPEN_RE = /^(rect|critical|break|box)\b(?:\s+(.+))?$/i;
+  var NOTE_OVER_RE = /^note\s+over\s+([A-Za-z0-9_\u3131-\uD79D][^:]*?)(?:\s*:\s*(.*))?$/i;
+  function parseDirectiveLine(line) {
+    if (global.StaticFlowchartParser && global.StaticFlowchartParser.parseDirectiveLine) {
+      return global.StaticFlowchartParser.parseDirectiveLine(line);
+    }
+    return /^%%\{[\s\S]*\}%%$/.test(line) ? line : null;
+  }
+
+  function pushBlock(model, kind, recognized) {
+    model._blockStack.push({
+      kind: String(kind || '').toLowerCase(),
+      recognized: recognized !== false
+    });
+  }
+
+  function popBlock(model) {
+    return model._blockStack.length ? model._blockStack.pop() : null;
+  }
+
+  function getBlockTop(model) {
+    return model._blockStack.length ? model._blockStack[model._blockStack.length - 1] : null;
+  }
+
+  function countSourceOccurrence(model, line) {
+    return ParserHighlight.nextOccurrence(model._sourceTextCounts, line);
+  }
+
+  function pushRawStatement(model, line, blockRole, lineNumber, sourceInfo) {
+    var rawText = sourceInfo ? sourceInfo.text : String(line || '').trim();
+    var occurrence = sourceInfo ? sourceInfo.occurrence : 1;
+    model.statements.push({
+      type: 'raw',
+      raw: line,
+      blockRole: blockRole || '',
+      lineNumber: lineNumber || null,
+      rawText: rawText,
+      occurrence: occurrence
+    });
+    model._diagnostics.rawStatementCount++;
+    if (lineNumber && !model._diagnostics.rawLineMap[lineNumber]) {
+    model._diagnostics.rawLineMap[lineNumber] = true;
+      model._diagnostics.rawLineNumbers.push(lineNumber);
+    }
+    model._diagnostics.rawTargets.push({
+      lineNumber: lineNumber || null,
+      text: rawText,
+      occurrence: occurrence,
+      blockRole: blockRole || ''
+    });
+  }
+
+  function ensureParticipant(model, id, label) {
+    if (!id || model._participantMap[id]) return;
+    var participant = { id: id, label: label || id, kind: 'participant' };
+    model.participants.push(participant);
+    model._participantMap[id] = participant;
+  }
+
+  function parseParticipantLine(line, model) {
+    var match = line.match(/^(participant|actor)\s+([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*?)(?:\s+as\s+(.+))?$/);
+    if (!match) return false;
+    model.explicitParticipants = true;
+    var id = match[2];
+    var label = match[3] ? match[3].trim() : id;
+    var kind = match[1]; // 'participant' | 'actor'
+    if (!model._participantMap[id]) {
+      var p = { id: id, label: label, kind: kind };
+      model.participants.push(p);
+      model._participantMap[id] = p;
+    } else {
+      model._participantMap[id].kind = kind;
+      if (match[3]) model._participantMap[id].label = label;
+    }
+    return true;
+  }
+
+  function parseMessageLine(line, model) {
+    var match = line.match(MESSAGE_RE);
+    if (!match) return false;
+
+    ensureParticipant(model, match[1], match[1]);
+    ensureParticipant(model, match[3], match[3]);
+
+    var message = {
+      from: match[1],
+      to: match[3],
+      operator: match[2],
+      text: (match[4] || '').trim()
+    };
+    model.messages.push(message);
+    model.statements.push({
+      type: 'message',
+      message: Object.assign({}, message)
+    });
+    return true;
+  }
+
+  function parseNoteLine(line, model) {
+    var match = line.match(NOTE_OVER_RE);
+    if (!match) return false;
+    var participants = match[1].split(',').map(function (p) { return p.trim(); }).filter(Boolean);
+    var text = (match[2] || '').trim();
+    if (!text) return true;
+    for (var i = 0; i < participants.length; i++) {
+      ensureParticipant(model, participants[i], participants[i]);
+    }
+    model.statements.push({ type: 'note', participants: participants, text: text });
+    return true;
+  }
+
+  function parseActivationLine(line, model) {
+    var match = line.match(/^(activate|deactivate)\s+([A-Za-z0-9_\u3131-\uD79D][A-Za-z0-9_\u3131-\uD79D ]*)$/i);
+    if (!match) return false;
+    ensureParticipant(model, match[2], match[2]);
+    model.statements.push({
+      type: match[1].toLowerCase(),
+      participant: match[2]
+    });
+    return true;
+  }
+
+  function parseControlLine(line, model, lineNumber, sourceInfo) {
+    var match = line.match(BLOCK_OPEN_RE);
+    if (match) {
+      pushBlock(model, match[1], true);
+      model.statements.push({
+        type: match[1].toLowerCase(),
+        text: (match[2] || '').trim()
+      });
+      return true;
+    }
+
+    match = line.match(/^(else|and)(?:\s+(.+))?$/i);
+    if (match) {
+      var branchType = match[1].toLowerCase();
+      var top = getBlockTop(model);
+      var expected = branchType === 'else' ? 'alt' : 'par';
+      if (top && top.recognized && top.kind === expected) {
+        model.statements.push({
+          type: branchType,
+          text: (match[2] || '').trim()
+        });
+      } else {
+        pushRawStatement(model, line, '', lineNumber, sourceInfo);
+      }
+      return true;
+    }
+
+    match = line.match(RAW_BLOCK_OPEN_RE);
+    if (match) {
+      pushBlock(model, match[1], false);
+      pushRawStatement(model, line, 'open', lineNumber, sourceInfo);
+      return true;
+    }
+
+    if (/^end$/i.test(line)) {
+      var ended = popBlock(model);
+      if (!ended) {
+        pushRawStatement(model, line, 'close', lineNumber, sourceInfo);
+        model._diagnostics.orphanEndCount++;
+        return true;
+      }
+      if (ended.recognized) {
+        model.statements.push({ type: 'end' });
+      } else {
+        pushRawStatement(model, line, 'close', lineNumber, sourceInfo);
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  function parseSequence(script) {
+    if (!script || typeof script !== 'string') {
+      return {
+        type: 'sequenceDiagram',
+        explicitParticipants: false,
+        directives: [],
+        participants: [],
+        messages: [],
+        statements: [],
+        diagnostics: {
+          rawStatementCount: 0,
+          orphanEndCount: 0,
+          unmatchedBlockCount: 0,
+          rawLineNumbers: [],
+          rawTargets: []
+        },
+      nodes: [],
+      edges: [],
+      _sourceTextCounts: {}
+      };
+    }
+
+    var lines = script.split('\n');
+    var model = {
+      type: 'sequenceDiagram',
+      explicitParticipants: false,
+      directives: [],
+      participants: [],
+      messages: [],
+      statements: [],
+      diagnostics: {
+        rawStatementCount: 0,
+        orphanEndCount: 0,
+        unmatchedBlockCount: 0,
+        rawLineNumbers: [],
+        rawTargets: []
+      },
+      nodes: [],
+      edges: [],
+      _participantMap: {},
+      _blockStack: [],
+      _sourceTextCounts: {},
+      _diagnostics: {
+        rawStatementCount: 0,
+        orphanEndCount: 0,
+        unmatchedBlockCount: 0,
+        rawLineNumbers: [],
+        rawLineMap: {},
+        rawTargets: []
+      }
+    };
+    var started = false;
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+
+      if (!started) {
+        var directive = parseDirectiveLine(line);
+        if (directive) model.directives.push(directive);
+        if (line.indexOf('%%') === 0) continue;
+        if (/^sequenceDiagram$/i.test(line)) {
+          started = true;
+        }
+        continue;
+      }
+
+      if (line.indexOf('%%') === 0) { model.statements.push({ type: 'raw', raw: line }); continue; }
+      var sourceInfo = countSourceOccurrence(model, line);
+      if (line === 'autonumber') { model.autonumber = true; continue; }
+      if (parseParticipantLine(line, model)) continue;
+      if (parseMessageLine(line, model)) continue;
+      if (parseActivationLine(line, model)) continue;
+      if (parseNoteLine(line, model)) continue;
+      if (parseControlLine(line, model, i + 1, sourceInfo)) continue;
+      pushRawStatement(model, line, '', i + 1, sourceInfo);
+    }
+
+    model._diagnostics.unmatchedBlockCount = model._blockStack.length;
+    model.diagnostics = {
+      rawStatementCount: model._diagnostics.rawStatementCount,
+      orphanEndCount: model._diagnostics.orphanEndCount,
+      unmatchedBlockCount: model._diagnostics.unmatchedBlockCount,
+      rawLineNumbers: model._diagnostics.rawLineNumbers.slice(),
+      rawTargets: model._diagnostics.rawTargets.slice()
+    };
+    if (global.SequenceStatementUtils && global.SequenceStatementUtils.pruneEmptyBlocks) {
+      model.statements = global.SequenceStatementUtils.pruneEmptyBlocks(model.statements);
+    }
+    delete model._participantMap;
+    delete model._blockStack;
+    delete model._sourceTextCounts;
+    delete model._diagnostics;
+    return model;
+  }
+
+  global.SequenceParser = {
+    parse: parseSequence
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/representation/sequence-generator.js ===== */
+/**
+ * Mermaid 시퀀스 다이어그램 생성기
+ * 내부 모델을 sequenceDiagram 스크립트로 직렬화한다.
+ */
+
+(function (global) {
+  'use strict';
+
+  function renderIndented(level, text) {
+    var indent = '    ';
+    for (var i = 0; i < level; i++) indent += '    ';
+    return indent + text;
+  }
+
+  function renderMessage(message, level) {
+    if (!message || !message.from || !message.to) return '';
+    return renderIndented(
+      level || 0,
+      message.from +
+      (message.operator || SequenceMessageCodec.DEFAULT_OPERATOR) +
+      message.to +
+      ': ' +
+      (message.text || '')
+    );
+  }
+
+  function renderStatement(statement, message, level) {
+    if (!statement) return '';
+
+    if (statement.type === 'message') {
+      return renderMessage(message || statement.message, level);
+    }
+
+    if (statement.type === 'activate' || statement.type === 'deactivate') {
+      if (!statement.participant) return '';
+      return renderIndented(level || 0, statement.type + ' ' + statement.participant);
+    }
+
+    if (statement.type === 'end') {
+      return renderIndented(level || 0, 'end');
+    }
+
+    if (/^(loop|alt|else|opt|par|and)$/.test(statement.type)) {
+      return renderIndented(level || 0, statement.type + (statement.text ? ' ' + statement.text : ''));
+    }
+
+    if (statement.type === 'note') {
+      var parts = (statement.participants || []).join(', ');
+      var text = String(statement.text || '').trim();
+      if (!parts || !text) return '';
+      return renderIndented(level || 0, 'note over ' + parts + ': ' + text);
+    }
+
+    if (statement.type === 'raw') {
+      return renderIndented(level || 0, statement.raw || '');
+    }
+
+    return '';
+  }
+
+  function generateSequence(model) {
+    if (!model) return '';
+
+    var lines = model.directives ? model.directives.slice() : [];
+    lines.push('sequenceDiagram');
+    if (model.autonumber) lines.push('    autonumber');
+    var participants = model.participants || [];
+    var messages = model.messages || [];
+    var referenced = {};
+    var mustDeclare = !!model.explicitParticipants;
+
+    for (var r = 0; r < messages.length; r++) {
+      if (messages[r].from) referenced[messages[r].from] = true;
+      if (messages[r].to) referenced[messages[r].to] = true;
+    }
+
+    if (!mustDeclare) {
+      for (var d = 0; d < participants.length; d++) {
+        var candidate = participants[d];
+        if (!candidate || !candidate.id) continue;
+        if ((candidate.label && candidate.label !== candidate.id) || !referenced[candidate.id]) {
+          mustDeclare = true;
+          break;
+        }
+      }
+    }
+
+    if (mustDeclare) {
+      for (var i = 0; i < participants.length; i++) {
+        var participant = participants[i];
+        if (!participant || !participant.id) continue;
+        var keyword = participant.kind === 'actor' ? 'actor' : 'participant';
+        if (participant.label && participant.label !== participant.id) {
+          lines.push('    ' + keyword + ' ' + participant.id + ' as ' + participant.label);
+        } else {
+          lines.push('    ' + keyword + ' ' + participant.id);
+        }
+      }
+    }
+
+    var statements = model.statements || [];
+    if (statements.length) {
+      var messageCursor = 0;
+      var depth = 0;
+      for (var j = 0; j < statements.length; j++) {
+        var statement = statements[j];
+        var line = '';
+        var level = depth;
+        if (statement && (
+          statement.type === 'else' ||
+          statement.type === 'and' ||
+          statement.type === 'end' ||
+          statement.blockRole === 'close'
+        )) {
+          level = Math.max(0, depth - 1);
+        }
+        if (statement && statement.type === 'message') {
+          line = renderStatement(statement, messages[messageCursor] || statement.message, level);
+          messageCursor++;
+        } else if (statement && (statement.type === 'activate' || statement.type === 'deactivate') &&
+                   statement.participant && !referenced[statement.participant]) {
+          // activate/deactivate on a participant with no messages causes Mermaid to crash
+          // (no lifeline y-extent), so skip these orphan statements.
+          line = '';
+        } else {
+          line = renderStatement(statement, null, level);
+        }
+
+        if (statement && (/^(loop|alt|opt|par)$/.test(statement.type) || statement.blockRole === 'open')) {
+          depth++;
+        } else if (statement && /^(else|and)$/.test(statement.type)) {
+          depth = level + 1;
+        } else if (statement && (statement.type === 'end' || statement.blockRole === 'close')) {
+          depth = level;
+        }
+
+        if (line) lines.push(line);
+      }
+
+      for (; messageCursor < messages.length; messageCursor++) {
+        var trailing = renderMessage(messages[messageCursor], depth);
+        if (trailing) lines.push(trailing);
+      }
+      return lines.join('\n');
+    }
+
+    for (var k = 0; k < messages.length; k++) {
+      var message = messages[k];
+      var messageLine = renderMessage(message);
+      if (messageLine) {
+        lines.push(messageLine);
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  global.SequenceGenerator = {
+    generate: generateSequence
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/FlowEdgeCodec.js ===== */
+(function (global) {
+  'use strict';
+
+  var BODY_OPTIONS = [
+    { key: 'solid', label: '──' },
+    { key: 'dotted', label: '┄┄' },
+    { key: 'thick', label: '━━' }
+  ];
+
+  var HEAD_OPTIONS = [
+    { key: 'none', label: '─' },
+    { key: 'x', label: '─x' },
+    { key: 'both-x', label: 'x─x' },
+    { key: 'arrow', label: '→' },
+    { key: 'both-arrow', label: '⟷' },
+    { key: 'circle', label: '─●' },
+    { key: 'both-circle', label: '●─●' }
+  ];
+
+  // Parser는 exact 후보 문자열을 먼저 찾고, semantics는 아래 regex 규칙으로 해석한다.
+  var OPERATOR_CANDIDATES = [
+    'x===x',
+    'o===o',
+    'x--x',
+    'o--o',
+    '<==>',
+    'x-.-x',
+    'o-.-o',
+    '<-.->',
+    '<---->',
+    '<--->',
+    '<-->',
+    '===o',
+    '===x',
+    '----o',
+    '---o',
+    '--o',
+    '--x',
+    '-.-o',
+    '-.-x',
+    '-.->',
+    '-...-',
+    '-..-',
+    '-.-',
+    '===>',
+    '==>',
+    '=====',
+    '====',
+    '===',
+    '-----',
+    '----',
+    '-->',
+    '---'
+  ];
+
+  var PARSE_RULES = [
+    { regex: /^x===x$/, body: 'thick', head: 'both-x' },
+    { regex: /^o===o$/, body: 'thick', head: 'both-circle' },
+    { regex: /^x--+x$/, body: 'solid', head: 'both-x' },
+    { regex: /^o--+o$/, body: 'solid', head: 'both-circle' },
+    { regex: /^<==+>$/, body: 'thick', head: 'both-arrow' },
+    { regex: /^x-\.-x$/, body: 'dotted', head: 'both-x' },
+    { regex: /^o-\.-o$/, body: 'dotted', head: 'both-circle' },
+    { regex: /^<-\.{1,}->$/, body: 'dotted', head: 'both-arrow' },
+    { regex: /^<--+>$/, body: 'solid', head: 'both-arrow' },
+    { regex: /^===x$/, body: 'thick', head: 'x' },
+    { regex: /^===o$/, body: 'thick', head: 'circle' },
+    { regex: /^--+x$/, body: 'solid', head: 'x' },
+    { regex: /^--+o$/, body: 'solid', head: 'circle' },
+    { regex: /^-\.-x$/, body: 'dotted', head: 'x' },
+    { regex: /^-\.-o$/, body: 'dotted', head: 'circle' },
+    { regex: /^-\.{1,}->$/, body: 'dotted', head: 'arrow' },
+    { regex: /^-\.{1,}-$/, body: 'dotted', head: 'none' },
+    { regex: /^==+>$/, body: 'thick', head: 'arrow' },
+    { regex: /^=+$/, body: 'thick', head: 'none' },
+    { regex: /^--+>$/, body: 'solid', head: 'arrow' }
+  ];
+
+  var LEGACY_LEFT_HEAD_ALIASES = {
+    '<--': '-->',
+    'o--': '--o',
+    'x--': '--x'
+  };
+
+  function parseType(type) {
+    var operator = String(type || '---');
+    for (var i = 0; i < PARSE_RULES.length; i++) {
+      if (PARSE_RULES[i].regex.test(operator)) {
+        return {
+          body: PARSE_RULES[i].body,
+          head: PARSE_RULES[i].head
+        };
+      }
+    }
+    return { body: 'solid', head: 'none' };
+  }
+
+  function composeType(body, head) {
+    body = body || 'solid';
+    head = head || 'none';
+
+    if (body === 'dotted') {
+      if (head === 'both-x') return 'x-.-x';
+      if (head === 'x') return '-.-x';
+      if (head === 'both-circle') return 'o-.-o';
+      if (head === 'circle') return '-.-o';
+      if (head === 'both-arrow') return '<-.->';
+      return head === 'arrow' ? '-.->' : '-.-';
+    }
+
+    if (body === 'thick') {
+      if (head === 'both-x') return 'x===x';
+      if (head === 'x') return '===x';
+      if (head === 'both-circle') return 'o===o';
+      if (head === 'circle') return '===o';
+      if (head === 'both-arrow') return '<==>';
+      return head === 'arrow' ? '==>' : '===';
+    }
+
+    if (head === 'both-arrow') return '<-->';
+    if (head === 'arrow') return '-->';
+    if (head === 'both-circle') return 'o--o';
+    if (head === 'circle') return '--o';
+    if (head === 'both-x') return 'x--x';
+    if (head === 'x') return '--x';
+    return '---';
+  }
+
+  function getBodyType(type) {
+    return parseType(type).body;
+  }
+
+  // 현재 UI는 left-only head를 만들지 않지만, 과거 저장 데이터나 수동 model 수정값은
+  // 아직 들어올 수 있어 generator 출력 직전에만 안전한 canonical 형태로 바꿔준다.
+  function normalizeEdgeForOutput(edge) {
+    var source = edge || {};
+    var type = source.type || '-->';
+    var alias = LEGACY_LEFT_HEAD_ALIASES[type];
+    if (!alias) {
+      return {
+        from: source.from,
+        to: source.to,
+        type: type,
+        text: source.text || '',
+        color: source.color || '',
+        labelQuoted: !!source.labelQuoted
+      };
+    }
+
+    return {
+      from: source.to,
+      to: source.from,
+      type: alias,
+      text: source.text || '',
+      color: source.color || '',
+      labelQuoted: !!source.labelQuoted
+    };
+  }
+
+  global.FlowEdgeCodec = {
+    BODY_OPTIONS: BODY_OPTIONS,
+    HEAD_OPTIONS: HEAD_OPTIONS,
+    OPERATOR_CANDIDATES: OPERATOR_CANDIDATES,
+    parseType: parseType,
+    composeType: composeType,
+    getBodyType: getBodyType,
+    normalizeEdgeForOutput: normalizeEdgeForOutput
+  };
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/representation/static-flowchart-parser.js ===== */
+(function (global) {
+  'use strict';
+
+  var IDENT_SOURCE = '[A-Za-z0-9_\\u3131-\\uD79D]+';
+  var IDENT_RE = new RegExp('^(' + IDENT_SOURCE + ')$');
+
+  function markStatic(model, reason) {
+    if (!model) return;
+    model.profile = 'static';
+    if (!model.staticReasons) model.staticReasons = [];
+    if (reason && model.staticReasons.indexOf(reason) === -1) {
+      model.staticReasons.push(reason);
+    }
+  }
+
+  function decodeEscapedText(text) {
+    var out = '';
+    text = String(text || '');
+    for (var i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (ch === '\\' && i + 1 < text.length) {
+        out += text.charAt(i + 1);
+        i++;
+      } else {
+        out += ch;
+      }
+    }
+    return out;
+  }
+
+  function isEscaped(text, index) {
+    var slashCount = 0;
+    for (var i = index - 1; i >= 0 && text.charAt(i) === '\\'; i--) {
+      slashCount++;
+    }
+    return (slashCount % 2) === 1;
+  }
+
+  function splitStyleDeclarations(raw) {
+    raw = String(raw || '');
+    var parts = [];
+    var start = 0;
+    for (var i = 0; i < raw.length; i++) {
+      if (raw.charAt(i) === ',' && !isEscaped(raw, i)) {
+        parts.push(raw.slice(start, i));
+        start = i + 1;
+      }
+    }
+    parts.push(raw.slice(start));
+    return parts;
+  }
+
+  function parseStyleDeclarations(raw) {
+    var chunks = splitStyleDeclarations(raw);
+    var declarations = [];
+    for (var i = 0; i < chunks.length; i++) {
+      var chunk = chunks[i].trim();
+      if (!chunk) continue;
+      var colonIndex = chunk.indexOf(':');
+      if (colonIndex === -1) continue;
+      declarations.push({
+        key: chunk.slice(0, colonIndex).trim(),
+        value: chunk.slice(colonIndex + 1).trim()
+      });
+    }
+    return declarations;
+  }
+
+  function parseDirectiveLine(line) {
+    var trimmed = String(line || '').trim();
+    return /^%%\{[\s\S]*\}%%$/.test(trimmed) ? trimmed : null;
+  }
+
+  function parseHeaderLine(line) {
+    var match = String(line || '').trim().match(/^(graph|flowchart)\s+(TD|TB|BT|LR|RL)\b/i);
+    if (!match) return null;
+    return {
+      keyword: match[1].toLowerCase(),
+      direction: match[2].toUpperCase()
+    };
+  }
+
+  function parseQuotedSubgraphOpen(rest) {
+    return new RegExp(
+      '^(' + IDENT_SOURCE + ')\\s*\\[\\s*"((?:\\\\.|[^"])*)"\\s*\\]$'
+    ).exec(String(rest || '').trim());
+  }
+
+  function requiresStaticSubgraphProfile(rest) {
+    return !!parseQuotedSubgraphOpen(rest);
+  }
+
+  function parseSubgraphOpen(rest, index) {
+    rest = String(rest || '').trim();
+    var idTitleQuoted = parseQuotedSubgraphOpen(rest);
+    if (idTitleQuoted) {
+      return {
+        id: idTitleQuoted[1],
+        title: decodeEscapedText(idTitleQuoted[2]),
+        nodeIds: [],
+        titleBracketStyle: 'quoted'
+      };
+    }
+
+    var idTitleBracket = new RegExp(
+      '^(' + IDENT_SOURCE + ')\\s+\\[(.+)\\]$'
+    ).exec(rest);
+    if (idTitleBracket) {
+      return {
+        id: idTitleBracket[1],
+        title: idTitleBracket[2].trim() || idTitleBracket[1],
+        nodeIds: [],
+        titleBracketStyle: 'bracket'
+      };
+    }
+
+    if (IDENT_RE.test(rest)) {
+      return {
+        id: rest,
+        title: rest,
+        nodeIds: [],
+        titleBracketStyle: ''
+      };
+    }
+
+    var fallbackId = 'SG_' + index;
+    return {
+      id: fallbackId,
+      title: rest || fallbackId,
+      nodeIds: [],
+      titleBracketStyle: rest ? 'title-only' : ''
+    };
+  }
+
+  function parseSubgraphDirection(line) {
+    var match = String(line || '').trim().match(/^direction\s+(TD|TB|BT|LR|RL)$/i);
+    return match ? match[1].toUpperCase() : '';
+  }
+
+  function parseStyleLine(line) {
+    var match = String(line || '').trim().match(new RegExp(
+      '^style\\s+(' + IDENT_SOURCE + ')\\s+(.+)$'
+    ));
+    if (!match) return null;
+    return {
+      target: match[1],
+      declarations: parseStyleDeclarations(match[2]),
+      raw: match[2].trim()
+    };
+  }
+
+  function applyStyleDeclarations(target, style) {
+    if (!target || !style || !style.declarations) return;
+    for (var i = 0; i < style.declarations.length; i++) {
+      var declaration = style.declarations[i];
+      var key = String(declaration.key || '').toLowerCase();
+      if (key === 'fill') target.fill = declaration.value;
+      if (key === 'stroke') target.stroke = declaration.value;
+      if (key === 'color') target.color = declaration.value;
+    }
+  }
+
+  function attachStyleToTarget(model, style, options) {
+    if (!model || !style || !style.target) return false;
+    options = options || {};
+    var node = model._nodeMap && model._nodeMap[style.target];
+    if (node) {
+      node.style = style;
+      applyStyleDeclarations(node, style);
+      return true;
+    }
+
+    var subgraph = model._subgraphMap && model._subgraphMap[style.target];
+    if (subgraph) {
+      subgraph.style = style;
+      applyStyleDeclarations(subgraph, style);
+      if (options.staticProfile) markStatic(model, 'subgraph-style');
+      return true;
+    }
+
+    if (!model.styles) model.styles = [];
+    model.styles.push(style);
+    return false;
+  }
+
+  global.StaticFlowchartParser = {
+    markStatic: markStatic,
+    parseDirectiveLine: parseDirectiveLine,
+    parseHeaderLine: parseHeaderLine,
+    requiresStaticSubgraphProfile: requiresStaticSubgraphProfile,
+    parseSubgraphOpen: parseSubgraphOpen,
+    parseSubgraphDirection: parseSubgraphDirection,
+    parseStyleLine: parseStyleLine,
+    attachStyleToTarget: attachStyleToTarget
+  };
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/representation/mermaid-parser.js ===== */
+(function (global) {
+  'use strict';
+
+  var FlowEdgeCodec = global.FlowEdgeCodec;
+  var StaticFlowchartParser = global.StaticFlowchartParser;
+  var IDENT_SOURCE = '[A-Za-z0-9_\\u3131-\\uD79D]+';
+
+  var SHAPE_MAP = [
+    { open: '((', close: '))', shape: 'double_circle' },
+    { open: '([', close: '])', shape: 'stadium' },
+    { open: '[[', close: ']]', shape: 'subroutine' },
+    { open: '[(', close: ')]', shape: 'cylinder' },
+    { open: '{{', close: '}}', shape: 'hexagon' },
+    { open: '{', close: '}', shape: 'rhombus' },
+    { open: '[/', close: '/]', shape: 'parallelogram' },
+    { open: '[\\', close: '\\]', shape: 'parallelogram_alt' },
+    { open: '[/', close: '\\]', shape: 'trapezoid' },
+    { open: '[\\', close: '/]', shape: 'trapezoid_alt' },
+    { open: '>', close: ']', shape: 'asymmetric' },
+    { open: '(', close: ')', shape: 'round' },
+    { open: '[', close: ']', shape: 'rect' }
+  ];
+
+  var LEGACY_EDGE_PATTERNS = [
+    { regex: /^==\s+(.+?)\s*==>/, type: '==>' },
+    { regex: /^--\s+(.+?)\s*-->/, type: '-->' },
+    { regex: /^--\s+(.+?)\s*-\.->/, type: '-.->' },
+    { regex: /^--\s+(.+?)\s*---/, type: '---' },
+    { regex: /^--\s+(.+?)\s*-\.-/, type: '-.-' },
+    { regex: /^==\s+(.+?)\s*===/, type: '===' }
+  ];
+
+  function getShapeCandidates(rest) {
+    var candidates = [];
+    for (var i = 0; i < SHAPE_MAP.length; i++) {
+      if (rest.indexOf(SHAPE_MAP[i].open) === 0) {
+        candidates.push({ def: SHAPE_MAP[i], order: i });
+      }
+    }
+
+    candidates.sort(function (a, b) {
+      var openDiff = b.def.open.length - a.def.open.length;
+      if (openDiff) return openDiff;
+      var closeDiff = b.def.close.length - a.def.close.length;
+      if (closeDiff) return closeDiff;
+      return a.order - b.order;
+    });
+
+    return candidates;
+  }
+
+  function getEdgeCandidates(rest) {
+    var candidates = [];
+    var operatorCandidates = (FlowEdgeCodec && FlowEdgeCodec.OPERATOR_CANDIDATES) || [];
+    for (var i = 0; i < operatorCandidates.length; i++) {
+      if (rest.indexOf(operatorCandidates[i]) === 0) {
+        candidates.push(operatorCandidates[i]);
+      }
+    }
+    candidates.sort(function (a, b) { return b.length - a.length; });
+    return candidates;
+  }
+
+  function isEscapedChar(text, index) {
+    var slashCount = 0;
+    for (var i = index - 1; i >= 0 && text.charAt(i) === '\\'; i--) {
+      slashCount++;
+    }
+    return (slashCount % 2) === 1;
+  }
+
+  function findQuotedClose(rest, openLen, closeToken) {
+    for (var i = openLen + 1; i < rest.length; i++) {
+      if (rest.charAt(i) !== '"' || isEscapedChar(rest, i)) continue;
+      if (rest.substr(i + 1, closeToken.length) === closeToken) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function findPipeClose(rest, startIndex) {
+    for (var i = startIndex; i < rest.length; i++) {
+      if (rest.charAt(i) === '|' && !isEscapedChar(rest, i)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function decodeEscapedText(text) {
+    var out = '';
+    for (var i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (ch === '\\' && i + 1 < text.length) {
+        out += text.charAt(i + 1);
+        i++;
+      } else {
+        out += ch;
+      }
+    }
+    return out;
+  }
+
+  function parseNodeDef(str) {
+    str = str.trim();
+    if (!str) return null;
+
+    var idMatch = str.match(new RegExp('^(' + IDENT_SOURCE + ')'));
+    if (!idMatch) return null;
+
+    var id = idMatch[1];
+    var rest = str.substring(id.length);
+
+    if (!rest || /^[\s;]/.test(rest) || /^[-=.]/.test(rest) || rest.charAt(0) === '&') {
+      return { id: id, text: id, shape: 'rect', endIndex: id.length, raw: id };
+    }
+
+    // Overlapping bracket syntaxes like {{ }} and { } are resolved by
+    // checking only matching candidates and preferring the longer tokens first.
+    var candidates = getShapeCandidates(rest);
+    for (var i = 0; i < candidates.length; i++) {
+      var shapeDef = candidates[i].def;
+      var openLen = shapeDef.open.length;
+      var innerStart = rest.substring(openLen);
+      var text;
+      var totalLen;
+      var closeIdx;
+
+      if (innerStart.charAt(0) === '"') {
+        var quoteIdx = findQuotedClose(rest, openLen, shapeDef.close);
+        if (quoteIdx !== -1) {
+          text = decodeEscapedText(rest.substring(openLen + 1, quoteIdx));
+          totalLen = id.length + quoteIdx + 1 + shapeDef.close.length;
+          return {
+            id: id,
+            text: text || id,
+            shape: shapeDef.shape,
+            endIndex: totalLen,
+            raw: str.substring(0, totalLen)
+          };
+        }
+      }
+
+      closeIdx = rest.indexOf(shapeDef.close, openLen);
+      if (closeIdx !== -1) {
+        text = rest.substring(openLen, closeIdx).trim();
+        totalLen = id.length + closeIdx + shapeDef.close.length;
+        return {
+          id: id,
+          text: text || id,
+          shape: shapeDef.shape,
+          endIndex: totalLen,
+          raw: str.substring(0, totalLen)
+        };
+      }
+    }
+
+    return { id: id, text: id, shape: 'rect', endIndex: id.length, raw: id };
+  }
+
+  function parsePipeLabelEdge(str) {
+    var candidates = getEdgeCandidates(str);
+    for (var i = 0; i < candidates.length; i++) {
+      var operator = candidates[i];
+      var remainder = str.substring(operator.length);
+      var leadMatch = remainder.match(/^\s*\|/);
+      if (!leadMatch) continue;
+      var labelStart = operator.length + leadMatch[0].length;
+      var pipeEnd = findPipeClose(str, labelStart);
+      if (pipeEnd === -1) continue;
+      var label = decodeEscapedText(str.substring(labelStart, pipeEnd)).trim();
+      var labelQuoted = label.charAt(0) === '"';
+      var repairLabelQuote = labelQuoted && label.charAt(label.length - 1) !== '"';
+      if (labelQuoted) label = label.slice(1);
+      if (labelQuoted && !repairLabelQuote) label = label.slice(0, -1);
+      return {
+        type: operator,
+        label: label,
+        labelQuoted: labelQuoted,
+        repairLabelQuote: repairLabelQuote,
+        endIndex: pipeEnd + 1
+      };
+    }
+    return null;
+  }
+
+  function parseLegacyLabelEdge(str) {
+    for (var i = 0; i < LEGACY_EDGE_PATTERNS.length; i++) {
+      var match = str.match(LEGACY_EDGE_PATTERNS[i].regex);
+      if (!match) continue;
+      return {
+        type: LEGACY_EDGE_PATTERNS[i].type,
+        label: match[1].trim(),
+        endIndex: match[0].length
+      };
+    }
+    return null;
+  }
+
+  function parsePlainEdge(str) {
+    var candidates = getEdgeCandidates(str);
+    if (!candidates.length) return null;
+    return {
+      type: candidates[0],
+      label: '',
+      endIndex: candidates[0].length
+    };
+  }
+
+  function parseEdge(str) {
+    str = str.trim();
+    return parsePipeLabelEdge(str) || parseLegacyLabelEdge(str) || parsePlainEdge(str);
+  }
+
+  function parseStyleLine(line, model) {
+    if (StaticFlowchartParser && model.profile === 'static') {
+      var style = StaticFlowchartParser.parseStyleLine(line);
+      if (!style) return null;
+      StaticFlowchartParser.attachStyleToTarget(model, style, { staticProfile: model.profile === 'static' });
+      return style;
+    }
+
+    var match = line.match(new RegExp('^style\\s+(' + IDENT_SOURCE + ')\\s+(.+)$'));
+    if (!match || !model._nodeMap[match[1]]) return null;
+    var node = model._nodeMap[match[1]];
+    var declarations = match[2].split(',');
+    for (var i = 0; i < declarations.length; i++) {
+      var parts = declarations[i].split(':');
+      if (parts.length < 2) continue;
+      var key = parts[0].trim();
+      var value = parts.slice(1).join(':').trim();
+      if (key === 'fill') node.fill = value;
+    }
+    return null;
+  }
+
+  function parseLinkStyleLine(line, model) {
+    var match = line.match(/^linkStyle\s+(\d+)\s+(.+)$/);
+    if (!match) return null;
+    var edgeIndex = parseInt(match[1], 10);
+    var edge = model.edges[edgeIndex];
+    if (!edge) return null;
+    var declarations = match[2].split(',');
+    for (var i = 0; i < declarations.length; i++) {
+      var parts = declarations[i].split(':');
+      if (parts.length < 2) continue;
+      var key = parts[0].trim();
+      var value = parts.slice(1).join(':').trim();
+      if (key === 'stroke') edge.color = value;
+    }
+    return {
+      edgeIndex: edgeIndex,
+      edgeLayoutId: edge._staticLayoutId || ''
+    };
+  }
+
+  function enableStaticProfile(model, reason, pendingDirectives) {
+    if (!StaticFlowchartParser || !model) return;
+    StaticFlowchartParser.markStatic(model, reason);
+    if (pendingDirectives && pendingDirectives.length && (!model.directives || !model.directives.length)) {
+      model.directives = pendingDirectives.slice();
+    }
+  }
+
+  function countSourceOccurrence(model, line) {
+    return ParserHighlight.nextOccurrence(model._sourceTextCounts, line);
+  }
+
+  function pushRawTarget(model, line, lineNumber, reason, sourceInfo) {
+    if (!model._diagnostics) return;
+    model._diagnostics.rawStatementCount++;
+    model._diagnostics.rawTargets.push({
+      lineNumber: lineNumber || null,
+      text: sourceInfo ? sourceInfo.text : String(line || '').trim(),
+      occurrence: sourceInfo ? sourceInfo.occurrence : 1,
+      reason: reason || 'unsupported'
+    });
+  }
+
+  function pushRawStatement(model, line) {
+    var statement = {
+      type: 'raw',
+      raw: line
+    };
+    if (model.profile === 'static' && model._subgraphStack && model._subgraphStack.length) {
+      statement.subgraphId = model._subgraphStack[model._subgraphStack.length - 1].id;
+    }
+    model.statements.push(statement);
+  }
+
+  function pushSubgraphStatement(model, subgraphId, parentSubgraphId) {
+    if (!model || !subgraphId) return;
+    model.statements.push({
+      type: 'subgraph',
+      id: subgraphId,
+      parentSubgraphId: parentSubgraphId || ''
+    });
+  }
+
+  function pushStaticLayout(model, type, raw, details) {
+    if (!model || !model.staticLayout) return null;
+    var item = Object.assign({
+      type: type,
+      raw: raw
+    }, details || {});
+    model.staticLayout.push(item);
+    return item;
+  }
+
+  function nextEdgeRef(model, from, to) {
+    var key = from + '->' + to;
+    var occurrence = (model._edgeRefCounts[key] || 0) + 1;
+    model._edgeRefCounts[key] = occurrence;
+    return {
+      from: from,
+      to: to,
+      occurrence: occurrence
+    };
+  }
+
+  function findEdgeByRef(edges, ref) {
+    if (!ref || !edges) return null;
+    if (ref.layoutId) {
+      for (var byId = 0; byId < edges.length; byId++) {
+        if (edges[byId] && edges[byId]._staticLayoutId === ref.layoutId) return edges[byId];
+      }
+      return null;
+    }
+    var occurrence = 0;
+    for (var i = 0; i < edges.length; i++) {
+      var edge = edges[i];
+      if (!edge || edge.from !== ref.from || edge.to !== ref.to) continue;
+      occurrence++;
+      if (occurrence === ref.occurrence) return edge;
+    }
+    return null;
+  }
+
+  function nextStaticEdgeLayoutId(model) {
+    model._nextStaticEdgeLayoutId++;
+    return 'E' + model._nextStaticEdgeLayoutId;
+  }
+
+  function compactNode(node) {
+    if (!node) return null;
+    return {
+      id: node.id,
+      text: node.text,
+      shape: node.shape
+    };
+  }
+
+  function compactEdge(edge) {
+    if (!edge) return null;
+    return {
+      from: edge.from,
+      to: edge.to,
+      text: edge.text,
+      type: edge.type,
+      color: edge.color
+    };
+  }
+
+  function compactFlowEdge(edge) {
+    if (!edge) return null;
+    return {
+      from: edge.from,
+      to: edge.to,
+      text: edge.text,
+      type: edge.type
+    };
+  }
+
+  function buildFlowLayoutSignature(model, statement) {
+    var nodes = [];
+    var edges = [];
+    var nodeIds = statement && statement.nodeIds ? statement.nodeIds : [];
+    var nodeDefinitions = statement && statement.nodeDefinitions ? statement.nodeDefinitions : [];
+    var edgeRefs = statement && statement.edgeRefs ? statement.edgeRefs : [];
+    for (var i = 0; i < nodeIds.length; i++) {
+      var node = model._nodeMap[nodeIds[i]];
+      nodes.push(nodeDefinitions[i] === false && node ? { id: node.id } : compactNode(node));
+    }
+    for (var j = 0; j < edgeRefs.length; j++) {
+      edges.push(compactFlowEdge(findEdgeByRef(model.edges, edgeRefs[j])));
+    }
+    return JSON.stringify({ nodes: nodes, edges: edges });
+  }
+
+  function buildStyleTargetSignature(model, targetId) {
+    var target = model._nodeMap[targetId] || model._subgraphMap[targetId];
+    if (!target) return '';
+    return JSON.stringify({
+      fill: target.fill,
+      stroke: target.stroke,
+      color: target.color
+    });
+  }
+
+  function finalizeStaticLayout(model) {
+    if (!model || model.profile !== 'static' || !model.staticLayout) return;
+    for (var i = 0; i < model.staticLayout.length; i++) {
+      var item = model.staticLayout[i];
+      if (item.type === 'flow') {
+        item.baselineSignature = buildFlowLayoutSignature(model, model.statements[item.statementIndex]);
+      } else if (item.type === 'style') {
+        item.baselineSignature = buildStyleTargetSignature(model, item.target);
+      } else if (item.type === 'link-style') {
+        item.baselineSignature = JSON.stringify(compactEdge(findEdgeByRef(model.edges, {
+          layoutId: item.edgeLayoutId
+        }) || model.edges[item.edgeIndex]));
+      }
+    }
+    model.staticLayoutSubgraphIds = model.subgraphs.map(function (subgraph) {
+      return subgraph.id;
+    });
+  }
+
+  function parseFlowLine(line, model) {
+    line = line.trim();
+    if (!line) return true;
+
+    var remaining = line;
+    var prevNodeId = null;
+    var consumedAny = false;
+    var nodeIds = [];
+    var nodeDefinitions = [];
+    var edgeRefs = [];
+
+    while (remaining.length > 0) {
+      remaining = remaining.trim();
+      if (!remaining) {
+        return consumedAny
+          ? { type: 'flow', nodeIds: nodeIds, nodeDefinitions: nodeDefinitions, edgeRefs: edgeRefs }
+          : false;
+      }
+
+      var node = parseNodeDef(remaining);
+      if (!node) return false;
+
+      var restAfterNode = remaining.substring(node.endIndex).trim();
+      // Mermaid allows a left-side x/o head to sit right next to the source node.
+      if ((node.id.slice(-1) === 'x' || node.id.slice(-1) === 'o') && restAfterNode) {
+        var trailingHead = node.id.slice(-1);
+        var rescuedEdge = parseEdge(trailingHead + restAfterNode);
+        if (rescuedEdge && node.id.length > 1) {
+          if (node.text === node.id) node.text = node.id.slice(0, -1);
+          node.id = node.id.slice(0, -1);
+          restAfterNode = trailingHead + restAfterNode;
+        }
+      }
+
+      if (!model._nodeMap[node.id]) {
+        var nodeObj = { id: node.id, text: node.text, shape: node.shape };
+        model.nodes.push(nodeObj);
+        model._nodeMap[node.id] = nodeObj;
+        consumedAny = true;
+      } else if (node.text !== node.id || node.shape !== 'rect') {
+        model._nodeMap[node.id].text = node.text;
+        model._nodeMap[node.id].shape = node.shape;
+        consumedAny = true;
+      }
+      nodeIds.push(node.id);
+      nodeDefinitions.push(node.raw !== node.id);
+
+      remaining = restAfterNode;
+
+      if (prevNodeId !== null && model._pendingEdge) {
+        var edgeObj = {
+          from: prevNodeId,
+          to: node.id,
+          text: model._pendingEdge.label,
+          type: model._pendingEdge.type
+        };
+        if (model._pendingEdge.labelQuoted) edgeObj.labelQuoted = true;
+        if (model._pendingEdge.repairLabelQuote) edgeObj._repairLabelQuote = true;
+        edgeObj._staticLayoutId = nextStaticEdgeLayoutId(model);
+        model.edges.push(edgeObj);
+        var edgeRef = nextEdgeRef(model, prevNodeId, node.id);
+        if (edgeObj._staticLayoutId) edgeRef.layoutId = edgeObj._staticLayoutId;
+        edgeRefs.push(edgeRef);
+        model._pendingEdge = null;
+        consumedAny = true;
+      }
+
+      var edge = parseEdge(remaining);
+      if (edge) {
+        model._pendingEdge = edge;
+        prevNodeId = node.id;
+        remaining = remaining.substring(edge.endIndex).trim();
+        consumedAny = true;
+      } else {
+        prevNodeId = null;
+        model._pendingEdge = null;
+        return !remaining
+          ? { type: 'flow', nodeIds: nodeIds, nodeDefinitions: nodeDefinitions, edgeRefs: edgeRefs }
+          : false;
+      }
+    }
+
+    return consumedAny
+      ? { type: 'flow', nodeIds: nodeIds, nodeDefinitions: nodeDefinitions, edgeRefs: edgeRefs }
+      : false;
+  }
+
+  function parseMermaid(script) {
+    if (!script || typeof script !== 'string') {
+      return { type: 'flowchart', direction: 'TD', nodes: [], edges: [] };
+    }
+
+    var trimmed = script.trim();
+    // %%{init:...}%% 등 front-matter 줄을 건너뛰고 첫 실제 줄로 다이어그램 타입 판별
+    var firstContentLine = trimmed;
+    var frontLines = trimmed.split('\n');
+    for (var fi = 0; fi < frontLines.length; fi++) {
+      var fl = frontLines[fi].trim();
+      if (!fl || fl.indexOf('%%') === 0) continue;
+      firstContentLine = fl;
+      break;
+    }
+    if (/^sequenceDiagram\b/i.test(firstContentLine) && global.SequenceParser) {
+      return global.SequenceParser.parse(script);
+    }
+
+    var lines = script.split('\n');
+    var model = {
+      type: 'flowchart',
+      direction: 'TD',
+      headerKeyword: 'flowchart',
+      profile: '',
+      directives: [],
+      nodes: [],
+      edges: [],
+      subgraphs: [],
+      styles: [],
+      statements: [],
+      staticLayout: [],
+      _nodeMap: {},
+      _pendingEdge: null,
+      _edgeRefCounts: {},
+      _nextStaticEdgeLayoutId: 0,
+      _sourceTextCounts: {},
+      _subgraphStack: [],
+      _subgraphMap: {},
+      diagnostics: {
+        rawStatementCount: 0,
+        rawTargets: []
+      },
+      _diagnostics: {
+        rawStatementCount: 0,
+        rawTargets: []
+      }
+    };
+    var started = false;
+    var pendingDirectives = [];
+
+    for (var i = 0; i < lines.length; i++) {
+      var rawLine = lines[i];
+      var line = rawLine.trim();
+      var sourceInfo = countSourceOccurrence(model, line);
+
+      if (!line) {
+        pushStaticLayout(model, 'blank', rawLine);
+        continue;
+      }
+
+      if (StaticFlowchartParser) {
+        var directive = StaticFlowchartParser.parseDirectiveLine(line);
+        if (directive) {
+          pendingDirectives.push(directive);
+          pushStaticLayout(model, 'directive', rawLine, { value: directive });
+          continue;
+        }
+      }
+
+      if (line.indexOf('%%') === 0) {
+        pushStaticLayout(model, 'raw', rawLine);
+        continue;
+      }
+      if (line.indexOf('classDef') === 0 || line.indexOf('class ') === 0) {
+        pushRawTarget(model, line, i + 1, 'class', sourceInfo);
+        pushRawStatement(model, line);
+        pushStaticLayout(model, 'raw', rawLine);
+        continue;
+      }
+
+      if (line.indexOf('style ') === 0) {
+        var parsedStyle = parseStyleLine(line, model);
+        pushStaticLayout(model, 'style', rawLine, {
+          target: parsedStyle ? parsedStyle.target : '',
+          style: parsedStyle
+        });
+        continue;
+      }
+
+      if (line.indexOf('linkStyle ') === 0) {
+        var parsedLinkStyle = parseLinkStyleLine(line, model);
+        pushStaticLayout(model, 'link-style', rawLine, {
+          edgeIndex: parsedLinkStyle ? parsedLinkStyle.edgeIndex : -1,
+          edgeLayoutId: parsedLinkStyle ? parsedLinkStyle.edgeLayoutId : ''
+        });
+        continue;
+      }
+
+      if (!started) {
+        var parsedHeader = StaticFlowchartParser ? StaticFlowchartParser.parseHeaderLine(line) : null;
+        var headerMatch = parsedHeader ? null : line.match(/^(?:graph|flowchart)\s+(TD|TB|BT|LR|RL)/i);
+        if (parsedHeader || headerMatch) {
+          model.headerKeyword = parsedHeader ? parsedHeader.keyword : (/^graph\b/i.test(line) ? 'graph' : 'flowchart');
+          model.direction = parsedHeader ? parsedHeader.direction : headerMatch[1].toUpperCase();
+          if (model.headerKeyword === 'graph' && StaticFlowchartParser) {
+            enableStaticProfile(model, 'graph-keyword', pendingDirectives);
+          }
+          if (model.profile !== 'static' && model.direction === 'TB') model.direction = 'TD';
+          started = true;
+          pushStaticLayout(model, 'header', rawLine, {
+            keyword: model.headerKeyword,
+            direction: model.direction
+          });
+          continue;
+        }
+        if (/^(?:graph|flowchart)\s*$/.test(line)) {
+          model.headerKeyword = /^graph\b/i.test(line) ? 'graph' : 'flowchart';
+          if (model.headerKeyword === 'graph' && StaticFlowchartParser) {
+            enableStaticProfile(model, 'graph-keyword', pendingDirectives);
+          }
+          started = true;
+          pushStaticLayout(model, 'header', rawLine, {
+            keyword: model.headerKeyword,
+            direction: model.direction
+          });
+          continue;
+        }
+      }
+
+      if (!started) {
+        pushStaticLayout(model, 'raw', rawLine);
+        continue;
+      }
+
+      // subgraph open: "subgraph id [title]" or "subgraph title" or "subgraph"
+      if (/^subgraph\b/.test(line)) {
+        var sgRest = line.slice('subgraph'.length).trim();
+        if (model.profile !== 'static' && StaticFlowchartParser &&
+            StaticFlowchartParser.requiresStaticSubgraphProfile &&
+            StaticFlowchartParser.requiresStaticSubgraphProfile(sgRest)) {
+          enableStaticProfile(model, 'static-subgraph', pendingDirectives);
+        }
+        if (model.profile === 'static' && StaticFlowchartParser) {
+          var staticSg = StaticFlowchartParser.parseSubgraphOpen(sgRest, model.subgraphs.length + 1);
+          var staticParentId = '';
+          if (model._subgraphStack.length) {
+            staticParentId = model._subgraphStack[model._subgraphStack.length - 1].id;
+            staticSg.parentId = staticParentId;
+          }
+          if (model.profile === 'static' && staticSg && (staticSg.titleBracketStyle === 'quoted' || staticSg.titleBracketStyle === 'title-only')) {
+            StaticFlowchartParser.markStatic(model, 'static-subgraph');
+          }
+          model.subgraphs.push(staticSg);
+          model._subgraphMap[staticSg.id] = staticSg;
+          pushSubgraphStatement(model, staticSg.id, staticParentId);
+          pushStaticLayout(model, 'subgraph', rawLine, {
+            subgraphId: staticSg.id,
+            baselineTitle: staticSg.title,
+            baselineTitleBracketStyle: staticSg.titleBracketStyle
+          });
+          model._subgraphStack.push(staticSg);
+          continue;
+        }
+        var sgId, sgTitle;
+        // "id [title]" 형태
+        var sgBracket = sgRest.match(/^([A-Za-z_ㄱ-힝][A-Za-z0-9_ㄱ-힝]*)\s+\[(.+)\]$/);
+        // "id" 만 있는 형태
+        var sgIdOnly = sgRest.match(/^([A-Za-z_ㄱ-힝][A-Za-z0-9_ㄱ-힝]*)$/);
+        if (sgBracket) {
+          sgId = sgBracket[1];
+          sgTitle = sgBracket[2].trim();
+        } else if (sgIdOnly) {
+          sgId = sgIdOnly[1];
+          sgTitle = sgId;
+        } else {
+          // title만 있거나 빈 경우
+          sgId = 'SG_' + (model.subgraphs.length + 1);
+          sgTitle = sgRest || sgId;
+        }
+        var sg = { id: sgId, title: sgTitle, nodeIds: [] };
+        model.subgraphs.push(sg);
+        model._subgraphMap[sgId] = sg;
+        model._subgraphStack.push(sg);
+        pushStaticLayout(model, 'subgraph', rawLine, {
+          subgraphId: sg.id,
+          baselineTitle: sg.title,
+          baselineTitleBracketStyle: sg.titleBracketStyle
+        });
+        continue;
+      }
+
+      if (model.profile === 'static' && model._subgraphStack.length && StaticFlowchartParser) {
+        var subgraphDirection = StaticFlowchartParser.parseSubgraphDirection(line);
+        if (subgraphDirection) {
+          model._subgraphStack[model._subgraphStack.length - 1].direction = subgraphDirection;
+          StaticFlowchartParser.markStatic(model, 'subgraph-direction');
+          pushStaticLayout(model, 'subgraph-direction', rawLine, {
+            subgraphId: model._subgraphStack[model._subgraphStack.length - 1].id,
+            baselineDirection: subgraphDirection
+          });
+          continue;
+        }
+      }
+
+      // subgraph close
+      if (line === 'end') {
+        var closingSubgraph = model._subgraphStack.length
+          ? model._subgraphStack[model._subgraphStack.length - 1]
+          : null;
+        if (model._subgraphStack.length) model._subgraphStack.pop();
+        pushStaticLayout(model, 'subgraph-end', rawLine, {
+          subgraphId: closingSubgraph ? closingSubgraph.id : ''
+        });
+        continue;
+      }
+
+      var statement = parseFlowLine(line, model);
+      if (!statement) {
+        pushRawTarget(model, line, i + 1, 'flow-line', sourceInfo);
+        pushRawStatement(model, line);
+        pushStaticLayout(model, 'raw', rawLine);
+      } else {
+        // 현재 subgraph 안에 있으면 선언된 노드를 subgraph에 등록
+        if (model._subgraphStack.length) {
+          var currentSg = model._subgraphStack[model._subgraphStack.length - 1];
+          if (model.profile === 'static') statement.subgraphId = currentSg.id;
+          var stmtNodeIds = statement.nodeIds || [];
+          for (var ni = 0; ni < stmtNodeIds.length; ni++) {
+            if (currentSg.nodeIds.indexOf(stmtNodeIds[ni]) === -1) {
+              currentSg.nodeIds.push(stmtNodeIds[ni]);
+            }
+          }
+        }
+        model.statements.push(statement);
+        pushStaticLayout(model, 'flow', rawLine, {
+          statementIndex: model.statements.length - 1
+        });
+      }
+    }
+
+    if (StaticFlowchartParser && model.styles && model.styles.length) {
+      var unresolvedStyles = model.styles.slice();
+      model.styles = [];
+      for (var si = 0; si < unresolvedStyles.length; si++) {
+        StaticFlowchartParser.attachStyleToTarget(model, unresolvedStyles[si], { staticProfile: model.profile === 'static' });
+      }
+    }
+
+    model.diagnostics = {
+      rawStatementCount: model._diagnostics.rawStatementCount,
+      rawTargets: model._diagnostics.rawTargets.slice()
+    };
+
+    if (model.profile !== 'static') {
+      for (var ei = 0; ei < model.edges.length; ei++) {
+        delete model.edges[ei]._staticLayoutId;
+      }
+      for (var sti = 0; sti < model.statements.length; sti++) {
+        var regularEdgeRefs = model.statements[sti] && model.statements[sti].edgeRefs;
+        for (var eri = 0; regularEdgeRefs && eri < regularEdgeRefs.length; eri++) {
+          delete regularEdgeRefs[eri].layoutId;
+        }
+        delete model.statements[sti].nodeDefinitions;
+      }
+      delete model.headerKeyword;
+      delete model.profile;
+      delete model.directives;
+      delete model.styles;
+      delete model.staticLayout;
+    } else {
+      finalizeStaticLayout(model);
+    }
+
+    delete model._nodeMap;
+    delete model._pendingEdge;
+    delete model._edgeRefCounts;
+    delete model._nextStaticEdgeLayoutId;
+    delete model._sourceTextCounts;
+    delete model._diagnostics;
+    delete model._subgraphStack;
+    delete model._subgraphMap;
+
+    return model;
+  }
+
+  global.MermaidParser = {
+    parse: parseMermaid
+  };
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/representation/static-flowchart-generator.js ===== */
+(function (global) {
+  'use strict';
+
+  function escapeQuoted(text) {
+    return String(text || '')
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"');
+  }
+
+  function generateDirectives(model) {
+    return model && model.directives ? model.directives.slice() : [];
+  }
+
+  function generateHeader(model) {
+    var keyword = model && model.headerKeyword ? model.headerKeyword : 'flowchart';
+    if (keyword !== 'graph' && keyword !== 'flowchart') keyword = 'flowchart';
+    return keyword + ' ' + ((model && model.direction) || 'TD');
+  }
+
+  function generateSubgraphHeader(subgraph) {
+    if (!subgraph) return 'subgraph';
+    var id = subgraph.id;
+    var hasTitle = Object.prototype.hasOwnProperty.call(subgraph, 'title');
+    var title = hasTitle ? String(subgraph.title) : id;
+
+    if (subgraph.titleBracketStyle === 'quoted') {
+      return 'subgraph ' + id + '["' + escapeQuoted(title) + '"]';
+    }
+
+    if (!title || title === id) return 'subgraph ' + id;
+
+    return 'subgraph ' + id + ' [' + title + ']';
+  }
+
+  function cloneDeclarations(style) {
+    var out = [];
+    var declarations = style && style.declarations ? style.declarations : [];
+    for (var i = 0; i < declarations.length; i++) {
+      out.push({
+        key: declarations[i].key,
+        value: declarations[i].value
+      });
+    }
+    return out;
+  }
+
+  function upsertDeclaration(declarations, key, value) {
+    if (value === undefined || value === null) return;
+    var normalized = String(key || '').toLowerCase();
+    for (var i = 0; i < declarations.length; i++) {
+      if (String(declarations[i].key || '').toLowerCase() === normalized) {
+        if (value === '') {
+          declarations.splice(i, 1);
+        } else {
+          declarations[i].value = value;
+        }
+        return;
+      }
+    }
+    if (value !== '') declarations.push({ key: key, value: value });
+  }
+
+  function declarationsToString(declarations) {
+    var parts = [];
+    for (var i = 0; i < declarations.length; i++) {
+      if (!declarations[i].key) continue;
+      parts.push(declarations[i].key + ':' + declarations[i].value);
+    }
+    return parts.join(',');
+  }
+
+  function generateStyleLine(target, style, overrides) {
+    if (!target) return '';
+    var declarations = cloneDeclarations(style);
+    overrides = overrides || {};
+    for (var key in overrides) {
+      if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+        upsertDeclaration(declarations, key, overrides[key]);
+      }
+    }
+    var body = declarationsToString(declarations);
+    return body ? '    style ' + target + ' ' + body : '';
+  }
+
+  global.StaticFlowchartGenerator = {
+    generateDirectives: generateDirectives,
+    generateHeader: generateHeader,
+    generateSubgraphHeader: generateSubgraphHeader,
+    generateStyleLine: generateStyleLine
+  };
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/representation/mermaid-generator.js ===== */
+(function (global) {
+  'use strict';
+
+  var FlowEdgeCodec = global.FlowEdgeCodec;
+  var StaticFlowchartGenerator = global.StaticFlowchartGenerator;
+
+  var SHAPE_BRACKETS = {
+    rect: ['[', ']'],
+    round: ['(', ')'],
+    stadium: ['([', '])'],
+    subroutine: ['[[', ']]'],
+    cylinder: ['[(', ')]'],
+    rhombus: ['{', '}'],
+    hexagon: ['{{', '}}'],
+    parallelogram: ['[/', '/]'],
+    parallelogram_alt: ['[\\', '\\]'],
+    trapezoid: ['[/', '\\]'],
+    trapezoid_alt: ['[\\', '/]'],
+    double_circle: ['((', '))'],
+    asymmetric: ['>', ']']
+  };
+
+  function escapeLabel(text) {
+    return String(text)
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"');
+  }
+
+  function escapeEdgeLabel(text) {
+    return String(text)
+      .replace(/\|/g, '\\|')
+      .trim();
+  }
+
+  function generatePipeEdgeLabel(edge) {
+    var text = String((edge && edge.text) || '').trim();
+    var startsQuoted = text.charAt(0) === '"';
+    var endsQuoted = text.charAt(text.length - 1) === '"';
+    var quoted = !!(edge && edge.labelQuoted) || startsQuoted || endsQuoted;
+    if (startsQuoted) text = text.slice(1);
+    if (endsQuoted) text = text.slice(0, -1);
+    var escaped = escapeEdgeLabel(text);
+    return quoted ? '"' + escaped + '"' : escaped;
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function normalizeHex(color) {
+    if (!color) return '';
+    var trimmed = String(color).trim();
+    if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(trimmed)) return '';
+    if (trimmed.length === 4) {
+      return '#' + trimmed.charAt(1) + trimmed.charAt(1) +
+        trimmed.charAt(2) + trimmed.charAt(2) +
+        trimmed.charAt(3) + trimmed.charAt(3);
+    }
+    return trimmed.toLowerCase();
+  }
+
+  function darkenHex(color, amount) {
+    var hex = normalizeHex(color);
+    if (!hex) return '';
+    var ratio = clamp(amount, 0, 1);
+    var r = parseInt(hex.substr(1, 2), 16);
+    var g = parseInt(hex.substr(3, 2), 16);
+    var b = parseInt(hex.substr(5, 2), 16);
+    r = Math.round(r * (1 - ratio));
+    g = Math.round(g * (1 - ratio));
+    b = Math.round(b * (1 - ratio));
+    return '#' + [r, g, b].map(function (v) {
+      var s = v.toString(16);
+      return s.length === 1 ? '0' + s : s;
+    }).join('');
+  }
+
+  function contrastText(color) {
+    var hex = normalizeHex(color);
+    if (!hex) return '';
+    var r = parseInt(hex.substr(1, 2), 16);
+    var g = parseInt(hex.substr(3, 2), 16);
+    var b = parseInt(hex.substr(5, 2), 16);
+    var luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.68 ? '#1b2a4a' : '#ffffff';
+  }
+
+  function generateNode(node) {
+    var brackets = SHAPE_BRACKETS[node.shape] || SHAPE_BRACKETS.rect;
+    var text = node.text || node.id;
+
+    if (text === node.id && node.shape === 'rect') {
+      return node.id;
+    }
+
+    return node.id + brackets[0] + '"' + escapeLabel(text) + '"' + brackets[1];
+  }
+
+  function generateEdgeOperator(edge) {
+    var type = edge.type || '-->';
+    var text = edge.text || '';
+
+    if (!text || !text.trim()) return type;
+
+    // 일반 화살표(-->)만 대시 스타일, 나머지는 파이프 스타일
+    if (type === '-->') {
+      return '-- ' + text.trim() + ' -->';
+    }
+
+    return type + '|' + generatePipeEdgeLabel(edge) + '|';
+  }
+
+  function buildLinkStyle(index, edge) {
+    var edgeColor = normalizeHex(edge && edge.color);
+    if (!edgeColor) return '';
+
+    var body = FlowEdgeCodec ? FlowEdgeCodec.getBodyType(edge.type || '-->') : 'solid';
+    var parts = [
+      'stroke:' + edgeColor,
+      'color:' + edgeColor
+    ];
+
+    if (body === 'thick') {
+      parts.push('stroke-width:4px');
+    } else if (body === 'dotted') {
+      parts.push('stroke-width:2px');
+      parts.push('stroke-dasharray:3\\,3');
+    } else {
+      parts.push('stroke-width:2px');
+    }
+
+    return '    linkStyle ' + index + ' ' + parts.join(',');
+  }
+
+  function findEdgeByRef(edges, ref) {
+    if (!ref || !edges) return { edge: null, index: -1 };
+    if (ref.layoutId) {
+      for (var byId = 0; byId < edges.length; byId++) {
+        if (edges[byId] && edges[byId]._staticLayoutId === ref.layoutId) {
+          return { edge: edges[byId], index: byId };
+        }
+      }
+      return { edge: null, index: -1 };
+    }
+    var occurrence = 0;
+    for (var i = 0; i < edges.length; i++) {
+      var edge = edges[i];
+      if (!edge || edge.from !== ref.from || edge.to !== ref.to) continue;
+      occurrence++;
+      if (occurrence === ref.occurrence) {
+        return { edge: edge, index: i };
+      }
+    }
+    return { edge: null, index: -1 };
+  }
+
+  function buildFlowStatementLine(statement, model, usedNodes, usedEdges) {
+    if (!statement || statement.type !== 'flow') return '';
+    var nodeIds = statement.nodeIds || [];
+    var edgeRefs = statement.edgeRefs || [];
+    if (!nodeIds.length) return '';
+
+    var firstNode = findNode(model.nodes, nodeIds[0]);
+    if (!firstNode) return '';
+    // 이미 앞에서 정의된 노드는 ID만 사용 — 중복 정의 방지
+    var firstStr = usedNodes[firstNode.id] ? firstNode.id : generateNode(firstNode);
+    usedNodes[firstNode.id] = true;
+    var parts = [firstStr];
+
+    for (var i = 0; i < edgeRefs.length; i++) {
+      var edgeMatch = findEdgeByRef(model.edges, edgeRefs[i]);
+      var edge = edgeMatch.edge;
+      var nextNode = findNode(model.nodes, nodeIds[i + 1]);
+      if (!edge || !nextNode) return '';
+      if (edgeMatch.index >= 0) usedEdges[edgeMatch.index] = true;
+      var nextStr = usedNodes[nextNode.id] ? nextNode.id : generateNode(nextNode);
+      usedNodes[nextNode.id] = true;
+      parts.push(generateEdgeOperator(edge));
+      parts.push(nextStr);
+    }
+
+    return parts.join(' ');
+  }
+
+  function buildSubgraphNodeMap(subgraphs) {
+    var map = {};
+    if (!subgraphs) return map;
+    for (var i = 0; i < subgraphs.length; i++) {
+      var sg = subgraphs[i];
+      for (var j = 0; j < sg.nodeIds.length; j++) {
+        map[sg.nodeIds[j]] = sg.id;
+      }
+    }
+    return map;
+  }
+
+  function isStaticProfile(model) {
+    return !!(model && model.profile === 'static');
+  }
+
+  function generateStatementLine(statement, model, usedNodes, usedEdges) {
+    if (!statement) return '';
+    if (statement.type === 'raw') return statement.raw || '';
+    if (statement.type === 'flow') return buildFlowStatementLine(statement, model, usedNodes, usedEdges);
+    return '';
+  }
+
+  function generateSubgraphs(model, lines, usedNodes, usedEdges) {
+    var subgraphs = model.subgraphs || [];
+    if (!subgraphs.length) return;
+    var statements = model.statements || [];
+    var useStaticOutput = isStaticProfile(model);
+
+    var childrenByParent = {};
+    var subgraphById = {};
+    var orderedSubgraphs = {};
+    if (useStaticOutput) {
+      for (var c = 0; c < subgraphs.length; c++) {
+        var parentId = subgraphs[c].parentId || '';
+        if (!childrenByParent[parentId]) childrenByParent[parentId] = [];
+        childrenByParent[parentId].push(subgraphs[c]);
+        subgraphById[subgraphs[c].id] = subgraphs[c];
+      }
+      for (var os = 0; os < statements.length; os++) {
+        if (statements[os] && statements[os].type === 'subgraph' && statements[os].id) {
+          orderedSubgraphs[statements[os].id] = true;
+        }
+      }
+    }
+
+    function writeSubgraph(sg, depth) {
+      var indent = new Array(depth + 1).join('    ');
+      var childIndent = indent + '    ';
+      var header = useStaticOutput && StaticFlowchartGenerator
+        ? StaticFlowchartGenerator.generateSubgraphHeader(sg)
+        : (sg.title && sg.title !== sg.id ? 'subgraph ' + sg.id + ' [' + sg.title + ']' : 'subgraph ' + sg.id);
+      lines.push(indent + header);
+      if (useStaticOutput && sg.direction) {
+        var sgDir = sg.direction.toUpperCase() === 'TD' ? 'TB' : sg.direction;
+        lines.push(childIndent + 'direction ' + sgDir);
+      }
+
+      var wroteStatement = false;
+      if (useStaticOutput) {
+        for (var s = 0; s < statements.length; s++) {
+          var statement = statements[s];
+          if (!statement) continue;
+          if (statement.type === 'subgraph' && statement.parentSubgraphId === sg.id) {
+            var childSg = subgraphById[statement.id];
+            if (childSg) {
+              writeSubgraph(childSg, depth + 1);
+              wroteStatement = true;
+            }
+            continue;
+          }
+          if (statement.subgraphId !== sg.id) continue;
+          var statementLine = generateStatementLine(statement, model, usedNodes, usedEdges);
+          if (statementLine) {
+            lines.push(childIndent + statementLine);
+            wroteStatement = true;
+          }
+        }
+
+        var children = childrenByParent[sg.id] || [];
+        for (var child = 0; child < children.length; child++) {
+          if (orderedSubgraphs[children[child].id]) continue;
+          writeSubgraph(children[child], depth + 1);
+          wroteStatement = true;
+        }
+      }
+
+      if (!wroteStatement) {
+        for (var j = 0; j < sg.nodeIds.length; j++) {
+          var nid = sg.nodeIds[j];
+          var node = findNode(model.nodes, nid);
+          if (node) {
+            lines.push(childIndent + generateNode(node));
+            usedNodes[nid] = true;
+          }
+        }
+      }
+      lines.push(indent + 'end');
+    }
+
+    if (useStaticOutput) {
+      var roots = childrenByParent[''] || [];
+      var emittedRoots = {};
+      for (var rs = 0; rs < statements.length; rs++) {
+        if (!statements[rs] || statements[rs].type !== 'subgraph' || statements[rs].parentSubgraphId) continue;
+        var rootSg = subgraphById[statements[rs].id];
+        if (!rootSg || emittedRoots[rootSg.id]) continue;
+        writeSubgraph(rootSg, 1);
+        emittedRoots[rootSg.id] = true;
+      }
+      for (var root = 0; root < roots.length; root++) {
+        if (emittedRoots[roots[root].id]) continue;
+        writeSubgraph(roots[root], 1);
+      }
+      return;
+    }
+
+    for (var i = 0; i < subgraphs.length; i++) {
+      var sg = subgraphs[i];
+      var header = useStaticOutput && StaticFlowchartGenerator
+        ? StaticFlowchartGenerator.generateSubgraphHeader(sg)
+        : (sg.title && sg.title !== sg.id ? 'subgraph ' + sg.id + ' [' + sg.title + ']' : 'subgraph ' + sg.id);
+      lines.push('    ' + header);
+      if (useStaticOutput && sg.direction) {
+        var sgDir = sg.direction.toUpperCase() === 'TD' ? 'TB' : sg.direction;
+        lines.push('        direction ' + sgDir);
+      }
+
+      var wroteStatement = false;
+      if (useStaticOutput) {
+        for (var s = 0; s < statements.length; s++) {
+          if (statements[s].subgraphId !== sg.id) continue;
+          var statementLine = generateStatementLine(statements[s], model, usedNodes, usedEdges);
+          if (statementLine) {
+            lines.push('        ' + statementLine);
+            wroteStatement = true;
+          }
+        }
+      }
+
+      if (!wroteStatement) {
+        for (var j = 0; j < sg.nodeIds.length; j++) {
+          var nid = sg.nodeIds[j];
+          var node = findNode(model.nodes, nid);
+          if (node) {
+            lines.push('        ' + generateNode(node));
+            usedNodes[nid] = true;
+          }
+        }
+      }
+      lines.push('    end');
+    }
+  }
+
+  function buildNodeStyleLine(node, useStaticOutput) {
+    if (!node) return '';
+    if (useStaticOutput && StaticFlowchartGenerator && node.style) {
+      return StaticFlowchartGenerator.generateStyleLine(node.id, node.style, { fill: node.fill });
+    }
+
+    var fill = normalizeHex(node.fill);
+    if (!fill) return '';
+    return '    style ' + node.id +
+      ' fill:' + fill +
+      ',stroke:' + darkenHex(fill, 0.22) +
+      ',color:' + contrastText(fill);
+  }
+
+  function appendFlowStyles(model, lines) {
+    var useStaticOutput = isStaticProfile(model);
+    var subgraphs = model.subgraphs || [];
+    if (model.nodes && model.nodes.length > 0) {
+      for (var n = 0; n < model.nodes.length; n++) {
+        var nodeStyleLine = buildNodeStyleLine(model.nodes[n], useStaticOutput);
+        if (nodeStyleLine) lines.push(nodeStyleLine);
+      }
+    }
+
+    if (useStaticOutput && StaticFlowchartGenerator) {
+      for (var sg = 0; sg < subgraphs.length; sg++) {
+        var sgStyleLine = StaticFlowchartGenerator.generateStyleLine(subgraphs[sg].id, subgraphs[sg].style, {});
+        if (sgStyleLine) lines.push(sgStyleLine);
+      }
+    }
+
+    var extraStyles = model.styles || [];
+    if (useStaticOutput && StaticFlowchartGenerator) {
+      for (var es = 0; es < extraStyles.length; es++) {
+        var extraStyleLine = StaticFlowchartGenerator.generateStyleLine(extraStyles[es].target, extraStyles[es], {});
+        if (extraStyleLine) lines.push(extraStyleLine);
+      }
+    }
+  }
+
+  function appendLinkStyles(model, lines) {
+    if (model.edges && model.edges.length > 0) {
+      for (var e = 0; e < model.edges.length; e++) {
+        var linkStyle = buildLinkStyle(e, model.edges[e]);
+        if (linkStyle) lines.push(linkStyle);
+      }
+    }
+  }
+
+  function getLeadingWhitespace(line) {
+    var match = String(line || '').match(/^\s*/);
+    return match ? match[0] : '';
+  }
+
+  function indentGeneratedLine(rawLine, generatedLine) {
+    var trailingCarriageReturn = /\r$/.test(String(rawLine || '')) ? '\r' : '';
+    return getLeadingWhitespace(rawLine) + String(generatedLine || '').replace(/^\s+/, '') + trailingCarriageReturn;
+  }
+
+  function copyFlags(source, target) {
+    for (var key in source) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) target[key] = source[key];
+    }
+  }
+
+  function cloneFlags(source) {
+    return Object.assign({}, source || {});
+  }
+
+  function compactNode(node) {
+    if (!node) return null;
+    return {
+      id: node.id,
+      text: node.text,
+      shape: node.shape
+    };
+  }
+
+  function compactEdge(edge) {
+    if (!edge) return null;
+    return {
+      from: edge.from,
+      to: edge.to,
+      text: edge.text,
+      type: edge.type,
+      labelQuoted: edge.labelQuoted,
+      color: edge.color
+    };
+  }
+
+  function compactFlowEdge(edge) {
+    if (!edge) return null;
+    return {
+      from: edge.from,
+      to: edge.to,
+      text: edge.text,
+      type: edge.type,
+      labelQuoted: edge.labelQuoted
+    };
+  }
+
+  function buildFlowLayoutSignature(model, statement) {
+    var nodes = [];
+    var edges = [];
+    var nodeIds = statement && statement.nodeIds ? statement.nodeIds : [];
+    var nodeDefinitions = statement && statement.nodeDefinitions ? statement.nodeDefinitions : [];
+    var edgeRefs = statement && statement.edgeRefs ? statement.edgeRefs : [];
+    for (var i = 0; i < nodeIds.length; i++) {
+      var node = findNode(model.nodes, nodeIds[i]);
+      nodes.push(nodeDefinitions[i] === false && node ? { id: node.id } : compactNode(node));
+    }
+    for (var j = 0; j < edgeRefs.length; j++) {
+      edges.push(compactFlowEdge(findEdgeByRef(model.edges, edgeRefs[j]).edge));
+    }
+    return JSON.stringify({ nodes: nodes, edges: edges });
+  }
+
+  function buildStyleTargetSignature(target) {
+    if (!target) return '';
+    return JSON.stringify({
+      fill: target.fill,
+      stroke: target.stroke,
+      color: target.color
+    });
+  }
+
+  function findSubgraph(subgraphs, id) {
+    var list = subgraphs || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].id === id) return list[i];
+    }
+    return null;
+  }
+
+  function findExtraStyle(styles, target) {
+    var list = styles || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].target === target) return list[i];
+    }
+    return null;
+  }
+
+  function findEdgeByLayoutId(edges, layoutId) {
+    if (!layoutId) return { edge: null, index: -1 };
+    for (var i = 0; i < (edges || []).length; i++) {
+      if (edges[i] && edges[i]._staticLayoutId === layoutId) {
+        return { edge: edges[i], index: i };
+      }
+    }
+    return { edge: null, index: -1 };
+  }
+
+  function findStyleTarget(model, target) {
+    var node = findNode(model.nodes, target);
+    if (node) return { target: node, style: node.style };
+    var subgraph = findSubgraph(model.subgraphs, target);
+    if (subgraph) return { target: subgraph, style: subgraph.style };
+    var extraStyle = findExtraStyle(model.styles, target);
+    return extraStyle ? { target: extraStyle, style: extraStyle } : null;
+  }
+
+  function markStatementUsage(statement, model, usedNodes, usedEdges) {
+    var nodeIds = statement && statement.nodeIds ? statement.nodeIds : [];
+    var edgeRefs = statement && statement.edgeRefs ? statement.edgeRefs : [];
+    for (var i = 0; i < nodeIds.length; i++) {
+      if (findNode(model.nodes, nodeIds[i])) usedNodes[nodeIds[i]] = true;
+    }
+    for (var j = 0; j < edgeRefs.length; j++) {
+      var edgeMatch = findEdgeByRef(model.edges, edgeRefs[j]);
+      if (edgeMatch.index >= 0) usedEdges[edgeMatch.index] = true;
+    }
+  }
+
+  function statementNeedsLabelQuoteRepair(statement, model) {
+    var edgeRefs = statement && statement.edgeRefs ? statement.edgeRefs : [];
+    for (var i = 0; i < edgeRefs.length; i++) {
+      var edge = findEdgeByRef(model.edges, edgeRefs[i]).edge;
+      if (edge && edge._repairLabelQuote) return true;
+    }
+    return false;
+  }
+
+  function buildFlowLayoutLine(statement, model, usedNodes, usedEdges) {
+    var nextUsedNodes = cloneFlags(usedNodes);
+    var nextUsedEdges = cloneFlags(usedEdges);
+    var generated = buildFlowStatementLine(statement, model, nextUsedNodes, nextUsedEdges);
+    if (!generated) return '';
+    copyFlags(nextUsedNodes, usedNodes);
+    copyFlags(nextUsedEdges, usedEdges);
+    return generated;
+  }
+
+  function styleOverrides(target) {
+    if (!target) return {};
+    return {
+      fill: target.fill,
+      stroke: target.stroke,
+      color: target.color
+    };
+  }
+
+  function sameSubgraphIds(model) {
+    var baseline = model.staticLayoutSubgraphIds || [];
+    var subgraphs = model.subgraphs || [];
+    if (baseline.length !== subgraphs.length) return false;
+    for (var i = 0; i < baseline.length; i++) {
+      if (!subgraphs[i] || baseline[i] !== subgraphs[i].id) return false;
+    }
+    return true;
+  }
+
+  function canReplayStaticLayout(model) {
+    return !!(model && model.staticLayout && model.staticLayout.length && sameSubgraphIds(model));
+  }
+
+  function appendMissingStaticItems(model, lines, usedNodes, usedEdges, emittedStyles, emittedLinkStyles) {
+    var nodes = model.nodes || [];
+    var edges = model.edges || [];
+    var subgraphs = model.subgraphs || [];
+    var styles = model.styles || [];
+    var i;
+
+    for (i = 0; i < nodes.length; i++) {
+      if (usedNodes[nodes[i].id]) continue;
+      lines.push('    ' + generateNode(nodes[i]));
+      usedNodes[nodes[i].id] = true;
+    }
+
+    for (i = 0; i < edges.length; i++) {
+      if (usedEdges[i]) continue;
+      var edge = FlowEdgeCodec ? FlowEdgeCodec.normalizeEdgeForOutput(edges[i]) : edges[i];
+      lines.push('    ' + edge.from + ' ' + generateEdgeOperator(edge) + ' ' + edge.to);
+      usedEdges[i] = true;
+    }
+
+    for (i = 0; i < nodes.length; i++) {
+      if (emittedStyles[nodes[i].id]) continue;
+      var nodeStyleLine = buildNodeStyleLine(nodes[i], true);
+      if (nodeStyleLine) lines.push(nodeStyleLine);
+    }
+
+    for (i = 0; i < subgraphs.length; i++) {
+      if (emittedStyles[subgraphs[i].id]) continue;
+      var subgraphStyleLine = StaticFlowchartGenerator.generateStyleLine(subgraphs[i].id, subgraphs[i].style, {});
+      if (subgraphStyleLine) lines.push(subgraphStyleLine);
+    }
+
+    for (i = 0; i < styles.length; i++) {
+      if (!styles[i] || emittedStyles[styles[i].target]) continue;
+      var extraStyleLine = StaticFlowchartGenerator.generateStyleLine(styles[i].target, styles[i], {});
+      if (extraStyleLine) lines.push(extraStyleLine);
+    }
+
+    for (i = 0; i < edges.length; i++) {
+      if (emittedLinkStyles[i]) continue;
+      var linkStyleLine = buildLinkStyle(i, edges[i]);
+      if (linkStyleLine) lines.push(linkStyleLine);
+    }
+  }
+
+  function generateFromStaticLayout(model) {
+    var lines = [];
+    var layout = model.staticLayout || [];
+    var usedNodes = {};
+    var usedEdges = {};
+    var emittedStyles = {};
+    var emittedLinkStyles = {};
+
+    for (var i = 0; i < layout.length; i++) {
+      var item = layout[i] || {};
+      var raw = item.raw || '';
+
+      if (item.type === 'header') {
+        var header = StaticFlowchartGenerator.generateHeader(model);
+        var sameHeader = item.keyword === model.headerKeyword && item.direction === model.direction;
+        lines.push(sameHeader ? raw : indentGeneratedLine(raw, header));
+        continue;
+      }
+
+      if (item.type === 'subgraph') {
+        var subgraph = findSubgraph(model.subgraphs, item.subgraphId);
+        if (!subgraph) continue;
+        var sameSubgraph = item.baselineTitle === subgraph.title &&
+          item.baselineTitleBracketStyle === subgraph.titleBracketStyle;
+        var subgraphHeader = StaticFlowchartGenerator.generateSubgraphHeader(subgraph);
+        lines.push(sameSubgraph ? raw : indentGeneratedLine(raw, subgraphHeader));
+        continue;
+      }
+
+      if (item.type === 'subgraph-direction') {
+        var directionSubgraph = findSubgraph(model.subgraphs, item.subgraphId);
+        if (!directionSubgraph) continue;
+        var direction = directionSubgraph.direction || item.baselineDirection || 'TB';
+        var outputDirection = direction.toUpperCase() === 'TD' ? 'TB' : direction;
+        lines.push(direction === item.baselineDirection
+          ? raw
+          : indentGeneratedLine(raw, 'direction ' + outputDirection));
+        continue;
+      }
+
+      if (item.type === 'subgraph-end') {
+        if (item.subgraphId && !findSubgraph(model.subgraphs, item.subgraphId)) continue;
+        lines.push(raw);
+        continue;
+      }
+
+      if (item.type === 'flow') {
+        var statement = model.statements && model.statements[item.statementIndex];
+        if (!statement) continue;
+        if (!statementNeedsLabelQuoteRepair(statement, model) &&
+            item.baselineSignature === buildFlowLayoutSignature(model, statement)) {
+          lines.push(raw);
+          markStatementUsage(statement, model, usedNodes, usedEdges);
+        } else {
+          var flowLine = buildFlowLayoutLine(statement, model, usedNodes, usedEdges);
+          if (flowLine) lines.push(indentGeneratedLine(raw, flowLine));
+        }
+        continue;
+      }
+
+      if (item.type === 'style' && item.target) {
+        var styleTarget = findStyleTarget(model, item.target);
+        emittedStyles[item.target] = true;
+        if (!styleTarget) continue;
+        if (item.baselineSignature === buildStyleTargetSignature(styleTarget.target)) {
+          lines.push(raw);
+        } else {
+          var styleLine = StaticFlowchartGenerator.generateStyleLine(
+            item.target,
+            item.style || styleTarget.style,
+            styleOverrides(styleTarget.target)
+          );
+          if (styleLine) lines.push(indentGeneratedLine(raw, styleLine));
+        }
+        continue;
+      }
+
+      if (item.type === 'link-style' && item.edgeIndex >= 0) {
+        var styledEdgeMatch = item.edgeLayoutId
+          ? findEdgeByLayoutId(model.edges, item.edgeLayoutId)
+          : { edge: (model.edges || [])[item.edgeIndex], index: item.edgeIndex };
+        var styledEdge = styledEdgeMatch.edge;
+        if (!styledEdge) continue;
+        emittedLinkStyles[styledEdgeMatch.index] = true;
+        if (styledEdgeMatch.index === item.edgeIndex &&
+            item.baselineSignature === JSON.stringify(compactEdge(styledEdge))) {
+          lines.push(raw);
+        } else {
+          var generatedLinkStyle = buildLinkStyle(styledEdgeMatch.index, styledEdge);
+          if (generatedLinkStyle) lines.push(indentGeneratedLine(raw, generatedLinkStyle));
+        }
+        continue;
+      }
+
+      lines.push(raw);
+    }
+
+    appendMissingStaticItems(model, lines, usedNodes, usedEdges, emittedStyles, emittedLinkStyles);
+    return lines.join('\n');
+  }
+
+  function generateMermaid(model) {
+    if (!model) return '';
+    if (model.type === 'sequenceDiagram' && global.SequenceGenerator) {
+      return global.SequenceGenerator.generate(model);
+    }
+    if (isStaticProfile(model) && StaticFlowchartGenerator && canReplayStaticLayout(model)) {
+      return generateFromStaticLayout(model);
+    }
+
+    var lines = [];
+    if (isStaticProfile(model) && StaticFlowchartGenerator) {
+      lines = lines.concat(StaticFlowchartGenerator.generateDirectives(model));
+      lines.push(StaticFlowchartGenerator.generateHeader(model));
+    } else {
+      var direction = model.direction || 'TD';
+      lines.push('flowchart ' + direction);
+    }
+
+    var usedNodes = {};
+    var usedEdges = {};
+    var subgraphs = model.subgraphs || [];
+
+    // subgraph 블록을 먼저 출력하고, 소속 노드를 usedNodes에 기록한다.
+    if (subgraphs.length) {
+      generateSubgraphs(model, lines, usedNodes, usedEdges);
+    }
+
+    var statements = model.statements || [];
+    if (statements.length) {
+      for (var s = 0; s < statements.length; s++) {
+        var statement = statements[s];
+        if (isStaticProfile(model) && statement.subgraphId) continue;
+        var line = generateStatementLine(statement, model, usedNodes, usedEdges);
+        if (line) lines.push('    ' + line);
+      }
+
+      if (model.nodes && model.nodes.length > 0) {
+        for (var rn = 0; rn < model.nodes.length; rn++) {
+          if (usedNodes[model.nodes[rn].id]) continue;
+          lines.push('    ' + generateNode(model.nodes[rn]));
+        }
+      }
+
+      if (model.edges && model.edges.length > 0) {
+        for (var re = 0; re < model.edges.length; re++) {
+          if (usedEdges[re]) continue;
+          var remainingEdge = FlowEdgeCodec
+            ? FlowEdgeCodec.normalizeEdgeForOutput(model.edges[re])
+            : model.edges[re];
+          lines.push('    ' + remainingEdge.from + ' ' + generateEdgeOperator(remainingEdge) + ' ' + remainingEdge.to);
+        }
+      }
+
+      appendFlowStyles(model, lines);
+      appendLinkStyles(model, lines);
+
+      return lines.join('\n');
+    }
+
+    if (model.nodes && model.nodes.length > 0) {
+      for (var i = 0; i < model.nodes.length; i++) {
+        if (usedNodes[model.nodes[i].id]) continue;
+        lines.push('    ' + generateNode(model.nodes[i]));
+      }
+    }
+
+    if (model.edges && model.edges.length > 0) {
+      for (var j = 0; j < model.edges.length; j++) {
+        var edge = FlowEdgeCodec
+          ? FlowEdgeCodec.normalizeEdgeForOutput(model.edges[j])
+          : model.edges[j];
+        lines.push('    ' + edge.from + ' ' + generateEdgeOperator(edge) + ' ' + edge.to);
+      }
+    }
+
+    appendFlowStyles(model, lines);
+    appendLinkStyles(model, lines);
+
+    return lines.join('\n');
+  }
+
+  function findNode(nodes, id) {
+    if (!nodes) return null;
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].id === id) return nodes[i];
+    }
+    return null;
+  }
+
+  global.MermaidGenerator = {
+    generate: generateMermaid,
+    generateNode: generateNode,
+    findNode: findNode
+  };
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/model-editing/flowchartModelEditing.js ===== */
+(function (global) {
+  'use strict';
+
+  // Flowchart model을 순수하게 편집하는 계층.
+  // Vue 상태, emit, snapshot 같은 부수효과는 여기서 다루지 않는다.
+
+  function sameEdge(edge, from, to) {
+    return edge && edge.from === from && edge.to === to;
+  }
+
+  // 노드 배열만 바꾸는 공통 패턴을 한곳에 모은다.
+  // updater가 아무 변경도 하지 않으면 기존 model을 그대로 반환한다.
+  function updateNodes(model, updater) {
+    var nodes = model.nodes || [];
+    var nextNodes = [];
+    var changed = false;
+
+    for (var i = 0; i < nodes.length; i++) {
+      var nextNode = updater(nodes[i], i);
+      nextNodes.push(nextNode);
+      if (nextNode !== nodes[i]) changed = true;
+    }
+
+    return changed ? Object.assign({}, model, { nodes: nextNodes }) : model;
+  }
+
+  // edge 관련 수정도 같은 방식으로 immutable update를 유지한다.
+  function updateEdges(model, updater) {
+    var edges = model.edges || [];
+    var nextEdges = [];
+    var changed = false;
+
+    for (var i = 0; i < edges.length; i++) {
+      var nextEdge = updater(edges[i], i);
+      nextEdges.push(nextEdge);
+      if (nextEdge !== edges[i]) changed = true;
+    }
+
+    return changed ? Object.assign({}, model, { edges: nextEdges }) : model;
+  }
+
+  var flowchartModelEditing = {
+    // 새 노드를 model에 추가한다.
+    addNode: function (model, data) {
+      if (!model || !data || !data.id) return model;
+
+      var nodes = (model.nodes || []).slice();
+      var nextNode = {
+        id: data.id,
+        text: data.text || 'Node',
+        shape: data.shape || 'rect'
+      };
+      if (data.fill) nextNode.fill = data.fill;
+      nodes.push(nextNode);
+      return Object.assign({}, model, { nodes: nodes });
+    },
+
+    // self-loop는 동일 edge 중복 추가를 막는다.
+    addEdge: function (model, data) {
+      if (!model || !data || !data.from || !data.to) return model;
+
+      var edges = model.edges || [];
+      if (data.from === data.to) {
+        for (var i = 0; i < edges.length; i++) {
+          if (sameEdge(edges[i], data.from, data.to)) return model;
+        }
+      }
+
+      var nextEdges = edges.slice();
+      nextEdges.push({
+        from: data.from,
+        to: data.to,
+        text: data.text || '',
+        type: data.type || '-->'
+      });
+      return Object.assign({}, model, { edges: nextEdges });
+    },
+
+    // 아래 update* 계열은 각각 한 가지 field 책임만 가진다.
+    updateNodeText: function (model, data) {
+      if (!model || !data || !data.nodeId) return model;
+      return updateNodes(model, function (node) {
+        return node.id === data.nodeId
+          ? Object.assign({}, node, { text: data.text })
+          : node;
+      });
+    },
+
+    updateNodeShape: function (model, data) {
+      if (!model || !data || !data.nodeId) return model;
+      return updateNodes(model, function (node) {
+        return node.id === data.nodeId
+          ? Object.assign({}, node, { shape: data.shape })
+          : node;
+      });
+    },
+
+    updateNodeStyle: function (model, data) {
+      if (!model || !data || !data.nodeId) return model;
+      return updateNodes(model, function (node) {
+        if (node.id !== data.nodeId) return node;
+        return Object.assign({}, node, {
+          text: data.text,
+          fill: data.fill
+        });
+      });
+    },
+
+    updateNodeFill: function (model, data) {
+      if (!model || !data || !data.nodeId) return model;
+      return updateNodes(model, function (node) {
+        return node.id === data.nodeId
+          ? Object.assign({}, node, { fill: data.fill })
+          : node;
+      });
+    },
+
+    updateEdgeText: function (model, data) {
+      if (!model || !data || data.index === null || data.index === undefined) return model;
+      return updateEdges(model, function (edge, index) {
+        return index === data.index
+          ? Object.assign({}, edge, { text: data.text })
+          : edge;
+      });
+    },
+
+    updateEdgeType: function (model, data) {
+      if (!model || !data || data.index === null || data.index === undefined) return model;
+      return updateEdges(model, function (edge, index) {
+        return index === data.index
+          ? Object.assign({}, edge, { type: data.type })
+          : edge;
+      });
+    },
+
+    updateEdgeStyle: function (model, data) {
+      if (!model || !data || data.index === null || data.index === undefined) return model;
+      return updateEdges(model, function (edge, index) {
+        if (index !== data.index) return edge;
+        return Object.assign({}, edge, {
+          text: data.text,
+          color: data.color
+        });
+      });
+    },
+
+    updateEdgeColor: function (model, data) {
+      if (!model || !data || data.index === null || data.index === undefined) return model;
+      return updateEdges(model, function (edge, index) {
+        return index === data.index
+          ? Object.assign({}, edge, { color: data.color })
+          : edge;
+      });
+    },
+
+    changeDirection: function (model, dir) {
+      if (!model || !dir) return model;
+      if (model.profile === 'static') {
+        var subgraphs = model.subgraphs || [];
+        var subgraphChanged = false;
+        for (var i = 0; i < subgraphs.length; i++) {
+          if (subgraphs[i].direction !== dir) {
+            subgraphChanged = true;
+            break;
+          }
+        }
+        if (model.direction === dir && !subgraphChanged) return model;
+        var nextSubgraphs = subgraphs.map(function (sg) {
+          return Object.assign({}, sg, { direction: dir });
+        });
+        return Object.assign({}, model, {
+          direction: dir,
+          subgraphs: nextSubgraphs
+        });
+      }
+      if (model.direction === dir) return model;
+      return Object.assign({}, model, { direction: dir });
+    },
+
+    // selection payload를 받아 node 또는 edge 삭제를 처리한다.
+    // 삭제 대상이 없으면 원본 model을 그대로 돌려준다.
+    deleteSelection: function (model, data) {
+      if (!model || !data) return model;
+
+      if (data.nodeId) {
+        var nodes = (model.nodes || []).filter(function (node) {
+          return node.id !== data.nodeId;
+        });
+        var edges = (model.edges || []).filter(function (edge) {
+          return edge.from !== data.nodeId && edge.to !== data.nodeId;
+        });
+        if (nodes.length === (model.nodes || []).length && edges.length === (model.edges || []).length) {
+          return model;
+        }
+        return Object.assign({}, model, { nodes: nodes, edges: edges });
+      }
+
+      if (data.edgeIndex !== null && data.edgeIndex !== undefined) {
+        if (!model.edges || data.edgeIndex < 0 || data.edgeIndex >= model.edges.length) return model;
+        var nextEdges = model.edges.slice();
+        nextEdges.splice(data.edgeIndex, 1);
+        return Object.assign({}, model, { edges: nextEdges });
+      }
+
+      return model;
+    }
+  };
+
+  flowchartModelEditing.updateSubgraphTitle = function (model, subgraphId, title) {
+    if (!model || !subgraphId) return model;
+    var subgraphs = model.subgraphs || [];
+    var found = false;
+    var nextSubgraphs = subgraphs.map(function (sg) {
+      if (sg.id !== subgraphId) return sg;
+      found = true;
+      return Object.assign({}, sg, { title: title });
+    });
+    return found ? Object.assign({}, model, { subgraphs: nextSubgraphs }) : model;
+  };
+
+  flowchartModelEditing.removeSubgraph = function (model, subgraphId) {
+    if (!model || !subgraphId) return model;
+    var subgraphs = model.subgraphs || [];
+    var nextSubgraphs = subgraphs.filter(function (sg) { return sg.id !== subgraphId; });
+    if (nextSubgraphs.length === subgraphs.length) return model;
+    return Object.assign({}, model, { subgraphs: nextSubgraphs });
+  };
+
+  flowchartModelEditing.wrapNodesInSubgraph = function (model, nodeIds, title) {
+    if (!model || !nodeIds || !nodeIds.length) return model;
+
+    // 유효한 node ID만 포함
+    var validIds = [];
+    var nodeMap = {};
+    for (var i = 0; i < (model.nodes || []).length; i++) {
+      nodeMap[model.nodes[i].id] = true;
+    }
+    for (var j = 0; j < nodeIds.length; j++) {
+      if (nodeMap[nodeIds[j]]) validIds.push(nodeIds[j]);
+    }
+    if (!validIds.length) return model;
+
+    // 기존 subgraph ID와 충돌하지 않는 ID 생성
+    var existing = {};
+    var prevSgs = model.subgraphs || [];
+    for (var k = 0; k < prevSgs.length; k++) existing[prevSgs[k].id] = true;
+    var counter = prevSgs.length + 1;
+    var sgId = 'SG_' + counter;
+    while (existing[sgId]) sgId = 'SG_' + (++counter);
+
+    var newSg = { id: sgId, title: title && title.trim() ? title.trim() : sgId, nodeIds: validIds.slice() };
+    return Object.assign({}, model, { subgraphs: prevSgs.concat([newSg]) });
+  };
+
+  global.flowchartModelEditing = flowchartModelEditing;
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/model-editing/sequenceModelEditing.js ===== */
+(function (global) {
+  'use strict';
+
+  // Sequence model을 순수하게 편집하는 계층.
+  // 여기서는 Vue 컴포넌트 상태나 script 갱신을 모르고 nextModel만 계산한다.
+
+  // sequence 쪽은 patch 적용 뒤 activation 정규화와 explicitParticipants 보정이 항상 필요하다.
+  function finish(model, patch) {
+    var nextModel = Object.assign({}, model, patch);
+    nextModel.explicitParticipants = true;
+    if (nextModel.messages) {
+      nextModel.messages = SequenceMessageCodec.normalizeActivations(nextModel.messages);
+    }
+    return nextModel;
+  }
+
+  // participant 배열만 바뀌는 수정은 이 helper를 통해 immutable update한다.
+  function updateParticipants(model, updater) {
+    var participants = model.participants || [];
+    var nextParticipants = [];
+    var changed = false;
+
+    for (var i = 0; i < participants.length; i++) {
+      var nextParticipant = updater(participants[i], i);
+      nextParticipants.push(nextParticipant);
+      if (nextParticipant !== participants[i]) changed = true;
+    }
+
+    return changed ? finish(model, { participants: nextParticipants }) : model;
+  }
+
+  // message 배열 수정도 같은 패턴으로 공통화한다.
+  function updateMessages(model, updater) {
+    var messages = model.messages || [];
+    var nextMessages = [];
+    var changed = false;
+
+    for (var i = 0; i < messages.length; i++) {
+      var nextMessage = updater(messages[i], i);
+      nextMessages.push(nextMessage);
+      if (nextMessage !== messages[i]) changed = true;
+    }
+
+    return changed ? finish(model, { messages: nextMessages }) : model;
+  }
+
+  var sequenceModelEditing = {
+    // participant / actor 추가는 kind만 다르고 같은 규칙을 공유한다.
+    addParticipant: function (model, data) {
+      if (!model || !data || !data.id) return model;
+      var participants = (model.participants || []).slice();
+      participants.push({
+        id: data.id,
+        label: data.label || data.id,
+        kind: data.kind || 'participant'
+      });
+      return finish(model, { participants: participants });
+    },
+
+    toggleParticipantKind: function (model, data) {
+      if (!model || !data || !data.participantId) return model;
+      return updateParticipants(model, function (participant) {
+        if (participant.id !== data.participantId) return participant;
+        return Object.assign({}, participant, {
+          kind: participant.kind === 'actor' ? 'participant' : 'actor'
+        });
+      });
+    },
+
+    moveParticipant: function (model, data) {
+      if (!model || !data || !data.participantId) return model;
+      var participants = (model.participants || []).slice();
+      var index = -1;
+      for (var i = 0; i < participants.length; i++) {
+        if (participants[i].id === data.participantId) {
+          index = i;
+          break;
+        }
+      }
+      if (index === -1) return model;
+
+      var swapIndex = data.direction === 'left' ? index - 1 : index + 1;
+      if (swapIndex < 0 || swapIndex >= participants.length) return model;
+
+      var temp = participants[index];
+      participants[index] = participants[swapIndex];
+      participants[swapIndex] = temp;
+      return finish(model, { participants: participants });
+    },
+
+    // payload 형태에 따라 from/to 기본값과 삽입 위치를 계산해 새 message를 만든다.
+    addMessage: function (model, payload) {
+      if (!model) return model;
+      var participants = model.participants || [];
+      if (!participants.length) return model;
+
+      var fromId = participants[0].id;
+      var toId = participants[Math.min(1, participants.length - 1)].id;
+      var messageText = 'Message';
+
+      if (payload && payload.fromId) fromId = payload.fromId;
+      if (payload && payload.toId) toId = payload.toId;
+      if (payload && payload.text) messageText = payload.text;
+
+      if (payload && payload.participantId && !payload.fromId) {
+        fromId = payload.participantId;
+        for (var i = 0; i < participants.length; i++) {
+          if (participants[i].id === payload.participantId) {
+            toId = participants[(i + 1) % participants.length].id;
+            break;
+          }
+        }
+      }
+
+      var messages = (model.messages || []).slice();
+      var insertAt = messages.length;
+      if (payload && payload.insertIndex !== null && payload.insertIndex !== undefined) {
+        insertAt = Math.max(0, Math.min(messages.length, payload.insertIndex));
+      } else if (payload && payload.afterIndex !== null && payload.afterIndex !== undefined) {
+        insertAt = Math.min(messages.length, payload.afterIndex + 1);
+      }
+
+      var newMessage = {
+        from: fromId,
+        to: toId,
+        operator: '->>',
+        text: messageText
+      };
+      messages.splice(insertAt, 0, newMessage);
+
+      var stmtInsertAt = payload && payload.stmtInsertAt !== undefined && payload.stmtInsertAt !== null
+        ? payload.stmtInsertAt : null;
+
+      return finish(model, {
+        messages: messages,
+        statements: stmtInsertAt !== null
+          ? SequenceStatementUtils.insertMessageAtStatementIndex(model, stmtInsertAt, newMessage)
+          : SequenceStatementUtils.insertMessageStatement(model, insertAt, newMessage)
+      });
+    },
+
+    updateParticipantText: function (model, data) {
+      if (!model || !data || !data.participantId) return model;
+      return updateParticipants(model, function (participant) {
+        return participant.id === data.participantId
+          ? Object.assign({}, participant, { label: data.text })
+          : participant;
+      });
+    },
+
+    updateMessageText: function (model, data) {
+      if (!model || !data || data.index === null || data.index === undefined) return model;
+      return updateMessages(model, function (message, index) {
+        return index === data.index
+          ? Object.assign({}, message, { text: data.text })
+          : message;
+      });
+    },
+
+    reverseMessage: function (model, index) {
+      if (!model || index === null || index === undefined) return model;
+      return updateMessages(model, function (message, messageIndex) {
+        if (messageIndex !== index) return message;
+        return Object.assign({}, message, {
+          from: message.to,
+          to: message.from
+        });
+      });
+    },
+
+    toggleAutonumber: function (model) {
+      if (!model) return model;
+      return finish(model, { autonumber: !model.autonumber });
+    },
+
+    toggleMessageLineType: function (model, index) {
+      if (!model || index === null || index === undefined) return model;
+      return updateMessages(model, function (message, messageIndex) {
+        if (messageIndex !== index) return message;
+        return Object.assign({}, message, {
+          operator: SequenceMessageCodec.toggleLineStyle(
+            message.operator || SequenceMessageCodec.DEFAULT_OPERATOR
+          )
+        });
+      });
+    },
+
+    // line type은 operator 본문만 바꾸고 activation suffix(+/-)는 유지한다.
+    setMessageLineType: function (model, data) {
+      if (!model || !data || data.index === null || data.index === undefined) return model;
+      return updateMessages(model, function (message, index) {
+        if (index !== data.index) return message;
+        var suffix = /[+-]$/.test(message.operator || '') ? message.operator.slice(-1) : '';
+        return Object.assign({}, message, { operator: data.operator + suffix });
+      });
+    },
+
+    // block / branch / note 계열은 statements 트리를 갱신하는 편집이다.
+    addBranch: function (model, data) {
+      if (!model || !data || !data.keyword) return model;
+      var messageIndices = data.messageIndices || [];
+      var noteStatementIndices = data.noteStatementIndices || [];
+      if (!messageIndices.length && !noteStatementIndices.length) return model;
+      return finish(model, {
+        statements: SequenceStatementUtils.insertBranchStatement(
+          model,
+          messageIndices,
+          data.keyword,
+          data.text || '',
+          noteStatementIndices
+        )
+      });
+    },
+
+    wrapMessagesInBlock: function (model, data) {
+      var messageIndices = data && data.messageIndices ? data.messageIndices : [];
+      var noteStatementIndices = data && data.noteStatementIndices ? data.noteStatementIndices : [];
+      if (!model || !data || !data.kind || (!messageIndices.length && !noteStatementIndices.length)) return model;
+      return finish(model, {
+        statements: SequenceStatementUtils.wrapMessagesInBlock(
+          model,
+          messageIndices,
+          data.kind,
+          data.text || '',
+          noteStatementIndices
+        )
+      });
+    },
+
+    updateBlockText: function (model, data) {
+      if (!model || !data || !data.blockId) return model;
+      var nextText = String(data.text || '').trim();
+      return finish(model, {
+        statements: nextText
+          ? SequenceStatementUtils.updateBlockText(model, data.blockId, nextText)
+          : SequenceStatementUtils.deleteBlock(model, data.blockId)
+      });
+    },
+
+    updateBranchText: function (model, data) {
+      if (!model || !data || data.statementIndex === null || data.statementIndex === undefined) return model;
+      var nextText = String(data.text || '').trim();
+      return finish(model, {
+        statements: nextText
+          ? SequenceStatementUtils.updateBranchText(model, data.statementIndex, data.text || '')
+          : SequenceStatementUtils.deleteBranchStatement(model, data.statementIndex)
+      });
+    },
+
+    changeBlockType: function (model, data) {
+      if (!model || !data || !data.blockId || !data.kind) return model;
+      return finish(model, {
+        statements: SequenceStatementUtils.changeBlockKind(model, data.blockId, data.kind)
+      });
+    },
+
+    addNote: function (model, data) {
+      if (!model || !data || !data.participantId) return model;
+      return finish(model, {
+        statements: SequenceStatementUtils.addNoteStatement(
+          model,
+          data.participantId,
+          data.insertIndex !== undefined ? data.insertIndex : null,
+          data.text || 'Note'
+        )
+      });
+    },
+
+    insertNoteAtStatementIndex: function (model, data) {
+      if (!model || !data || !data.participantId || data.statementIndex === undefined) return model;
+      var insertAt = data.isBefore !== false ? data.statementIndex : data.statementIndex + 1;
+      return finish(model, {
+        statements: SequenceStatementUtils.insertNoteAtStatementIndex(
+          model, insertAt, data.participantId, data.text || 'Note'
+        )
+      });
+    },
+
+    updateNoteText: function (model, data) {
+      if (!model || !data || data.statementIndex === null || data.statementIndex === undefined) return model;
+      var nextText = String(data.text || '').trim();
+      return finish(model, {
+        statements: nextText
+          ? SequenceStatementUtils.updateNoteText(model, data.statementIndex, nextText)
+          : SequenceStatementUtils.deleteNoteStatement(model, data.statementIndex)
+      });
+    },
+
+    // selection payload를 보고 participant / block / note / message 삭제를 분기한다.
+    deleteSelection: function (model, data) {
+      if (!model || !data) return model;
+
+      if (data.sequenceParticipantId) {
+        var removedIndices = [];
+        var originalMessages = model.messages || [];
+        var participants = (model.participants || []).filter(function (participant) {
+          return participant.id !== data.sequenceParticipantId;
+        });
+        var messages = originalMessages.filter(function (message, index) {
+          var keep = message.from !== data.sequenceParticipantId && message.to !== data.sequenceParticipantId;
+          if (!keep) removedIndices.push(index);
+          return keep;
+        });
+        if (participants.length === (model.participants || []).length && messages.length === originalMessages.length) {
+          return model;
+        }
+        return finish(model, {
+          participants: participants,
+          messages: messages,
+          statements: SequenceStatementUtils.removeParticipantStatements(
+            model,
+            data.sequenceParticipantId,
+            removedIndices
+          )
+        });
+      }
+
+      if (data.sequenceBlockId) {
+        return finish(model, {
+          statements: SequenceStatementUtils.deleteBlock(model, data.sequenceBlockId)
+        });
+      }
+
+      if (data.sequenceNoteStatementIndex !== null && data.sequenceNoteStatementIndex !== undefined) {
+        return finish(model, {
+          statements: SequenceStatementUtils.deleteNoteStatement(model, data.sequenceNoteStatementIndex)
+        });
+      }
+
+      if (data.sequenceMessageIndex !== null && data.sequenceMessageIndex !== undefined) {
+        if (!model.messages || data.sequenceMessageIndex < 0 || data.sequenceMessageIndex >= model.messages.length) {
+          return model;
+        }
+        var nextMessages = model.messages.slice();
+        nextMessages.splice(data.sequenceMessageIndex, 1);
+        return finish(model, {
+          messages: nextMessages,
+          statements: SequenceStatementUtils.removeMessageStatements(model, [data.sequenceMessageIndex])
+        });
+      }
+
+      return model;
+    }
+  };
+
+  global.sequenceModelEditing = sequenceModelEditing;
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/HistoryManager.js ===== */
+(function (global) {
+  'use strict';
+
+  var MAX_STACK = 50;
+
+  function HistoryManager() {
+    this._past   = [];
+    this._future = [];
+  }
+
+  // mutation 전에 현재 모델을 저장한다.
+  HistoryManager.prototype.snapshot = function (model) {
+    this._past.push(JSON.stringify(model));
+    if (this._past.length > MAX_STACK) this._past.shift();
+    this._future = []; // 새 액션이 생기면 redo 경로는 무효화된다.
+  };
+
+  // 이전 모델 반환. undo할 것이 없으면 null.
+  HistoryManager.prototype.undo = function (currentModel) {
+    if (!this._past.length) return null;
+    this._future.push(JSON.stringify(currentModel));
+    return JSON.parse(this._past.pop());
+  };
+
+  // 다음 모델 반환. redo할 것이 없으면 null.
+  HistoryManager.prototype.redo = function (currentModel) {
+    if (!this._future.length) return null;
+    this._past.push(JSON.stringify(currentModel));
+    return JSON.parse(this._future.pop());
+  };
+
+  HistoryManager.prototype.canUndo = function () { return this._past.length > 0; };
+  HistoryManager.prototype.canRedo = function () { return this._future.length > 0; };
+
+  HistoryManager.prototype.clear = function () {
+    this._past   = [];
+    this._future = [];
+  };
+
+  global.HistoryManager = HistoryManager;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/SvgExport.js ===== */
+(function (global) {
+  'use strict';
+
+  function getSvgString(svgSource) {
+    if (!svgSource) return '';
+    if (typeof svgSource === 'string') return svgSource;
+    return new XMLSerializer().serializeToString(svgSource);
+  }
+
+  function getSourceSvgElement(svgSource, options) {
+    options = options || {};
+    if (options.sourceElement && options.sourceElement.querySelectorAll) {
+      return options.sourceElement;
+    }
+    if (svgSource && typeof svgSource !== 'string' && svgSource.querySelectorAll) {
+      return svgSource;
+    }
+    return null;
+  }
+
+  function normalizeTextLines(textOrLines) {
+    var raw = Array.isArray(textOrLines)
+      ? textOrLines
+      : String(textOrLines || '').split(/\r\n|\r|\n/);
+    var lines = [];
+    for (var i = 0; i < raw.length; i++) {
+      var line = String(raw[i] || '')
+        .replace(/\u00a0/g, ' ')
+        .replace(/[ \t\f\v]+/g, ' ')
+        .trim();
+      if (line || (lines.length && i < raw.length - 1)) lines.push(line);
+    }
+    while (lines.length > 1 && !lines[0]) lines.shift();
+    while (lines.length > 1 && !lines[lines.length - 1]) lines.pop();
+    return lines.length ? lines : [''];
+  }
+
+  function extractDomTextLines(root) {
+    var lines = [''];
+
+    function appendText(text) {
+      var parts = String(text || '').replace(/\u00a0/g, ' ').split(/\r\n|\r|\n/);
+      for (var i = 0; i < parts.length; i++) {
+        if (i > 0) lines.push('');
+        var chunk = parts[i].replace(/[ \t\f\v]+/g, ' ');
+        if (!chunk) continue;
+        lines[lines.length - 1] += chunk;
+      }
+    }
+
+    function newline() {
+      lines.push('');
+    }
+
+    function walk(node) {
+      if (!node) return;
+      if (node.nodeType === 3) {
+        appendText(node.nodeValue || '');
+        return;
+      }
+      if (node.nodeType !== 1) return;
+
+      var tag = String(node.tagName || '').toLowerCase();
+      if (tag === 'br') {
+        newline();
+        return;
+      }
+
+      var children = node.childNodes || [];
+      for (var i = 0; i < children.length; i++) {
+        walk(children[i]);
+      }
+
+      if (tag === 'p' || tag === 'li' || tag === 'tr') {
+        newline();
+      }
+    }
+
+    walk(root);
+    return normalizeTextLines(lines);
+  }
+
+  function extractRenderedTextLines(root) {
+    if (!root || !root.ownerDocument || !root.ownerDocument.createRange) return null;
+
+    var lines = [''];
+    var currentLineY = null;
+    var forceBreak = false;
+    var sawRect = false;
+    var range = root.ownerDocument.createRange();
+
+    function appendBreak() {
+      forceBreak = true;
+    }
+
+    function readCharRect(node, index) {
+      try {
+        range.setStart(node, index);
+        range.setEnd(node, index + 1);
+        var rects = range.getClientRects();
+        for (var i = 0; i < rects.length; i++) {
+          if (rects[i] && rects[i].height) return rects[i];
+        }
+        var rect = range.getBoundingClientRect();
+        return rect && rect.height ? rect : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function appendChar(node, index, ch) {
+      if (ch === '\r') return;
+      if (ch === '\n') {
+        appendBreak();
+        return;
+      }
+
+      var rect = readCharRect(node, index);
+      if (rect) {
+        var lineY = rect.top + rect.height / 2;
+        var movedToNextLine = currentLineY !== null &&
+          Math.abs(lineY - currentLineY) > Math.max(1, rect.height * 0.35);
+        if (forceBreak || movedToNextLine) lines.push('');
+        currentLineY = lineY;
+        forceBreak = false;
+        sawRect = true;
+      } else if (forceBreak) {
+        lines.push('');
+        currentLineY = null;
+        forceBreak = false;
+      }
+
+      lines[lines.length - 1] += ch;
+    }
+
+    function walk(node) {
+      if (!node) return;
+      if (node.nodeType === 3) {
+        var text = node.nodeValue || '';
+        for (var i = 0; i < text.length; i++) {
+          appendChar(node, i, text.charAt(i));
+        }
+        return;
+      }
+      if (node.nodeType !== 1) return;
+
+      if (String(node.tagName || '').toLowerCase() === 'br') {
+        appendBreak();
+        return;
+      }
+
+      var children = node.childNodes || [];
+      for (var i = 0; i < children.length; i++) {
+        walk(children[i]);
+      }
+    }
+
+    walk(root);
+    if (range.detach) range.detach();
+    return sawRect ? normalizeTextLines(lines) : null;
+  }
+
+  function getForeignObjectTextTarget(source) {
+    return source && source.querySelector
+      ? (source.querySelector('.nodeLabel, span.edgeLabel, .edgeLabel, p, span, div') || source)
+      : source;
+  }
+
+  function getForeignObjectText(fo, sourceFo) {
+    var source = sourceFo || fo;
+    var label = getForeignObjectTextTarget(source);
+    var renderedLines = extractRenderedTextLines(label);
+    if (renderedLines && renderedLines.length) {
+      return renderedLines.join('\n');
+    }
+    if (source && typeof source.innerText === 'string' && source.innerText.trim()) {
+      return normalizeTextLines(source.innerText).join('\n');
+    }
+    return extractDomTextLines(label || fo).join('\n');
+  }
+
+  function readInlineStyleValue(el, name) {
+    if (!el || !el.getAttribute) return '';
+    var raw = el.getAttribute('style') || '';
+    var parts = raw.split(';');
+    name = String(name || '').toLowerCase();
+    for (var i = 0; i < parts.length; i++) {
+      var colon = parts[i].indexOf(':');
+      if (colon === -1) continue;
+      var key = parts[i].slice(0, colon).trim().toLowerCase();
+      if (key === name) return cleanStyleValue(parts[i].slice(colon + 1));
+    }
+    return '';
+  }
+
+  function readStyleValue(el, name) {
+    if (!el || !el.getAttribute) return '';
+    var value = readInlineStyleValue(el, name);
+    if (value) return value;
+    value = el.getAttribute(name);
+    return value ? cleanStyleValue(value) : '';
+  }
+
+  function cleanStyleValue(value) {
+    return String(value || '').replace(/!important/gi, '').trim();
+  }
+
+  function isUsableStyleValue(value) {
+    value = cleanStyleValue(value);
+    if (!value) return false;
+    var lowered = value.toLowerCase();
+    return lowered !== 'inherit' &&
+      lowered !== 'initial' &&
+      lowered !== 'unset' &&
+      lowered !== 'revert' &&
+      lowered !== 'transparent' &&
+      lowered !== 'rgba(0, 0, 0, 0)' &&
+      lowered !== 'rgba(0,0,0,0)' &&
+      lowered !== 'currentcolor' &&
+      lowered.indexOf('var(') === -1;
+  }
+
+  function firstUsableStyleValue() {
+    for (var i = 0; i < arguments.length; i++) {
+      if (isUsableStyleValue(arguments[i])) return cleanStyleValue(arguments[i]);
+    }
+    return '';
+  }
+
+  function hasClassToken(el, token) {
+    if (!el || !el.getAttribute) return false;
+    var cls = ' ' + String(el.getAttribute('class') || '') + ' ';
+    return cls.indexOf(' ' + token + ' ') !== -1;
+  }
+
+  function findStyleScope(el) {
+    var node = el;
+    while (node && node.getAttribute) {
+      if (hasClassToken(node, 'node') ||
+          hasClassToken(node, 'cluster') ||
+          hasClassToken(node, 'edgeLabel')) {
+        return node;
+      }
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function findExplicitStyleValue(el, name) {
+    var node = el;
+    while (node && node.getAttribute) {
+      var direct = readStyleValue(node, name);
+      if (direct) return direct;
+      node = node.parentNode;
+    }
+
+    var scope = findStyleScope(el);
+    if (!scope || !scope.querySelectorAll) return '';
+
+    var candidates = scope.querySelectorAll('[style], [' + name + ']');
+    for (var i = 0; i < candidates.length; i++) {
+      var scoped = readStyleValue(candidates[i], name);
+      if (scoped) return scoped;
+    }
+    return '';
+  }
+
+  function findOwnerSvg(el) {
+    var node = el;
+    while (node && node.getAttribute) {
+      if (String(node.tagName || '').toLowerCase() === 'svg') return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function readDeclarationValue(raw, name) {
+    raw = String(raw || '');
+    var parts = raw.split(';');
+    name = String(name || '').toLowerCase();
+    for (var i = 0; i < parts.length; i++) {
+      var colon = parts[i].indexOf(':');
+      if (colon === -1) continue;
+      var key = parts[i].slice(0, colon).trim().toLowerCase();
+      if (key === name) return parts[i].slice(colon + 1).replace(/!important/gi, '').trim();
+    }
+    return '';
+  }
+
+  function findScopedStyleRuleValue(el, name) {
+    var scope = findStyleScope(el);
+    if (!scope || !scope.getAttribute) return '';
+
+    var scopeId = scope.getAttribute('id') || '';
+    if (!scopeId) return '';
+
+    var svg = findOwnerSvg(scope);
+    if (!svg || !svg.querySelectorAll) return '';
+
+    var styles = svg.querySelectorAll('style');
+    var value = '';
+    for (var i = 0; i < styles.length; i++) {
+      var css = styles[i].textContent || '';
+      var re = /([^{}]+)\{([^{}]+)\}/g;
+      var match;
+      while ((match = re.exec(css))) {
+        var selector = match[1] || '';
+        if (selector.indexOf(scopeId) === -1) continue;
+        var found = readDeclarationValue(match[2], name);
+        if (isUsableStyleValue(found)) value = found;
+      }
+    }
+    return value;
+  }
+
+  function readForeignObjectTextStyle(sourceFo) {
+    var target = getForeignObjectTextTarget(sourceFo);
+    var computed = null;
+    if (target && typeof window !== 'undefined' && window.getComputedStyle) {
+      try { computed = window.getComputedStyle(target); } catch (e) {}
+    }
+
+    var fontSize = computed ? parseFloat(computed.fontSize) : 0;
+    if (!fontSize) fontSize = parseFloat(readInlineStyleValue(target, 'font-size')) || 14;
+
+    var lineHeight = computed ? parseFloat(computed.lineHeight) : 0;
+    if (!lineHeight) lineHeight = parseFloat(readInlineStyleValue(target, 'line-height')) || Math.round(fontSize * 1.35);
+
+    var explicitColor = firstUsableStyleValue(
+      findExplicitStyleValue(target, 'color'),
+      findExplicitStyleValue(sourceFo, 'color'),
+      findScopedStyleRuleValue(target, 'color'),
+      findScopedStyleRuleValue(sourceFo, 'color')
+    );
+    var fill = firstUsableStyleValue(
+      explicitColor,
+      computed ? computed.color : '',
+      readStyleValue(target, 'color'),
+      readStyleValue(sourceFo, 'color')
+    ) || '#333';
+
+    return {
+      fontSize: fontSize,
+      fontFamily: (computed && computed.fontFamily) || readInlineStyleValue(target, 'font-family') || 'sans-serif',
+      fontWeight: (computed && computed.fontWeight) || readInlineStyleValue(target, 'font-weight') || '',
+      fontStyle: (computed && computed.fontStyle) || readInlineStyleValue(target, 'font-style') || '',
+      lineHeight: lineHeight,
+      fill: fill,
+      backgroundColor: firstUsableStyleValue(
+        readStyleValue(target, 'background-color'),
+        computed ? computed.backgroundColor : ''
+      )
+    };
+  }
+
+  function isInteractiveExportArtifact(el) {
+    if (!el || !el.getAttribute) return false;
+    var id = el.getAttribute('id') || '';
+    var cls = el.getAttribute('class') || '';
+    return id === 'edge-ghost-overlay' ||
+      id === 'conn-port-overlay' ||
+      id === 'sequence-drag-overlay' ||
+      id === 'sequence-message-hit-overlay' ||
+      id === 'sequence-note-insert-overlay' ||
+      id === 'sequence-block-overlay' ||
+      id === 'sequence-block-insert-overlay' ||
+      id === 'flowchart-sel-highlight' ||
+      /\b(edge-label-hit|subgraph-title-hit|sequence-hit-rect|sequence-lifeline-hit|sequence-plus-hit|flowchart-sel-highlight)\b/.test(cls);
+  }
+
+  function isInsideInteractiveExportArtifact(el, rootEl) {
+    var node = el;
+    while (node && node !== rootEl) {
+      if (isInteractiveExportArtifact(node)) return true;
+      node = node.parentNode;
+    }
+    return false;
+  }
+
+  function collectRenderableSourceElements(sourceSvgEl) {
+    var out = [];
+    if (!sourceSvgEl || !sourceSvgEl.querySelectorAll) return out;
+    var all = sourceSvgEl.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+      if (isInsideInteractiveExportArtifact(all[i], sourceSvgEl)) continue;
+      out.push(all[i]);
+    }
+    return out;
+  }
+
+  function removeInteractiveExportArtifacts(svgEl) {
+    if (!svgEl || !svgEl.querySelectorAll) return;
+    var all = svgEl.querySelectorAll('*');
+    for (var i = all.length - 1; i >= 0; i--) {
+      if (isInteractiveExportArtifact(all[i]) && all[i].parentNode) {
+        all[i].parentNode.removeChild(all[i]);
+      }
+    }
+  }
+
+  function stripRootPreviewStyles(svgEl) {
+    if (!svgEl || !svgEl.style) return;
+    var props = [
+      'position',
+      'top',
+      'left',
+      'max-width',
+      'max-height',
+      'transform',
+      'transform-origin',
+      'backface-visibility',
+      '-webkit-font-smoothing',
+      'display',
+      'overflow'
+    ];
+    for (var i = 0; i < props.length; i++) {
+      svgEl.style.removeProperty(props[i]);
+    }
+    if (!svgEl.getAttribute('style')) {
+      svgEl.removeAttribute('style');
+    }
+  }
+
+  function isRenderableSvgTag(tag) {
+    return /^(path|rect|circle|ellipse|line|polyline|polygon|text|tspan|marker|use)$/i.test(tag);
+  }
+
+  function copyComputedStyleValue(sourceEl, targetEl, computed, name, attrName) {
+    if (!sourceEl || !targetEl || !computed) return;
+    var value = computed.getPropertyValue(name);
+    if (!value) return;
+    value = value.trim();
+    if (!value || value === 'auto' || value === 'normal') return;
+    targetEl.setAttribute(attrName || name, value);
+  }
+
+  function inlineComputedStyles(docSvgEl, sourceSvgEl) {
+    if (!docSvgEl || !sourceSvgEl || typeof window === 'undefined' || !window.getComputedStyle) return;
+
+    var sourceEls = collectRenderableSourceElements(sourceSvgEl);
+    var targetEls = docSvgEl.querySelectorAll('*');
+    var count = Math.min(sourceEls.length, targetEls.length);
+
+    for (var i = 0; i < count; i++) {
+      var sourceEl = sourceEls[i];
+      var targetEl = targetEls[i];
+      if (!sourceEl || !targetEl || isInteractiveExportArtifact(sourceEl)) continue;
+
+      var tag = String(targetEl.tagName || '').toLowerCase();
+      if (!isRenderableSvgTag(tag)) continue;
+
+      var computed = null;
+      try { computed = window.getComputedStyle(sourceEl); } catch (e) {}
+      if (!computed) continue;
+
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'fill');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'stroke');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'stroke-width');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'stroke-dasharray');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'stroke-linecap');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'stroke-linejoin');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'fill-opacity');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'stroke-opacity');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'opacity');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'font-size');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'font-family');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'font-weight');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'font-style');
+      copyComputedStyleValue(sourceEl, targetEl, computed, 'color');
+    }
+  }
+
+  function applyTextPaint(el, color) {
+    color = cleanStyleValue(firstUsableStyleValue(color) || '#333');
+    el.setAttribute('fill', color);
+    el.setAttribute('color', color);
+    if (el.style && el.style.setProperty) {
+      el.style.setProperty('fill', color, 'important');
+      el.style.setProperty('color', color, 'important');
+    } else {
+      el.setAttribute('style', 'fill:' + color + ' !important;color:' + color + ' !important;');
+    }
+  }
+
+  function replaceForeignObjects(doc, svgEl, sourceSvgEl) {
+    var fos = svgEl.querySelectorAll('foreignObject');
+    var sourceFos = sourceSvgEl && sourceSvgEl.querySelectorAll
+      ? sourceSvgEl.querySelectorAll('foreignObject')
+      : [];
+    for (var i = 0; i < fos.length; i++) {
+      var fo = fos[i];
+      var sourceFo = sourceFos[i] || null;
+      var fx = parseFloat(fo.getAttribute('x') || 0);
+      var fy = parseFloat(fo.getAttribute('y') || 0);
+      var fw = parseFloat(fo.getAttribute('width') || 100);
+      var fh = parseFloat(fo.getAttribute('height') || 20);
+      var textStyle = readForeignObjectTextStyle(sourceFo || fo);
+      var fontSize = textStyle.fontSize;
+      var fontFamily = textStyle.fontFamily;
+      var lineHeight = textStyle.lineHeight;
+      var lines = normalizeTextLines(getForeignObjectText(fo, sourceFo));
+      if (!lines.length) lines = [''];
+
+      var textEl = doc.createElementNS('http://www.w3.org/2000/svg', 'text');
+      textEl.setAttribute('x', fx + fw / 2);
+      textEl.setAttribute('y', fy + fh / 2);
+      textEl.setAttribute('text-anchor', 'middle');
+      textEl.setAttribute('dominant-baseline', 'middle');
+      textEl.setAttribute('font-size', String(fontSize));
+      textEl.setAttribute('font-family', fontFamily);
+      applyTextPaint(textEl, textStyle.fill);
+      if (textStyle.fontWeight && textStyle.fontWeight !== '400' && textStyle.fontWeight !== 'normal') {
+        textEl.setAttribute('font-weight', textStyle.fontWeight);
+      }
+      if (textStyle.fontStyle && textStyle.fontStyle !== 'normal') {
+        textEl.setAttribute('font-style', textStyle.fontStyle);
+      }
+
+      if (lines.length <= 1) {
+        textEl.textContent = lines[0] || '';
+      } else {
+        var startDy = -(lines.length - 1) / 2 * lineHeight;
+        for (var li = 0; li < lines.length; li++) {
+          var tspan = doc.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+          tspan.setAttribute('x', fx + fw / 2);
+          tspan.setAttribute('dy', li === 0 ? startDy : lineHeight);
+          applyTextPaint(tspan, textStyle.fill);
+          tspan.textContent = lines[li];
+          textEl.appendChild(tspan);
+        }
+      }
+
+      if (fo.parentNode) {
+        if (textStyle.backgroundColor && lines.join('').trim()) {
+          var groupEl = doc.createElementNS('http://www.w3.org/2000/svg', 'g');
+          var backgroundEl = doc.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          backgroundEl.setAttribute('x', fx);
+          backgroundEl.setAttribute('y', fy);
+          backgroundEl.setAttribute('width', fw);
+          backgroundEl.setAttribute('height', fh);
+          backgroundEl.setAttribute('fill', textStyle.backgroundColor);
+          groupEl.appendChild(backgroundEl);
+          groupEl.appendChild(textEl);
+          fo.parentNode.replaceChild(groupEl, fo);
+        } else {
+          fo.parentNode.replaceChild(textEl, fo);
+        }
+      }
+    }
+  }
+
+  function serializeForRaster(svgSource, options) {
+    options = options || {};
+    var pad = options.padding !== undefined ? options.padding : 20;
+    var svgStr = getSvgString(svgSource);
+    if (!svgStr) throw new Error('SVG source is empty');
+    var sourceSvgEl = getSourceSvgElement(svgSource, options);
+
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(svgStr, 'image/svg+xml');
+    var svgEl = doc.querySelector('svg');
+    if (!svgEl) throw new Error('SVG element not found');
+
+    svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    svgEl.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+    removeInteractiveExportArtifacts(svgEl);
+    stripRootPreviewStyles(svgEl);
+    inlineComputedStyles(svgEl, sourceSvgEl);
+    replaceForeignObjects(doc, svgEl, sourceSvgEl);
+
+    var vb = svgEl.getAttribute('viewBox');
+    var w, h;
+    if (vb) {
+      var parts = vb.trim().split(/[\s,]+/);
+      w = parseFloat(parts[2]) || 800;
+      h = parseFloat(parts[3]) || 600;
+    } else {
+      w = parseFloat(svgEl.getAttribute('width')) || 800;
+      h = parseFloat(svgEl.getAttribute('height')) || 600;
+    }
+
+    w = Math.ceil(w + pad * 2);
+    h = Math.ceil(h + pad * 2);
+    svgEl.setAttribute('width', w);
+    svgEl.setAttribute('height', h);
+    svgEl.setAttribute('viewBox', (-pad) + ' ' + (-pad) + ' ' + w + ' ' + h);
+
+    return {
+      svg: new XMLSerializer().serializeToString(svgEl),
+      width: w,
+      height: h
+    };
+  }
+
+  function serializeForSvg(svgSource, options) {
+    options = options || {};
+    var svgStr = getSvgString(svgSource);
+    if (!svgStr) throw new Error('SVG source is empty');
+    var sourceSvgEl = getSourceSvgElement(svgSource, options);
+
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(svgStr, 'image/svg+xml');
+    var svgEl = doc.querySelector('svg');
+    if (!svgEl) throw new Error('SVG element not found');
+
+    svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    svgEl.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+    removeInteractiveExportArtifacts(svgEl);
+    stripRootPreviewStyles(svgEl);
+    inlineComputedStyles(svgEl, sourceSvgEl);
+    replaceForeignObjects(doc, svgEl, sourceSvgEl);
+
+    return new XMLSerializer().serializeToString(svgEl);
+  }
+
+  function downloadBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.download = filename;
+    a.href = url;
+    a.click();
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 0);
+  }
+
+  function exportSvg(svgSource, options) {
+    options = options || {};
+    var filename = options.filename || 'diagram.svg';
+    var svgStr = '';
+    try {
+      svgStr = serializeForSvg(svgSource, options);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    if (!svgStr) return Promise.reject(new Error('SVG source is empty'));
+    downloadBlob(new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' }), filename);
+    return Promise.resolve();
+  }
+
+  // SVG 소스를 래스터화해 Blob으로 resolve한다. 파일 다운로드 없이 Blob을
+  // 직접 사용해야 하는 경우(서버 업로드 등)를 위한 export PNG의 핵심 경로.
+  function rasterizeToBlob(svgSource, options) {
+    options = options || {};
+    var format = options.format || 'png';
+    var scale = options.scale || 2;
+    var bgColor = options.bgColor || '#ffffff';
+    var mime = format === 'jpg' || format === 'jpeg' ? 'image/jpeg' : 'image/png';
+    var quality = options.quality != null ? options.quality : 0.92;
+    var source = serializeForRaster(svgSource, options);
+    var blob = new Blob([source.svg], { type: 'image/svg+xml;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () {
+        var cvs = document.createElement('canvas');
+        cvs.width = source.width * scale;
+        cvs.height = source.height * scale;
+        var ctx = cvs.getContext('2d');
+        if (!ctx) {
+          URL.revokeObjectURL(url);
+          reject(new Error('Canvas 2D context is not available'));
+          return;
+        }
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(0, 0, cvs.width, cvs.height);
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+
+        cvs.toBlob(function (rasterBlob) {
+          if (!rasterBlob) {
+            reject(new Error('Failed to create raster image'));
+            return;
+          }
+          resolve(rasterBlob);
+        }, mime, mime === 'image/jpeg' ? quality : undefined);
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('Failed to load SVG as image'));
+      };
+      img.src = url;
+    });
+  }
+
+  function exportRaster(svgSource, options) {
+    options = options || {};
+    var format = options.format || 'png';
+    var filename = options.filename || ('diagram.' + format);
+    return rasterizeToBlob(svgSource, options).then(function (rasterBlob) {
+      downloadBlob(rasterBlob, filename);
+    });
+  }
+
+  global.SvgExport = {
+    exportSvg: exportSvg,
+    exportPng: function (svgSource, options) {
+      options = Object.assign({}, options, { format: 'png' });
+      if (!options.filename) options.filename = 'diagram.png';
+      return exportRaster(svgSource, options);
+    },
+    exportJpg: function (svgSource, options) {
+      options = Object.assign({}, options, { format: 'jpg' });
+      if (!options.filename) options.filename = 'diagram.jpg';
+      return exportRaster(svgSource, options);
+    },
+    toPngBlob: function (svgSource, options) {
+      options = Object.assign({}, options, { format: 'png' });
+      return rasterizeToBlob(svgSource, options);
+    },
+    toJpgBlob: function (svgSource, options) {
+      options = Object.assign({}, options, { format: 'jpg' });
+      return rasterizeToBlob(svgSource, options);
+    }
+  };
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/utils/PreviewCtxBuilder.js ===== */
+/**
+ * PreviewCtxBuilder
+ * MermaidPreview가 5개 핸들러(SvgNodeHandler, SvgEdgeHandler, SequenceSvgHandler,
+ * PortDragHandler, SequenceMessageDragHandler)에 넘기는 ctx 객체를 한 곳에서 만든다.
+ *
+ * - build(vm, svgEl): postRenderSetup 시점의 full ctx (svgEl 의존 메서드 포함).
+ * - buildLite(vm)  : toolbar/액션에서 쓰는 경량 ctx (svgEl 불필요).
+ *
+ * **시그니처 보존 약속**: ctx 메서드 이름·인자·반환값은 5개 핸들러가 의존하므로
+ *   변경 금지. 이 파일은 기존 _buildCtx / _buildCtxLite 코드를 그대로 옮긴 것.
+ *
+ * StorageManager 스타일의 stateless plain object.
+ */
+(function (global) {
+  'use strict';
+
+  // 공통 ctx 파편 — full / lite 양쪽이 공유.
+  function commonCtx(vm) {
+    return {
+      emit: function (ev, data) { vm.$emit(ev, data); },
+      getState: function () { return vm.$data; },
+      setState: function (patch) {
+        var keys = Object.keys(patch);
+        for (var i = 0; i < keys.length; i++) { vm[keys[i]] = patch[keys[i]]; }
+      },
+      getModel: function () { return vm.model; },
+      findNode: function (nodeId) {
+        var nodes = vm.model.nodes || [];
+        for (var i = 0; i < nodes.length; i++) {
+          if (nodes[i].id === nodeId) return nodes[i];
+        }
+        return null;
+      },
+      findSequenceParticipant: function (participantId) {
+        var participants = vm.model.participants || [];
+        for (var i = 0; i < participants.length; i++) {
+          if (participants[i].id === participantId) return participants[i];
+        }
+        return null;
+      },
+      findSequenceMessage: function (messageIndex) {
+        var messages = vm.model.messages || [];
+        return messages[messageIndex] || null;
+      },
+      showUnsupportedHint: function () {
+        if (vm.showUnsupportedHint) vm.showUnsupportedHint();
+      },
+      focusEditInput: function () {
+        vm.$nextTick(function () {
+          var el = vm.$refs.editInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+      focusEdgeEditInput: function () {
+        vm.$nextTick(function () {
+          var el = vm.$refs.editEdgeInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+      focusSequenceParticipantInput: function () {
+        vm.$nextTick(function () {
+          var el = vm.$refs.sequenceParticipantInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+      focusSequenceMessageInput: function () {
+        vm.$nextTick(function () {
+          var el = vm.$refs.sequenceMessageInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+      openSequenceBranchEdit: function (statementIndex, text, clientX, clientY) {
+        vm.sequenceToolbar = null;
+        vm.editingSequenceBlockId = null;
+        vm.editingSequenceBranchStatementIndex = statementIndex;
+        vm.editingSequenceBlockText = text || '';
+        vm.sequenceBlockEditStyle = {
+          position: 'fixed',
+          left: Math.max(12, clientX - 110) + 'px',
+          top: Math.max(12, clientY - 22) + 'px',
+          zIndex: 1000,
+          width: '220px'
+        };
+        vm.$nextTick(function () {
+          var el = vm.$refs.sequenceBlockInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+      insertSequenceNoteAt: function (statementIndex, participantId, isBefore) {
+        var pid = participantId;
+        if (!pid) {
+          var ps = vm.model.participants || [];
+          if (!ps.length) return;
+          pid = ps[0].id;
+        }
+        vm.$emit('insert-sequence-note-at', {
+          statementIndex: statementIndex,
+          participantId: pid,
+          isBefore: isBefore !== false
+        });
+      },
+
+      openSequenceNoteEdit: function (statementIndex, text, clientX, clientY) {
+        vm.sequenceToolbar = null;
+        vm.editingSequenceNoteStatementIndex = statementIndex;
+        vm.editingSequenceNoteText = text || '';
+        vm.sequenceNoteEditStyle = {
+          position: 'fixed',
+          left: Math.max(12, clientX - 140) + 'px',
+          top: Math.max(12, clientY - 22) + 'px',
+          zIndex: 1000,
+          width: '280px'
+        };
+        vm.$nextTick(function () {
+          var el = vm.$refs.sequenceNoteInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+      openSequenceBlockEdit: function (blockId, text, clientX, clientY) {
+        vm.sequenceToolbar = null;
+        vm.selectedSequenceBlockId = blockId;
+        vm.editingSequenceBlockId = blockId;
+        vm.editingSequenceBlockText = text || '';
+        vm.sequenceBlockEditStyle = {
+          position: 'fixed',
+          left: Math.max(12, clientX - 110) + 'px',
+          top: Math.max(12, clientY - 22) + 'px',
+          zIndex: 1000,
+          width: '220px'
+        };
+        vm.$nextTick(function () {
+          var el = vm.$refs.sequenceBlockInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      }
+    };
+  }
+
+  // postRenderSetup용 full ctx — selection watcher와 viewport 의존 메서드 포함.
+  // (기존 _buildCtx에 getPreviewRect가 line 706/736 두 번 정의돼 있던 버그 동시 수정.
+  //  본문이 동일했으므로 동작 차이 없음.)
+  function build(vm, svgEl) {
+    var ctx = commonCtx(vm);
+
+    ctx.watchSelection = function (nodeId, nodeEl) {
+      vm.$watch('selectedNodeId', function (val) {
+        nodeEl.classList.toggle('selected', val === nodeId);
+      }, { immediate: true });
+    };
+
+    ctx.watchEdgeSelection = function (edgeIndex, edgeEl) {
+      vm.$watch('selectedEdgeIndex', function (val) {
+        if (edgeEl) {
+          var isSelected = val === edgeIndex;
+          if (edgeEl.classList) {
+            edgeEl.classList.toggle('edge-selected', isSelected);
+            edgeEl.classList.toggle('edge-hovered', isSelected);
+          }
+          var edgePaths = edgeEl.querySelectorAll ? edgeEl.querySelectorAll('path') : [];
+          for (var i = 0; i < edgePaths.length; i++) {
+            edgePaths[i].classList.toggle('edge-selected', isSelected);
+            edgePaths[i].classList.toggle('edge-hovered', isSelected);
+          }
+        }
+      }, { immediate: true });
+    };
+
+    ctx.watchSequenceParticipantSelection = function (participantId, el) {
+      vm.$watch('selectedSequenceParticipantId', function (val) {
+        el.classList.toggle('sequence-participant-selected', val === participantId);
+      }, { immediate: true });
+    };
+
+    ctx.watchSequenceMessageSelection = function (messageIndex, lineEl, textEl) {
+      vm.$watch('selectedSequenceMessageIndex', function (val) {
+        if (lineEl) lineEl.classList.toggle('sequence-message-selected', val === messageIndex);
+        if (textEl) textEl.classList.toggle('sequence-message-text-selected', val === messageIndex);
+      }, { immediate: true });
+    };
+
+    ctx.watchSequenceMessageHitSelection = function (messageIndex, hitEl) {
+      vm.$watch('selectedSequenceMessageIndex', function (val) {
+        if (hitEl && hitEl.classList) {
+          hitEl.classList.toggle('sequence-hit-selected', val === messageIndex);
+        }
+      }, { immediate: true });
+    };
+
+    ctx.watchSequenceMessageMultiSelection = function (messageIndex, lineEl, textEl, hitEl) {
+      vm.$watch('selectedSequenceMessageIndices', function (val) {
+        var selected = Array.isArray(val) && val.indexOf(messageIndex) !== -1;
+        if (lineEl) lineEl.classList.toggle('sequence-message-multi-selected', selected);
+        if (textEl) textEl.classList.toggle('sequence-message-text-multi-selected', selected);
+        if (hitEl && hitEl.classList) hitEl.classList.toggle('sequence-hit-multi-selected', selected);
+      }, { immediate: true, deep: true });
+    };
+
+    ctx.watchSequenceBlockSelection = function (blockId, el) {
+      vm.$watch('selectedSequenceBlockId', function (val) {
+        if (el && el.classList) {
+          el.classList.toggle('sequence-block-badge--selected', val === blockId);
+        }
+      }, { immediate: true });
+    };
+
+    ctx.watchSequenceSelectionHighlight = (function () {
+      var registered = false;
+      return function () {
+        if (registered) return;
+        registered = true;
+        var checkHide = function () {
+          var msgs = vm.$data.selectedSequenceMessageIndices;
+          var notes = vm.$data.selectedNoteStatementIndices;
+          if ((!msgs || !msgs.length) && (!notes || !notes.length)) {
+            SequenceBlockHandler.hideSelectionHighlight();
+          }
+        };
+        vm.$watch('selectedSequenceMessageIndices', checkHide, { deep: true });
+        vm.$watch('selectedNoteStatementIndices', checkHide, { deep: true });
+      };
+    }());
+
+    ctx.watchSequenceNoteMultiSelection = function (statementIndex, noteGroupEl) {
+      vm.$watch('selectedNoteStatementIndices', function (val) {
+        var selected = Array.isArray(val) && val.indexOf(statementIndex) !== -1;
+        if (noteGroupEl && noteGroupEl.classList) {
+          noteGroupEl.classList.toggle('sequence-note-multi-selected', selected);
+        }
+      }, { immediate: true, deep: true });
+    };
+
+    ctx.getPreviewRect = function () {
+      return vm.$refs.canvas && vm.$refs.canvas.getBoundingClientRect
+        ? vm.$refs.canvas.getBoundingClientRect()
+        : (vm.$el && vm.$el.getBoundingClientRect ? vm.$el.getBoundingClientRect() : null);
+    };
+
+    ctx.panPreviewBy = function (dx, dy) {
+      if (!vm._svgEl) return;
+      if (!dx && !dy) return;
+      vm.panX += dx || 0;
+      vm.panY += dy || 0;
+      vm._applyTransform();
+    };
+
+    return ctx;
+  }
+
+  // toolbar/액션용 — postRenderSetup 바깥에서 ctx만 필요한 경로.
+  function buildLite(vm) {
+    return commonCtx(vm);
+  }
+
+  global.PreviewCtxBuilder = {
+    build: build,
+    buildLite: buildLite
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/actions/SvgPositionTracker.js ===== */
+(function (global) {
+  'use strict';
+
+  var SvgPositionTracker = {
+
+    // Mermaid가 렌더한 .node 요소에서 논리적인 노드 id를 추출한다.
+    // Mermaid 11은 "[renderPrefix-]flowchart-{nodeId}-{index}" 형태를 사용한다.
+    extractNodeId: function (nodeEl) {
+      // data-id가 있으면 그 값을 우선 사용한다.
+      var dataId = nodeEl.getAttribute('data-id');
+      if (dataId) return dataId;
+
+      var id = nodeEl.id || '';
+      if (!id) return null;
+
+      // id 안의 "flowchart-" 구간을 찾는다.
+      var marker = 'flowchart-';
+      var idx = id.indexOf(marker);
+      if (idx !== -1) {
+        var after = id.slice(idx + marker.length); // 예: "A-0", "My-Node-3"
+        // 뒤쪽 "-숫자" 인덱스를 제거
+        var m = after.match(/^([\s\S]*)-\d+$/);
+        return m ? m[1] : after;
+      }
+
+      // 마지막 fallback: 앞뒤 dash segment를 제거해 추정
+      var parts = id.split('-');
+      if (parts.length >= 3) return parts.slice(1, -1).join('-');
+      if (parts.length === 2) return parts[1];
+      return id;
+    },
+
+    // { nodeId: { cx, cy, width, height, origTx, origTy, bboxX, bboxY } } 생성
+    collectNodePositions: function (svgEl) {
+      var positions = {};
+      var elements  = {};
+      var nodes = svgEl.querySelectorAll('.node');
+
+      for (var i = 0; i < nodes.length; i++) {
+        var nodeEl = nodes[i];
+        var nodeId = SvgPositionTracker.extractNodeId(nodeEl);
+        if (!nodeId) continue;
+
+        var transform = nodeEl.getAttribute('transform') || '';
+        var m = transform.match(/translate\(\s*([-\d.]+)[\s,]+([-\d.]+)\s*\)/);
+        var tx = m ? parseFloat(m[1]) : 0;
+        var ty = m ? parseFloat(m[2]) : 0;
+
+        var bbox;
+        try { bbox = nodeEl.getBBox(); }
+        catch (e) { bbox = { x: 0, y: 0, width: 60, height: 40 }; }
+
+        positions[nodeId] = {
+          cx:     tx + bbox.x + bbox.width  / 2,
+          cy:     ty + bbox.y + bbox.height / 2,
+          width:  bbox.width,
+          height: bbox.height,
+          origTx: tx,
+          origTy: ty,
+          bboxX:  bbox.x,
+          bboxY:  bbox.y
+        };
+        elements[nodeId] = nodeEl;
+      }
+
+      return { positions: positions, elements: elements };
+    },
+
+    // 지정된 방향 포트의 SVG 좌표 반환
+    getPortPosition: function (positions, nodeId, side) {
+      var p = positions[nodeId];
+      if (!p) return { x: 0, y: 0 };
+      switch (side) {
+        case 'top':    return { x: p.cx,                         y: p.origTy + p.bboxY };
+        case 'bottom': return { x: p.cx,                         y: p.origTy + p.bboxY + p.height };
+        case 'left':   return { x: p.origTx + p.bboxX,           y: p.cy };
+        case 'right':  return { x: p.origTx + p.bboxX + p.width, y: p.cy };
+        default:       return { x: p.cx,                         y: p.cy };
+      }
+    },
+
+    // 렌더된 엣지 DOM을 모델 엣지 index에 매핑한다.
+    // 핵심은 wrapper group보다 실제 stroke path를 우선 보는 것이다.
+    // Mermaid 버전/케이스에 따라 이름 없는 엣지가 다른 구조로 렌더링되기 때문이다.
+    collectEdgePaths: function (svgEl, modelEdges) {
+      var results = [];
+      var pathCandidates = svgEl.querySelectorAll(
+        '.edgePath path.path,' +
+        '.edgePath path:not([class*="arrowhead"]),' +
+        '.edgePaths path.path,' +
+        '.edgePaths > path,' +
+        'path.flowchart-link,' +
+        'path[id^="L_"]'
+      );
+      var seenPathEls = [];
+      var expectedEdges = [];
+      var pairToExpectedEdges = {};
+
+      // 노드 id 정리 규칙은 extractNodeId와 동일하게 맞춘다.
+      var sanitize = function (id) {
+        var marker = 'flowchart-';
+        var idx = id.indexOf(marker);
+        if (idx !== -1) {
+          var after = id.slice(idx + marker.length);
+          var m = after.match(/^([\s\S]*)-\d+$/);
+          return m ? m[1] : after;
+        }
+        var parts = id.split('-');
+        if (parts.length >= 3) return parts.slice(1, -1).join('-');
+        if (parts.length === 2) return parts[1];
+        return id;
+      };
+
+      var edgeOccurrences = {};
+      var scanIndex = 0;
+
+      for (var me = 0; me < modelEdges.length; me++) {
+        var modelEdge = modelEdges[me];
+        if (!modelEdge) continue;
+
+        var pairKey = modelEdge.from + '::' + modelEdge.to;
+        var repeatCount = modelEdge.from === modelEdge.to ? 3 : 1;
+        if (!pairToExpectedEdges[pairKey]) pairToExpectedEdges[pairKey] = [];
+
+        for (var copy = 0; copy < repeatCount; copy++) {
+          var expected = {
+            from: modelEdge.from,
+            to: modelEdge.to,
+            modelIndex: me
+          };
+          expectedEdges.push(expected);
+          pairToExpectedEdges[pairKey].push(expected);
+        }
+      }
+
+      for (var i = 0; i < pathCandidates.length; i++) {
+        var pathEl = pathCandidates[i];
+        if (!pathEl || seenPathEls.indexOf(pathEl) !== -1) continue;
+        seenPathEls.push(pathEl);
+
+        var edgeEl = pathEl.closest ? pathEl.closest('.edgePath') : null;
+        if (!edgeEl) edgeEl = pathEl.parentNode;
+        if (!edgeEl) edgeEl = pathEl;
+
+        var cls = edgeEl.getAttribute('class') || '';
+        var sm  = cls.match(/LS-([^\s]+)/);
+        var em  = cls.match(/LE-([^\s]+)/);
+
+        var fId = sm ? sanitize(sm[1]) : null;
+        var tId = em ? sanitize(em[1]) : null;
+
+        // 일부 Mermaid 렌더는 시작/끝점을 wrapper id에 넣어 준다.
+        if ((!fId || !tId) && edgeEl.id) {
+          var idMatch = edgeEl.id.match(/^L_(.+)_(.+?)_\d+$/);
+          if (idMatch) {
+            fId = fId || sanitize(idMatch[1]);
+            tId = tId || sanitize(idMatch[2]);
+          }
+        }
+
+        if ((!fId || !tId) && pathEl.id) {
+          var pathIdMatch = pathEl.id.match(/^L_(.+)_(.+?)_\d+$/);
+          if (pathIdMatch) {
+            fId = fId || sanitize(pathIdMatch[1]);
+            tId = tId || sanitize(pathIdMatch[2]);
+          }
+        }
+
+        // DOM에서 시작/끝점을 못 읽으면 마지막 보정으로 모델 순서를 쓴다.
+        if ((!fId || !tId) && scanIndex < expectedEdges.length) {
+          fId = expectedEdges[scanIndex].from;
+          tId = expectedEdges[scanIndex].to;
+        }
+
+        // 같은 from/to 쌍이 여러 개 있어도, self-loop는 3슬롯을 같은 model edge로 매핑한다.
+        var modelIdx = scanIndex;
+        if (fId && tId) {
+          var key = fId + '::' + tId;
+          var matchingExpected = pairToExpectedEdges[key] || [];
+          edgeOccurrences[key] = edgeOccurrences[key] || 0;
+
+          if (matchingExpected.length) {
+            var occurrence = Math.min(edgeOccurrences[key], matchingExpected.length - 1);
+            modelIdx = matchingExpected[occurrence].modelIndex;
+          } else {
+            var found = 0;
+            for (var m = 0; m < modelEdges.length; m++) {
+              if (modelEdges[m].from === fId && modelEdges[m].to === tId) {
+                if (found === edgeOccurrences[key]) { modelIdx = m; break; }
+                found++;
+              }
+            }
+          }
+          edgeOccurrences[key]++;
+        } else if (scanIndex < expectedEdges.length) {
+          modelIdx = expectedEdges[scanIndex].modelIndex;
+        }
+
+        results.push(pathEl ? {
+          el:     edgeEl,
+          path:   pathEl,
+          fromId: fId,
+          toId:   tId,
+          index:  modelIdx
+        } : null);
+
+        scanIndex++;
+      }
+
+      return results;
+    },
+
+    // 마우스 client 좌표를 SVG 로컬 좌표로 변환
+    getSVGPoint: function (svgEl, clientX, clientY) {
+      var pt  = svgEl.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      var ctm = svgEl.getScreenCTM();
+      return ctm ? pt.matrixTransform(ctm.inverse()) : pt;
+    },
+
+    // SVG 좌표를 fixed-position 기준 화면 좌표로 변환
+    svgToScreen: function (svgEl, svgX, svgY) {
+      var pt  = svgEl.createSVGPoint();
+      pt.x = svgX;
+      pt.y = svgY;
+      var ctm = svgEl.getScreenCTM();
+      return ctm ? pt.matrixTransform(ctm) : pt;
+    }
+  };
+
+  global.SvgPositionTracker = SvgPositionTracker;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/actions/SvgNodeHandler.js ===== */
+(function (global) {
+  'use strict';
+
+  // UI에서 노출하는 shape 목록
+  var SHAPES = [
+    { key: 'rect',              label: '[ ]',     name: 'Rectangle' },
+    { key: 'stadium',           label: '([ ])',   name: 'Stadium' },
+    { key: 'subroutine',        label: '[[ ]]',   name: 'Subroutine' },
+    { key: 'cylinder',          label: '[( )]',   name: 'Cylinder' },
+    { key: 'rhombus',           label: '{ }',     name: 'Diamond' },
+    { key: 'hexagon',           label: '{{ }}',   name: 'Hexagon' },
+    { key: 'parallelogram',     label: '[/ /]',   name: 'Slant' },
+    { key: 'trapezoid',         label: '[/ \\]',  name: 'Trapezoid' },
+    { key: 'trapezoid_alt',     label: '[\\ /]',  name: 'Trap. Alt' },
+    { key: 'parallelogram_alt', label: '[\\ \\]', name: 'Slant Alt' },
+    { key: 'double_circle',     label: '(( ))',   name: 'Circle' },
+    { key: 'asymmetric',        label: '>  ]',    name: 'Asymmetric' }
+  ];
+
+  function isStaticModel(model) {
+    return !!(model && model.profile === 'static');
+  }
+
+  function toEditableText(model, text) {
+    text = String(text || '');
+    return isStaticModel(model)
+      ? text.replace(/<br\s*\/?>/gi, '\n')
+      : text;
+  }
+
+  function toModelText(model, text) {
+    text = String(text || '');
+    return isStaticModel(model)
+      ? text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '<br>')
+      : text;
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function buildStaticEditStyle(targetRect, previewRect, text) {
+    var localLeft = previewRect ? targetRect.left - previewRect.left : targetRect.left;
+    var localTop = previewRect ? targetRect.top - previewRect.top : targetRect.top;
+    var lines = String(text || '').split(/\n/);
+    var longest = 0;
+    for (var i = 0; i < lines.length; i++) {
+      longest = Math.max(longest, lines[i].length);
+    }
+
+    var width = clamp(Math.max(240, targetRect.width + 32, longest * 7.5 + 32), 240, 500);
+    var height = clamp(Math.max(100, lines.length * 18 + 24, targetRect.height + 18), 100, 460);
+    var maxLeft = previewRect ? Math.max(8, previewRect.width - width - 8) : localLeft + targetRect.width / 2;
+    var maxTop = previewRect ? Math.max(8, previewRect.height - height - 8) : localTop + targetRect.height / 2;
+
+    return {
+      position: 'absolute',
+      left: clamp(localLeft + targetRect.width / 2 - width / 2, 8, maxLeft) + 'px',
+      top: clamp(localTop + targetRect.height / 2 - height / 2, 8, maxTop) + 'px',
+      zIndex: 1000,
+      width: width + 'px',
+      height: height + 'px'
+    };
+  }
+
+  var SvgNodeHandler = {
+    SHAPES: SHAPES,
+    isStaticModel: isStaticModel,
+    toEditableText: toEditableText,
+    toModelText: toModelText,
+    buildStaticEditStyle: buildStaticEditStyle,
+
+    // svgEl 안의 모든 .node에 인터랙션 연결
+    // ctx = MermaidPreview._buildCtx()가 만든 bridge 객체
+    attach: function (svgEl, positions, elements, ctx) {
+      var nodes = svgEl.querySelectorAll('.node');
+      for (var i = 0; i < nodes.length; i++) {
+        SvgNodeHandler._attachOne(nodes[i], svgEl, positions, elements, ctx);
+      }
+    },
+
+    _attachOne: function (nodeEl, svgEl, positions, elements, ctx) {
+      var nodeId = SvgPositionTracker.extractNodeId(nodeEl);
+      if (!nodeId) return;
+
+      nodeEl.style.cursor = 'pointer';
+
+      // model에 없는 노드 = 미지원 문법. 클릭 시 안내만 표시하고 편집 인터랙션은 연결하지 않는다.
+      if (!ctx.findNode(nodeId)) {
+        nodeEl.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (ctx.showUnsupportedHint) ctx.showUnsupportedHint();
+        });
+        nodeEl.addEventListener('dblclick', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (ctx.showUnsupportedHint) ctx.showUnsupportedHint();
+        });
+        nodeEl.addEventListener('contextmenu', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (ctx.showUnsupportedHint) ctx.showUnsupportedHint();
+        });
+        return;
+      }
+
+      // hover 중에만 포트를 띄워 canvas를 과하게 복잡하게 만들지 않는다.
+      nodeEl.addEventListener('mouseenter', function () {
+        ctx.setState({ hoveredNodeId: nodeId });
+        nodeEl.classList.add('node-hovered');
+        PortDragHandler.showPorts(svgEl, nodeId, positions, ctx);
+      });
+
+      nodeEl.addEventListener('mouseleave', function (e) {
+        nodeEl.classList.remove('node-hovered');
+        var rel = e.relatedTarget;
+        // 커서가 포트나 overlay로 이동한 경우 포트를 바로 지우지 않는다.
+        if (rel) {
+          if (rel.classList && (
+                rel.classList.contains('conn-port') ||
+                rel.classList.contains('conn-port-glow'))) {
+            return;
+          }
+          if (rel.closest && rel.closest('#conn-port-overlay')) {
+            return;
+          }
+        }
+        setTimeout(function () {
+          var state = ctx.getState();
+          if (state.hoveredNodeId === nodeId && !state.portDragging) {
+            PortDragHandler.clearPorts();
+            ctx.setState({ hoveredNodeId: null });
+          }
+        }, 180);
+      });
+
+      // 좌클릭은 선택 + 수정 메뉴를 연다.
+      nodeEl.addEventListener('click', function (e) {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var rect = nodeEl.getBoundingClientRect();
+        var previewRect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+        ctx.setState({
+          selectedNodeId:    nodeId,
+          selectedEdgeIndex: null,
+          edgeToolbar:   null,
+          contextMenu:   {
+            nodeId: nodeId,
+            anchorType: 'node',
+            x: Math.round((previewRect ? rect.left - previewRect.left : rect.left) + rect.width + 10),
+            y: Math.round((previewRect ? rect.top - previewRect.top : rect.top) + Math.min(24, rect.height * 0.5))
+          }
+        });
+        ctx.emit('node-selected', nodeId);
+      });
+
+      // 더블클릭 → 인라인 편집
+      nodeEl.addEventListener('dblclick', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        ctx.setState({ contextMenu: null });
+        SvgNodeHandler.startInlineEdit(nodeId, nodeEl, ctx);
+      });
+
+      // 우클릭 → 컨텍스트 메뉴
+      nodeEl.addEventListener('contextmenu', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var rect = nodeEl.getBoundingClientRect();
+        var previewRect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+        ctx.setState({
+          contextMenu: {
+            nodeId: nodeId,
+            anchorType: 'node',
+            x: Math.round((previewRect ? rect.left - previewRect.left : rect.left) + rect.width + 10),
+            y: Math.round((previewRect ? rect.top - previewRect.top : rect.top) + Math.min(24, rect.height * 0.5))
+          },
+          edgeToolbar: null
+        });
+      });
+
+      // 선택 상태 클래스 동기화
+      ctx.watchSelection(nodeId, nodeEl);
+    },
+
+    startInlineEdit: function (nodeId, nodeEl, ctx) {
+      var node = ctx.findNode(nodeId);
+      if (!node) return;
+
+      var rect = nodeEl.getBoundingClientRect();
+      var previewRect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+      var localLeft = previewRect ? rect.left - previewRect.left : rect.left;
+      var localTop = previewRect ? rect.top - previewRect.top : rect.top;
+      var model = ctx.getModel ? ctx.getModel() : null;
+      var editText = toEditableText(model, node.text || node.id);
+      var editStyle = isStaticModel(model)
+        ? buildStaticEditStyle(rect, previewRect, editText)
+        : {
+          position: 'absolute',
+          left:  (localLeft + rect.width  / 2 - 70) + 'px',
+          top:   (localTop  + rect.height / 2 - 16) + 'px',
+          zIndex: 1000,
+          width: '240px'
+        };
+      ctx.setState({
+        editingNodeId:  nodeId,
+        editingText:    editText,
+        editingNodeColor: node.fill || '#e2e8f0',
+        editInputStyle: editStyle
+      });
+      ctx.focusEditInput();
+    }
+  };
+
+  global.SvgNodeHandler = SvgNodeHandler;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/actions/SvgEdgeHandler.js ===== */
+(function (global) {
+  'use strict';
+
+  function isGraphModel(model) {
+    return !!(model && (model.headerKeyword === 'graph' || model.profile === 'graph'));
+  }
+
+  function toEditableGraphText(model, text) {
+    if (global.SvgNodeHandler && global.SvgNodeHandler.toEditableText) {
+      return global.SvgNodeHandler.toEditableText(model, text);
+    }
+    return String(text || '').replace(/<br\s*\/?>/gi, '\n');
+  }
+
+  function getGraphEdgeEditBoxSize(text) {
+    var lines = String(text || '').split(/\r\n|\r|\n/).length;
+    if (lines <= 1) {
+      return { width: 260, height: 56 };
+    }
+    return {
+      width: lines >= 4 ? 320 : 300,
+      height: Math.min(130, Math.max(76, lines * 20 + 30))
+    };
+  }
+
+  function normalizeLabelText(text) {
+    return String(text || '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/\u00a0/g, ' ')
+      .split('\n')
+      .map(function (line) { return line.trim(); })
+      .join('\n')
+      .trim();
+  }
+
+  function getLabelText(labelEl) {
+    if (!labelEl) return '';
+    if (typeof labelEl.innerText === 'string' && labelEl.innerText.trim()) return labelEl.innerText;
+    if (typeof labelEl.textContent === 'string' && labelEl.textContent.trim()) return labelEl.textContent;
+    var htmlEl = labelEl.querySelector && labelEl.querySelector('p, span, div');
+    if (htmlEl && typeof htmlEl.innerHTML === 'string') {
+      return htmlEl.innerHTML
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<[^>]+>/g, '');
+    }
+    return '';
+  }
+
+  var SvgEdgeHandler = {
+
+    initGhostOverlay: function (svgEl) {
+      var old = svgEl.querySelector('#edge-ghost-overlay');
+      if (old) old.remove();
+      var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      g.setAttribute('id', 'edge-ghost-overlay');
+      g.style.pointerEvents = 'all';
+      svgEl.appendChild(g);
+      return g;
+    },
+
+    attach: function (svgEl, edgePathEls, positions, ctx) {
+      var overlay = svgEl.querySelector('#edge-ghost-overlay') ||
+        SvgEdgeHandler.initGhostOverlay(svgEl);
+
+      for (var j = 0; j < edgePathEls.length; j++) {
+        if (!edgePathEls[j]) continue;
+        SvgEdgeHandler._attachOne(edgePathEls[j], svgEl, overlay, positions, ctx);
+      }
+
+      // Keep regular flowchart labels passive; graph labels get explicit hit boxes.
+      var allLabels = svgEl.querySelectorAll('.edgeLabel');
+      var model = ctx.getModel ? ctx.getModel() : null;
+      var enableLabelEdit = isGraphModel(model);
+      var edges = (model && model.edges) || [];
+      for (var l = 0; l < allLabels.length; l++) {
+        if (!enableLabelEdit) {
+          allLabels[l].style.pointerEvents = 'none';
+          allLabels[l].style.cursor = 'default';
+        }
+      }
+      if (enableLabelEdit) SvgEdgeHandler._scheduleLabelHits(svgEl, overlay, edges, positions, ctx);
+    },
+
+    _attachOne: function (edgeData, svgEl, overlay, positions, ctx) {
+      var pathEl = edgeData.path;
+      if (!pathEl) return;
+      var idx = edgeData.index;
+      var edgeEl = edgeData.el || pathEl;
+
+      ctx.watchEdgeSelection(idx, edgeEl);
+
+      var ghost = SvgEdgeHandler._makeGhost(pathEl, svgEl, overlay);
+      if (!ghost) {
+        edgeData.hit = pathEl;
+        SvgEdgeHandler._bindEdgeEvents(pathEl, pathEl, edgeEl, idx, ctx);
+        return;
+      }
+
+      edgeData.hit = ghost;
+      SvgEdgeHandler._bindEdgeEvents(ghost, pathEl, edgeEl, idx, ctx);
+    },
+
+    _makeGhost: function (pathEl, svgEl, overlay) {
+      if (typeof pathEl.getTotalLength === 'function') {
+        try {
+          var len = pathEl.getTotalLength();
+          if (len > 1) {
+            var pathCTM = pathEl.getScreenCTM();
+            var svgCTM  = svgEl.getScreenCTM();
+            if (pathCTM && svgCTM) {
+              var invSvg  = svgCTM.inverse();
+              var samples = Math.max(8, Math.ceil(len / 12));
+              var pts = [];
+              for (var i = 0; i <= samples; i++) {
+                var lp = pathEl.getPointAtLength((i / samples) * len);
+                var sp = svgEl.createSVGPoint();
+                sp.x = lp.x;
+                sp.y = lp.y;
+                var root = sp.matrixTransform(pathCTM).matrixTransform(invSvg);
+                pts.push(root.x.toFixed(2) + ',' + root.y.toFixed(2));
+              }
+              if (pts.length) {
+                var poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+                poly.setAttribute('points', pts.join(' '));
+                SvgEdgeHandler._styleGhost(poly);
+                overlay.appendChild(poly);
+                return poly;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      try {
+        var d = pathEl.getAttribute('d');
+        if (!d) return null;
+
+        var transforms = [];
+        var node = pathEl.parentNode;
+        while (node && node !== svgEl) {
+          var t = node.getAttribute && node.getAttribute('transform');
+          if (t) transforms.unshift(t);
+          node = node.parentNode;
+        }
+
+        var ghostPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        ghostPath.setAttribute('d', d);
+        if (transforms.length) {
+          ghostPath.setAttribute('transform', transforms.join(' '));
+        }
+        SvgEdgeHandler._styleGhost(ghostPath);
+        overlay.appendChild(ghostPath);
+        return ghostPath;
+      } catch (e) {
+        return null;
+      }
+    },
+
+    _styleGhost: function (el) {
+      el.setAttribute('stroke', '#000');
+      el.setAttribute('stroke-opacity', '0.003');
+      el.setAttribute('stroke-width', '12');
+      el.setAttribute('stroke-linecap', 'round');
+      el.setAttribute('stroke-linejoin', 'round');
+      el.setAttribute('fill', 'none');
+      el.style.cursor = 'pointer';
+      el.style.pointerEvents = 'stroke';
+    },
+
+    _collectLabelTargets: function (svgEl) {
+      var foreignObjects = svgEl.querySelectorAll('g.edgeLabel foreignObject, .edgeLabel foreignObject');
+      var out = [];
+      for (var i = 0; i < foreignObjects.length; i++) {
+        var fo = foreignObjects[i];
+        var labelEl = (fo.querySelector && (fo.querySelector('span.edgeLabel') || fo.querySelector('.edgeLabel') || fo.querySelector('p'))) || fo;
+        var text = normalizeLabelText(getLabelText(labelEl));
+        if (!text) continue;
+        var hitEl = (labelEl.closest && labelEl.closest('.labelBkg')) ||
+          (fo.querySelector && (fo.querySelector('.labelBkg') || fo.querySelector('span.edgeLabel') || fo.querySelector('p'))) ||
+          fo;
+        out.push({ labelEl: labelEl, hitEl: hitEl });
+      }
+      if (!out.length) {
+        var labels = svgEl.querySelectorAll('span.edgeLabel');
+        for (var j = 0; j < labels.length; j++) {
+          if (!normalizeLabelText(getLabelText(labels[j]))) continue;
+          out.push({
+            labelEl: labels[j],
+            hitEl: (labels[j].closest && labels[j].closest('.labelBkg')) || labels[j]
+          });
+        }
+      }
+      return out;
+    },
+
+    _mapLabelEdgeIndices: function (labelTargets, edges) {
+      var out = [];
+      var used = {};
+      var fallback = [];
+      for (var e = 0; e < edges.length; e++) {
+        if (edges[e] && String(edges[e].text || '').trim()) fallback.push(e);
+      }
+
+      for (var l = 0; l < labelTargets.length; l++) {
+        var labelText = normalizeLabelText(getLabelText(labelTargets[l].labelEl));
+        var found = -1;
+        if (labelText) {
+          for (var i = 0; i < edges.length; i++) {
+            if (used[i] || !edges[i]) continue;
+            if (normalizeLabelText(edges[i].text) === labelText) {
+              found = i;
+              break;
+            }
+          }
+        }
+        if (found === -1 && fallback[l] !== undefined) found = fallback[l];
+        if (found === -1 && edges[l]) found = l;
+        if (found !== -1) used[found] = true;
+        out.push(found);
+      }
+      return out;
+    },
+
+    _getLabelScreenRect: function (labelEl) {
+      if (!labelEl || !labelEl.getBoundingClientRect) return null;
+      var rect = labelEl.getBoundingClientRect();
+      if ((!rect || rect.width <= 0 || rect.height <= 0) && labelEl.querySelector) {
+        var child = labelEl.querySelector('.labelBkg, span.edgeLabel, p, foreignObject, rect, text, .label');
+        if (child && child.getBoundingClientRect) rect = child.getBoundingClientRect();
+      }
+      return rect && rect.width > 0 && rect.height > 0 ? rect : null;
+    },
+
+    _screenRectToSvgRect: function (svgEl, rect, pad) {
+      if (!svgEl || !rect || !svgEl.createSVGPoint) return null;
+      var ctm = svgEl.getScreenCTM && svgEl.getScreenCTM();
+      if (!ctm) return null;
+      var inv = ctm.inverse();
+      var corners = [
+        [rect.left - pad, rect.top - pad],
+        [rect.right + pad, rect.top - pad],
+        [rect.right + pad, rect.bottom + pad],
+        [rect.left - pad, rect.bottom + pad]
+      ];
+      var minX = Infinity;
+      var minY = Infinity;
+      var maxX = -Infinity;
+      var maxY = -Infinity;
+      for (var i = 0; i < corners.length; i++) {
+        var pt = svgEl.createSVGPoint();
+        pt.x = corners[i][0];
+        pt.y = corners[i][1];
+        var svgPt = pt.matrixTransform(inv);
+        minX = Math.min(minX, svgPt.x);
+        minY = Math.min(minY, svgPt.y);
+        maxX = Math.max(maxX, svgPt.x);
+        maxY = Math.max(maxY, svgPt.y);
+      }
+      if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) return null;
+      return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+    },
+
+    _clearLabelHits: function (overlay) {
+      if (!overlay || !overlay.querySelectorAll) return;
+      var hits = overlay.querySelectorAll('.edge-label-hit');
+      for (var i = 0; i < hits.length; i++) {
+        if (hits[i].parentNode) hits[i].parentNode.removeChild(hits[i]);
+      }
+    },
+
+    _scheduleLabelHits: function (svgEl, overlay, edges, positions, ctx) {
+      SvgEdgeHandler._attachLabelHits(svgEl, overlay, edges, positions, ctx);
+      if (global.requestAnimationFrame) {
+        global.requestAnimationFrame(function () {
+          global.requestAnimationFrame(function () {
+            SvgEdgeHandler._attachLabelHits(svgEl, overlay, edges, positions, ctx);
+          });
+        });
+      }
+    },
+
+    _attachLabelHits: function (svgEl, overlay, edges, positions, ctx) {
+      SvgEdgeHandler._clearLabelHits(overlay);
+      var labelTargets = SvgEdgeHandler._collectLabelTargets(svgEl);
+      if (!labelTargets.length) return;
+      var indices = SvgEdgeHandler._mapLabelEdgeIndices(labelTargets, edges);
+      for (var i = 0; i < labelTargets.length; i++) {
+        var idx = indices[i];
+        if (idx === undefined || idx < 0 || !edges[idx]) continue;
+        var screenRect = SvgEdgeHandler._getLabelScreenRect(labelTargets[i].hitEl);
+        var svgRect = SvgEdgeHandler._screenRectToSvgRect(svgEl, screenRect, 2);
+        if (!svgRect) continue;
+        SvgEdgeHandler._makeLabelHit(svgEl, overlay, svgRect, idx, positions, ctx);
+      }
+    },
+
+    _makeLabelHit: function (svgEl, overlay, rect, idx, positions, ctx) {
+      var hit = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      hit.setAttribute('class', 'edge-label-hit');
+      hit.setAttribute('data-edge-index', String(idx));
+      hit.setAttribute('x', rect.x.toFixed(2));
+      hit.setAttribute('y', rect.y.toFixed(2));
+      hit.setAttribute('width', rect.width.toFixed(2));
+      hit.setAttribute('height', rect.height.toFixed(2));
+      hit.setAttribute('fill', '#000');
+      hit.setAttribute('fill-opacity', '0.003');
+      hit.setAttribute('stroke', 'none');
+      hit.style.cursor = 'pointer';
+      hit.style.pointerEvents = 'all';
+      hit.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        SvgEdgeHandler.startInlineEdit(idx, e.clientX, e.clientY, svgEl, positions, ctx);
+      });
+      overlay.appendChild(hit);
+    },
+
+    _bindEdgeEvents: function (hitEl, pathEl, edgeEl, idx, ctx) {
+      hitEl.addEventListener('mouseenter', function () {
+        edgeEl.classList.add('edge-hovered');
+        hitEl.setAttribute('stroke-opacity', '0.08');
+        hitEl.setAttribute('stroke', '#4f46e5');
+      });
+
+      hitEl.addEventListener('mouseleave', function () {
+        var selectedEdgeIndex = ctx.getState().selectedEdgeIndex;
+        if (selectedEdgeIndex !== idx) {
+          edgeEl.classList.remove('edge-hovered');
+        }
+        hitEl.setAttribute('stroke', '#000');
+        hitEl.setAttribute('stroke-opacity', '0.003');
+      });
+
+      hitEl.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var previewRect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+        var localX = Math.round(previewRect ? e.clientX - previewRect.left : e.clientX);
+        var localY = Math.round(previewRect ? e.clientY - previewRect.top : e.clientY);
+        ctx.setState({
+          selectedEdgeIndex: idx,
+          selectedNodeId: null,
+          contextMenu: null,
+          flowEdgeColorPicker: false,
+          flowEdgeBodyPicker: false,
+          flowEdgeHeadPicker: false,
+          edgeToolbar: {
+            x: localX,
+            y: localY,
+            edgeIndex: idx
+          }
+        });
+        ctx.emit('edge-selected', idx);
+      });
+    },
+
+    startInlineEdit: function (index, clientX, clientY, svgEl, positions, ctx) {
+      var model = ctx.getModel();
+      var edge = model.edges[index];
+      if (!edge) return;
+
+      var graphMode = isGraphModel(model);
+      var editText = graphMode ? toEditableGraphText(model, edge.text || '') : (edge.text || '');
+      var editBox = graphMode ? getGraphEdgeEditBoxSize(editText) : { width: 160, height: 0 };
+      var x = clientX - (graphMode ? Math.round(editBox.width / 2) : 70);
+      var y = clientY - (graphMode ? Math.round(editBox.height / 2) : 24);
+      var previewRect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+      if (previewRect) {
+        x = clientX - previewRect.left - (graphMode ? Math.round(editBox.width / 2) : 70);
+        y = clientY - previewRect.top - (graphMode ? Math.round(editBox.height / 2) : 24);
+      }
+
+      ctx.setState({
+        selectedEdgeIndex: index,
+        selectedNodeId: null,
+        edgeToolbar: null,
+        editingEdgeIndex: index,
+        editingEdgeText: editText,
+        editingEdgeColor: edge.color || '#5c7ab0',
+        edgeEditInputStyle: {
+          position: 'absolute',
+          left: x + 'px',
+          top: y + 'px',
+          zIndex: 1000,
+          width: graphMode ? editBox.width + 'px' : '160px',
+          height: graphMode ? editBox.height + 'px' : undefined
+        }
+      });
+      ctx.focusEdgeEditInput();
+    }
+  };
+
+  global.SvgEdgeHandler = SvgEdgeHandler;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/actions/PortDragHandler.js ===== */
+(function (global) {
+  'use strict';
+
+  var SIDES = ['top', 'right', 'bottom', 'left'];
+
+  var PortDragHandler = {
+    _overlay:   null,
+    _dragLine:  null,
+
+    // 매 렌더 후 SVG가 DOM에 붙은 뒤 한 번 호출
+    initOverlay: function (svgEl) {
+      // 포트는 엣지 보조 클릭선보다 항상 위에서 클릭돼야 하므로 전용 레이어를 둔다.
+      var old = svgEl.querySelector('#conn-port-overlay');
+      if (old) old.remove();
+
+      var overlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      overlay.setAttribute('id', 'conn-port-overlay');
+      // 그룹 전체가 이벤트를 먹지 않고, 실제 포트 클릭 타깃만 이벤트를 받게 한다.
+      overlay.style.pointerEvents = 'none';
+      svgEl.appendChild(overlay);
+      this._overlay = overlay;
+
+      var dragLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      dragLine.setAttribute('class', 'drag-edge-line');
+      dragLine.setAttribute('stroke', '#818cf8');
+      dragLine.setAttribute('stroke-width', '2.5');
+      dragLine.setAttribute('stroke-dasharray', '6,4');
+      dragLine.style.display   = 'none';
+      dragLine.style.pointerEvents = 'none';
+      overlay.appendChild(dragLine);
+      this._dragLine = dragLine;
+    },
+
+    // 노드 주변에 4방향 포트 표시
+    showPorts: function (svgEl, nodeId, positions, ctx) {
+      if (!this._overlay) return;
+      // hover 중 다른 레이어가 추가돼도 포트가 항상 최상단에 오도록 재부착한다.
+      this._bringOverlayToFront(svgEl);
+      this.clearPorts();
+
+      var self = this;
+
+      for (var s = 0; s < SIDES.length; s++) {
+        (function (side) {
+          var pt = SvgPositionTracker.getPortPosition(positions, nodeId, side);
+
+          var setHovered = function (hovered) {
+            circle.classList.toggle('port-hovered', hovered);
+            glow.classList.toggle('port-hovered', hovered);
+          };
+
+          var onPointerDown = function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            self._startDrag(svgEl, nodeId, pt, positions, ctx);
+          };
+
+          var onPointerEnter = function () {
+            setHovered(true);
+            ctx.setState({ portDragging: ctx.getState().portDragging }); // hover 유지
+          };
+
+          var onPointerLeave = function () {
+            setHovered(false);
+          };
+
+          // 보이는 포트 원은 작게 유지하고,
+          // 실제 클릭은 더 큰 보이지 않는 hit 원이 담당한다.
+          var hit = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          hit.setAttribute('class', 'conn-port-hit');
+          hit.setAttribute('cx', pt.x);
+          hit.setAttribute('cy', pt.y);
+          hit.setAttribute('r', '11');
+          hit.setAttribute('data-node-id', nodeId);
+          hit.setAttribute('data-side', side);
+          hit.style.cursor = 'crosshair';
+          hit.style.pointerEvents = 'all';
+          self._overlay.appendChild(hit);
+
+          // glow 원
+          var glow = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          glow.setAttribute('class', 'conn-port-glow');
+          glow.setAttribute('cx', pt.x);
+          glow.setAttribute('cy', pt.y);
+          glow.setAttribute('r', '10');
+          glow.style.pointerEvents = 'none';
+          self._overlay.appendChild(glow);
+
+          // 보이는 포트 원
+          var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          circle.setAttribute('class', 'conn-port');
+          circle.setAttribute('cx', pt.x);
+          circle.setAttribute('cy', pt.y);
+          circle.setAttribute('r', '5');
+          circle.setAttribute('data-node-id', nodeId);
+          circle.setAttribute('data-side', side);
+          circle.style.cursor = 'crosshair';
+          circle.style.pointerEvents = 'none';
+          self._overlay.appendChild(circle);
+
+          hit.addEventListener('mousedown', onPointerDown);
+          hit.addEventListener('mouseenter', onPointerEnter);
+          hit.addEventListener('mouseleave', onPointerLeave);
+        })(SIDES[s]);
+      }
+    },
+
+    _startDrag: function (svgEl, fromNodeId, fromPt, positions, ctx) {
+      var self = this;
+      // 드래그 시작 직전에도 레이어를 맨 위로 올려 엣지 클릭 영역과 충돌하지 않게 한다.
+      self._bringOverlayToFront(svgEl);
+      ctx.setState({ portDragging: true });
+
+      self._dragLine.setAttribute('x1', fromPt.x);
+      self._dragLine.setAttribute('y1', fromPt.y);
+      self._dragLine.setAttribute('x2', fromPt.x);
+      self._dragLine.setAttribute('y2', fromPt.y);
+      self._dragLine.style.display = '';
+
+      var currentTarget = null;
+      var pointerClientX = 0;
+      var pointerClientY = 0;
+      var autoPanFrame = null;
+
+      var updateDragAtClient = function (clientX, clientY) {
+        var svgPt = SvgPositionTracker.getSVGPoint(svgEl, clientX, clientY);
+        self._dragLine.setAttribute('x2', svgPt.x);
+        self._dragLine.setAttribute('y2', svgPt.y);
+
+        var hit = self._findHitNode(svgPt.x, svgPt.y, fromNodeId, positions);
+        if (hit !== currentTarget) {
+          if (currentTarget) self._clearTargetHighlight(svgEl, currentTarget);
+          currentTarget = hit;
+          if (hit) self._highlightTarget(svgEl, hit);
+        }
+      };
+
+      var getAutoPanDelta = function (clientX, clientY) {
+        var rect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+        var threshold = 56;
+        var maxStep = 8;
+        var dx = 0;
+        var dy = 0;
+        var progress = 0;
+
+        if (!rect) return { dx: 0, dy: 0 };
+
+        if (clientX <= rect.left + threshold) {
+          progress = Math.min(1, (rect.left + threshold - clientX) / threshold);
+          dx = Math.ceil(progress * maxStep);
+        } else if (clientX >= rect.right - threshold) {
+          progress = Math.min(1, (clientX - (rect.right - threshold)) / threshold);
+          dx = -Math.ceil(progress * maxStep);
+        }
+
+        if (clientY <= rect.top + threshold) {
+          progress = Math.min(1, (rect.top + threshold - clientY) / threshold);
+          dy = Math.ceil(progress * maxStep);
+        } else if (clientY >= rect.bottom - threshold) {
+          progress = Math.min(1, (clientY - (rect.bottom - threshold)) / threshold);
+          dy = -Math.ceil(progress * maxStep);
+        }
+
+        return { dx: dx, dy: dy };
+      };
+
+      var stopAutoPan = function () {
+        if (!autoPanFrame) return;
+        cancelAnimationFrame(autoPanFrame);
+        autoPanFrame = null;
+      };
+
+      var autoPanTick = function () {
+        autoPanFrame = null;
+        if (!ctx.getState().portDragging) return;
+
+        var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+        if (!delta.dx && !delta.dy) return;
+
+        if (ctx.panPreviewBy) {
+          ctx.panPreviewBy(delta.dx, delta.dy);
+          updateDragAtClient(pointerClientX, pointerClientY);
+        }
+
+        autoPanFrame = requestAnimationFrame(autoPanTick);
+      };
+
+      var scheduleAutoPan = function () {
+        if (autoPanFrame) return;
+        var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+        if (!delta.dx && !delta.dy) return;
+        autoPanFrame = requestAnimationFrame(autoPanTick);
+      };
+
+      var startScreenPt = SvgPositionTracker.svgToScreen(svgEl, fromPt.x, fromPt.y);
+      pointerClientX = startScreenPt.x;
+      pointerClientY = startScreenPt.y;
+
+      var onMove = function (me) {
+        pointerClientX = me.clientX;
+        pointerClientY = me.clientY;
+        updateDragAtClient(pointerClientX, pointerClientY);
+        scheduleAutoPan();
+      };
+
+      var onUp = function (me) {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+
+        stopAutoPan();
+        self._dragLine.style.display = 'none';
+        if (currentTarget) self._clearTargetHighlight(svgEl, currentTarget);
+        ctx.setState({ portDragging: false });
+
+        var svgPt = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
+        // onUp 시에는 excludeId=null 로 source 노드도 포함해 self-loop를 허용한다.
+        var target = self._findHitNode(svgPt.x, svgPt.y, null, positions);
+        if (target) {
+          ctx.emit('add-edge', { from: fromNodeId, to: target });
+        }
+
+        // 여전히 hover 중이면 원래 노드 포트를 다시 표시
+        setTimeout(function () {
+          if (ctx.getState().hoveredNodeId === fromNodeId) {
+            self.showPorts(svgEl, fromNodeId, positions, ctx);
+          }
+        }, 50);
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    },
+
+    // 포트 드래그 중에는 target node를 약간 관대하게 판정한다.
+    // 정확히 bbox 안이 아니어도 center 근처면 snap 대상으로 본다.
+    // excludeId가 null이면 모든 노드를 검색 대상으로 포함한다 (self-loop 판정 시 사용).
+    _findHitNode: function (x, y, excludeId, positions) {
+      var SNAP = 28;
+      var best = null;
+      var bestDist = Infinity;
+
+      for (var nodeId in positions) {
+        if (excludeId !== null && nodeId === excludeId) continue;
+        var p = positions[nodeId];
+
+        // bbox 안이면 즉시 target으로 인정
+        if (x >= p.origTx + p.bboxX - 4 &&
+            x <= p.origTx + p.bboxX + p.width  + 4 &&
+            y >= p.origTy + p.bboxY - 4 &&
+            y <= p.origTy + p.bboxY + p.height + 4) {
+          return nodeId;
+        }
+
+        // 중심 근처면 snap 후보로 인정
+        var d = Math.sqrt((x - p.cx) * (x - p.cx) + (y - p.cy) * (y - p.cy));
+        if (d < SNAP && d < bestDist) {
+          bestDist = d;
+          best = nodeId;
+        }
+      }
+
+      return best;
+    },
+
+    _highlightTarget: function (svgEl, nodeId) {
+      // Mermaid 11의 prefix 포함 id도 처리하는 extractNodeId를 사용한다.
+      var all = svgEl.querySelectorAll('.node');
+      for (var j = 0; j < all.length; j++) {
+        if (SvgPositionTracker.extractNodeId(all[j]) === nodeId) {
+          all[j].classList.add('port-drag-target');
+          return;
+        }
+      }
+    },
+
+    _clearTargetHighlight: function (svgEl, nodeId) {
+      var targets = svgEl.querySelectorAll('.port-drag-target');
+      for (var i = 0; i < targets.length; i++) {
+        targets[i].classList.remove('port-drag-target');
+      }
+    },
+
+    clearPorts: function () {
+      if (!this._overlay) return;
+      var ports = this._overlay.querySelectorAll('.conn-port, .conn-port-glow, .conn-port-hit');
+      for (var i = 0; i < ports.length; i++) ports[i].remove();
+    },
+
+    _bringOverlayToFront: function (svgEl) {
+      // appendChild를 다시 호출하면 SVG 내에서 가장 마지막 형제로 이동하므로
+      // 레이어상 최상단으로 올릴 수 있다.
+      if (this._overlay && this._overlay.parentNode === svgEl) {
+        svgEl.appendChild(this._overlay);
+      }
+    }
+  };
+
+  global.PortDragHandler = PortDragHandler;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/actions/SequencePositionTracker.js ===== */
+(function (global) {
+  'use strict';
+
+  function normalizeText(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function readLabel(el) {
+    if (!el) return '';
+    var textEl = el.querySelector ? el.querySelector('text, tspan') : null;
+    if (!textEl && el.tagName && /^(text|tspan)$/i.test(el.tagName)) textEl = el;
+    return normalizeText(textEl ? textEl.textContent : el.textContent);
+  }
+
+  function bboxCenterY(el) {
+    if (!el || !el.getBBox) return null;
+    try {
+      var box = el.getBBox();
+      return box.y + box.height / 2;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function collectUniqueMessageTextEls(svgEl) {
+    var raw = svgEl.querySelectorAll('.messageText, text[class*="messageText"]');
+    var results = [];
+    var seenTextNodes = [];
+
+    for (var i = 0; i < raw.length; i++) {
+      var candidate = raw[i];
+      var textEl = null;
+
+      if (candidate.tagName && /^(text|tspan)$/i.test(candidate.tagName)) {
+        textEl = candidate;
+      } else if (candidate.querySelector) {
+        textEl = candidate.querySelector('text, tspan');
+      }
+
+      if (!textEl || seenTextNodes.indexOf(textEl) !== -1) continue;
+      seenTextNodes.push(textEl);
+      results.push(textEl);
+    }
+
+    return results;
+  }
+
+  function collectParticipantCandidateEls(svgEl) {
+    var raw = svgEl.querySelectorAll('.actor, .actor-top, .actor-bottom, g[class*="actor"]');
+    var results = [];
+    var seen = [];
+
+    for (var i = 0; i < raw.length; i++) {
+      if (seen.indexOf(raw[i]) !== -1) continue;
+      seen.push(raw[i]);
+      results.push(raw[i]);
+    }
+
+    return results;
+  }
+
+  var SequencePositionTracker = {
+    collectParticipants: function (svgEl, model) {
+      var participants = model.participants || [];
+      var candidates = collectParticipantCandidateEls(svgEl);
+      var byId = {};
+      var used = [];
+
+      for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        if (!el.getBBox) continue;
+        var label = readLabel(el);
+        var bbox;
+        try { bbox = el.getBBox(); } catch (e) { continue; }
+        if (!bbox || !bbox.width || !bbox.height) continue;
+
+        for (var p = 0; p < participants.length; p++) {
+          var participant = participants[p];
+          if (used.indexOf(p) !== -1) continue;
+          if (label !== normalizeText(participant.label || participant.id)) continue;
+          byId[participant.id] = {
+            id: participant.id,
+            label: participant.label || participant.id,
+            el: el,
+            bbox: bbox,
+            topBox: bbox,
+            bottomBox: null,
+            cx: bbox.x + bbox.width / 2,
+            handleY: bbox.y + bbox.height + 22,
+            lifelineTopY: bbox.y + bbox.height,
+            lifelineBottomY: bbox.y + bbox.height + 260
+          };
+          used.push(p);
+          break;
+        }
+      }
+
+      // DOM 레이블 매칭이 실패한 경우 마지막 보정으로 순서 기반 대응을 시도한다.
+      var fallbackCandidates = [];
+      for (var j = 0; j < candidates.length; j++) {
+        if (candidates[j].classList && candidates[j].classList.contains('actor-bottom')) continue;
+        fallbackCandidates.push(candidates[j]);
+      }
+
+      for (var k = 0; k < participants.length; k++) {
+        var current = participants[k];
+        if (byId[current.id]) continue;
+        var fallback = fallbackCandidates[k];
+        if (!fallback || !fallback.getBBox) continue;
+        var fb;
+        try { fb = fallback.getBBox(); } catch (e2) { continue; }
+        byId[current.id] = {
+          id: current.id,
+          label: current.label || current.id,
+          el: fallback,
+          bbox: fb,
+          topBox: fb,
+          bottomBox: null,
+          cx: fb.x + fb.width / 2,
+          handleY: fb.y + fb.height + 22,
+          lifelineTopY: fb.y + fb.height,
+          lifelineBottomY: fb.y + fb.height + 260
+        };
+      }
+
+      // Mermaid 테마/버전에 따라 actor-bottom 클래스가 없을 수 있으므로
+      // 같은 라벨의 박스들 중 가장 위/아래를 직접 찾아 top/bottom box로 확정한다.
+      for (var id in byId) {
+        var matchedBoxes = [];
+        for (var c = 0; c < candidates.length; c++) {
+          var candidateEl = candidates[c];
+          if (normalizeText(readLabel(candidateEl)) !== normalizeText(byId[id].label)) continue;
+          try {
+            matchedBoxes.push(candidateEl.getBBox());
+          } catch (e3) {}
+        }
+
+        if (!matchedBoxes.length) continue;
+        matchedBoxes.sort(function (a, b) { return a.y - b.y; });
+        byId[id].topBox = matchedBoxes[0];
+        byId[id].bottomBox = matchedBoxes[matchedBoxes.length - 1];
+        byId[id].lifelineTopY = byId[id].topBox.y + byId[id].topBox.height;
+        byId[id].lifelineBottomY = byId[id].bottomBox.y;
+      }
+
+      return byId;
+    },
+
+    collectParticipantTargets: function (svgEl, model) {
+      var participants = model.participants || [];
+      var candidates = collectParticipantCandidateEls(svgEl);
+      var targets = [];
+
+      for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        var label = readLabel(el);
+        if (!label) continue;
+
+        for (var p = 0; p < participants.length; p++) {
+          var participant = participants[p];
+          if (normalizeText(participant.label || participant.id) !== label) continue;
+          targets.push({
+            id: participant.id,
+            label: participant.label || participant.id,
+            el: el
+          });
+          break;
+        }
+      }
+
+      return targets;
+    },
+
+    collectMessages: function (svgEl, model) {
+      var messages = model.messages || [];
+      var textEls = collectUniqueMessageTextEls(svgEl);
+      var lineCandidates = svgEl.querySelectorAll(
+        '.messageLine0, .messageLine1, .messageLine2,' +
+        'path[class*="messageLine"], line[class*="messageLine"]'
+      );
+      var results = [];
+      var usedLineIdx = {};
+      var textOccurrences = {};
+
+      for (var i = 0; i < messages.length; i++) {
+        var messageText = normalizeText(messages[i].text);
+        var occurrence = textOccurrences[messageText] || 0;
+        var textEl = null;
+        var lineEl = null;
+        var bbox = null;
+        var hitBox = null;
+
+        for (var t = 0, seen = 0; t < textEls.length; t++) {
+          if (normalizeText(textEls[t].textContent) !== messageText) continue;
+          if (seen === occurrence) {
+            textEl = textEls[t];
+            break;
+          }
+          seen++;
+        }
+
+        if (!textEl) {
+          textEl = textEls[i] || null;
+        }
+        textOccurrences[messageText] = occurrence + 1;
+
+        // Mermaid sequence SVG는 텍스트 순서는 비교적 안정적이지만,
+        // 선(path/line) 순서는 activation 등과 섞여 흔들릴 수 있다.
+        // 그래서 텍스트를 기준으로 같은 높이의 선을 찾아 매칭한다.
+        if (textEl) {
+          var textY = bboxCenterY(textEl);
+          var bestIdx = -1;
+          var bestDist = Infinity;
+
+          for (var j = 0; j < lineCandidates.length; j++) {
+            if (usedLineIdx[j]) continue;
+            var candidateY = bboxCenterY(lineCandidates[j]);
+            if (candidateY === null || textY === null) continue;
+            var dist = Math.abs(candidateY - textY);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestIdx = j;
+            }
+          }
+
+          if (bestIdx !== -1) {
+            lineEl = lineCandidates[bestIdx];
+            usedLineIdx[bestIdx] = true;
+          }
+        }
+
+        if (!lineEl) {
+          lineEl = lineCandidates[i] || null;
+        }
+
+        try {
+          if (textEl && textEl.getBBox && lineEl && lineEl.getBBox) {
+            var tb = textEl.getBBox();
+            var lb = lineEl.getBBox();
+            var minX = Math.min(tb.x, lb.x);
+            var minY = Math.min(tb.y, lb.y);
+            var maxX = Math.max(tb.x + tb.width, lb.x + lb.width);
+            var maxY = Math.max(tb.y + tb.height, lb.y + lb.height);
+            bbox = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+            hitBox = {
+              x: minX - 8,
+              y: (tb.y + tb.height / 2) - 12,
+              width: (maxX - minX) + 16,
+              height: 24
+            };
+          } else if (textEl && textEl.getBBox) {
+            bbox = textEl.getBBox();
+            hitBox = {
+              x: bbox.x - 8,
+              y: (bbox.y + bbox.height / 2) - 12,
+              width: bbox.width + 16,
+              height: 24
+            };
+          } else if (lineEl && lineEl.getBBox) {
+            bbox = lineEl.getBBox();
+            hitBox = {
+              x: bbox.x - 8,
+              y: (bbox.y + bbox.height / 2) - 12,
+              width: bbox.width + 16,
+              height: 24
+            };
+          }
+        } catch (e) {
+          bbox = null;
+          hitBox = null;
+        }
+
+        results.push({
+          index: i,
+          textEl: textEl,
+          lineEl: lineEl,
+          bbox: bbox,
+          hitBox: hitBox,
+          rowY: hitBox ? (hitBox.y + hitBox.height / 2) : (bbox ? (bbox.y + bbox.height / 2) : null)
+        });
+      }
+
+      return results;
+    },
+
+    collectInsertSlots: function (participantMap, messages, notes, model) {
+      var stmts = (model && model.statements) || [];
+
+      // 각 message의 statement index 사전 계산
+      var msgStmtIndices = [];
+      var mc = 0;
+      for (var s = 0; s < stmts.length; s++) {
+        if (stmts[s] && stmts[s].type === 'message') {
+          msgStmtIndices[mc] = s;
+          mc++;
+        }
+      }
+
+      // message와 note를 Y 기준으로 합친 이벤트 목록 생성
+      var events = [];
+      for (var i = 0; i < messages.length; i++) {
+        if (messages[i] && messages[i].rowY !== null && messages[i].rowY !== undefined) {
+          var mIdx = messages[i].index !== undefined ? messages[i].index : i;
+          events.push({
+            y: messages[i].rowY,
+            isMessage: true,
+            statementIndex: msgStmtIndices[mIdx] !== undefined ? msgStmtIndices[mIdx] : stmts.length
+          });
+        }
+      }
+      for (var n = 0; n < (notes || []).length; n++) {
+        var nb = notes[n] && notes[n].bbox;
+        if (nb) {
+          events.push({
+            y: nb.y + nb.height / 2,
+            isMessage: false,
+            statementIndex: notes[n].statementIndex
+          });
+        }
+      }
+      events.sort(function (a, b) { return a.y - b.y; });
+
+      // 각 이벤트 앞에 있는 message 수 계산
+      var msgCountBefore = [];
+      var runCount = 0;
+      for (var e = 0; e < events.length; e++) {
+        msgCountBefore.push(runCount);
+        if (events[e].isMessage) runCount++;
+      }
+      var totalMessages = runCount;
+
+      var ids = Object.keys(participantMap);
+      if (!ids.length) return [];
+      var sample = participantMap[ids[0]];
+      if (!sample) return [];
+
+      var slots = [];
+      var topY = sample.lifelineTopY + 18;
+      var bottomY = sample.lifelineBottomY - 18;
+      var MIN_SLOT_GAP = 34;
+
+      if (!events.length) {
+        slots.push({ y: (topY + bottomY) / 2, insertIndex: 0, stmtInsertAt: 0 });
+        return slots;
+      }
+
+      // 맨 위 슬롯: 첫 이벤트 앞
+      slots.push({
+        y: Math.max(topY + 12, events[0].y - 48),
+        insertIndex: 0,
+        stmtInsertAt: events[0].statementIndex
+      });
+
+      // 이벤트 사이 슬롯
+      // 두 이벤트 사이에 end 문이 있으면 블록 안/밖 슬롯 두 개 생성
+      for (var r = 0; r < events.length - 1; r++) {
+        var midY = (events[r].y + events[r + 1].y) / 2;
+        var lastEndIdx = -1;
+        for (var si = events[r].statementIndex + 1; si < events[r + 1].statementIndex; si++) {
+          if (stmts[si] && stmts[si].type === 'end') {
+            lastEndIdx = si; // 마지막 end → outermost block 직전
+          }
+        }
+
+        if (lastEndIdx !== -1) {
+          // 블록 경계: 안쪽(end 앞)과 바깥쪽(다음 이벤트 앞) 두 슬롯
+          slots.push({
+            y: midY - 20,
+            insertIndex: msgCountBefore[r + 1],
+            stmtInsertAt: lastEndIdx,
+            _nomerge: true
+          });
+          slots.push({
+            y: midY + 20,
+            insertIndex: msgCountBefore[r + 1],
+            stmtInsertAt: events[r + 1].statementIndex,
+            _nomerge: true
+          });
+        } else {
+          slots.push({
+            y: midY,
+            insertIndex: msgCountBefore[r + 1],
+            stmtInsertAt: events[r + 1].statementIndex
+          });
+        }
+      }
+
+      // 맨 아래 슬롯: 마지막 이벤트 뒤
+      slots.push({
+        y: Math.min(bottomY - 12, events[events.length - 1].y + 48),
+        insertIndex: totalMessages,
+        stmtInsertAt: events[events.length - 1].statementIndex + 1
+      });
+
+      if (slots.length <= 2) return slots;
+
+      // 중간 슬롯 간격 병합 (맨 위/아래 및 _nomerge 플래그 슬롯은 유지)
+      var deduped = [slots[0]];
+      for (var d = 1; d < slots.length - 1; d++) {
+        var cur = slots[d];
+        var prev = deduped[deduped.length - 1];
+        if (!cur._nomerge && !prev._nomerge && prev !== slots[0] && Math.abs(cur.y - prev.y) < MIN_SLOT_GAP) {
+          prev.y = (prev.y + cur.y) / 2;
+          prev.insertIndex = Math.max(prev.insertIndex, cur.insertIndex);
+          prev.stmtInsertAt = Math.max(prev.stmtInsertAt, cur.stmtInsertAt);
+        } else {
+          deduped.push(cur);
+        }
+      }
+      deduped.push(slots[slots.length - 1]);
+
+      if (deduped.length >= 2) {
+        var first = deduped[0], second = deduped[1];
+        if (Math.abs(second.y - first.y) < MIN_SLOT_GAP) {
+          first.y = Math.max(topY + 8, second.y - MIN_SLOT_GAP);
+        }
+      }
+      if (deduped.length >= 2) {
+        var last = deduped[deduped.length - 1], beforeLast = deduped[deduped.length - 2];
+        if (Math.abs(last.y - beforeLast.y) < MIN_SLOT_GAP) {
+          last.y = Math.min(bottomY - 8, beforeLast.y + MIN_SLOT_GAP);
+        }
+      }
+
+      return deduped;
+    },
+
+    collectNotePositions: function (svgEl, model) {
+      var statements = (model && model.statements) || [];
+      var noteStatements = [];
+      for (var i = 0; i < statements.length; i++) {
+        if (statements[i] && statements[i].type === 'note') {
+          noteStatements.push({ statementIndex: i });
+        }
+      }
+
+      var noteRects = Array.prototype.slice.call(svgEl.querySelectorAll('rect.note'));
+      var seenGroups = [], noteGroups = [];
+      for (var r = 0; r < noteRects.length; r++) {
+        var g = noteRects[r].parentNode;
+        if (g && seenGroups.indexOf(g) === -1) { seenGroups.push(g); noteGroups.push(g); }
+      }
+
+      var results = [];
+      for (var j = 0; j < Math.min(noteGroups.length, noteStatements.length); j++) {
+        var bbox = null;
+        try { bbox = noteGroups[j].getBBox(); } catch (e) {}
+        if (!bbox) continue;
+        results.push({ statementIndex: noteStatements[j].statementIndex, bbox: bbox });
+      }
+      return results;
+    },
+
+    refineParticipantLifelines: function (participantMap, messages) {
+      var rows = [];
+      for (var i = 0; i < messages.length; i++) {
+        if (messages[i] && messages[i].rowY !== null && messages[i].rowY !== undefined) {
+          rows.push(messages[i].rowY);
+        }
+      }
+
+      if (!rows.length) return participantMap;
+
+      rows.sort(function (a, b) { return a - b; });
+      var topY = rows[0] - 26;
+      var bottomY = rows[rows.length - 1] + 26;
+
+      var ids = Object.keys(participantMap);
+      for (var j = 0; j < ids.length; j++) {
+        var participant = participantMap[ids[j]];
+        if (!participant) continue;
+        // 실제 보이는 lifeline 범위는 유지하되,
+        // 메시지 구간이 그 안에 포함되도록만 보정한다.
+        participant.lifelineTopY = Math.min(participant.lifelineTopY, topY);
+        participant.lifelineBottomY = Math.max(participant.lifelineBottomY, bottomY);
+      }
+
+      return participantMap;
+    }
+  };
+
+  global.SequencePositionTracker = SequencePositionTracker;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/actions/SequenceMessageDragHandler.js ===== */
+(function (global) {
+  'use strict';
+
+  var HANDLE_OFFSET_Y = 8;
+
+  var SequenceMessageDragHandler = {
+    _overlay: null,
+    _dragLine: null,
+    _targetLine: null,
+    _handles: [],
+    _hoverTargets: [],
+    _dragging: false,
+
+    initOverlay: function (svgEl) {
+      var old = svgEl.querySelector('#sequence-drag-overlay');
+      if (old) old.remove();
+
+      var overlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      overlay.setAttribute('id', 'sequence-drag-overlay');
+      overlay.style.pointerEvents = 'none';
+      svgEl.appendChild(overlay);
+      this._overlay = overlay;
+
+      var dragLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      dragLine.setAttribute('class', 'sequence-drag-line');
+      dragLine.setAttribute('stroke', '#4f46e5');
+      dragLine.setAttribute('stroke-width', '3');
+      dragLine.setAttribute('stroke-dasharray', '6,4');
+      dragLine.style.display = 'none';
+      dragLine.style.pointerEvents = 'none';
+      overlay.appendChild(dragLine);
+      this._dragLine = dragLine;
+
+      var targetLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      targetLine.setAttribute('class', 'sequence-target-line');
+      targetLine.style.display = 'none';
+      targetLine.style.pointerEvents = 'none';
+      overlay.appendChild(targetLine);
+      this._targetLine = targetLine;
+
+      this._handles = [];
+      this._hoverTargets = [];
+      this._dragging = false;
+    },
+
+    attach: function (svgEl, participantMap, insertSlots, ctx) {
+      if (!this._overlay) this.initOverlay(svgEl);
+      this.clearHandles();
+      this._clearHoverTargets();
+      this._bringOverlayToFront(svgEl);
+
+      var ids = Object.keys(participantMap);
+      var rows = (insertSlots && insertSlots.length) ? insertSlots : [];
+
+      // 참가자가 1명뿐인 경우에는 hover 없이 기본 self-message 슬롯을 바로 보여 준다.
+      if (ids.length === 1) {
+        var onlyParticipant = participantMap[ids[0]];
+        if (onlyParticipant) {
+          var gapMidY = (onlyParticipant.lifelineTopY + onlyParticipant.lifelineBottomY) / 2;
+          if (onlyParticipant.topBox && onlyParticipant.bottomBox) {
+            gapMidY = (onlyParticipant.topBox.y + onlyParticipant.topBox.height + onlyParticipant.bottomBox.y) / 2;
+          }
+          var singleSlot = {
+            y: gapMidY,
+            insertIndex: 0
+          };
+          this._addHandle(svgEl, onlyParticipant, singleSlot, participantMap, ctx);
+        }
+        return;
+      }
+
+      for (var i = 0; i < ids.length; i++) {
+        this._attachHoverZone(svgEl, participantMap[ids[i]], rows, participantMap, ctx);
+      }
+    },
+
+    _attachHoverZone: function (svgEl, participant, slots, participantMap, ctx) {
+      if (!participant || !participant.bbox) return;
+      var self = this;
+      var zone = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      zone.setAttribute('class', 'sequence-lifeline-hit');
+      zone.setAttribute('x', participant.cx - 16);
+      zone.setAttribute('y', participant.lifelineTopY);
+      zone.setAttribute('width', '32');
+      zone.setAttribute('height', Math.max(40, participant.lifelineBottomY - participant.lifelineTopY));
+      zone.setAttribute('fill', '#000');
+      zone.setAttribute('fill-opacity', '0.001');
+      zone.setAttribute('stroke', 'none');
+      zone.style.pointerEvents = 'all';
+      zone.style.cursor = 'crosshair';
+      this._overlay.appendChild(zone);
+
+      zone.addEventListener('mouseenter', function () {
+        if (self._dragging) return;
+        if (svgEl.dataset && svgEl.dataset.noteHoverActive) return;
+        if (svgEl.dataset && svgEl.dataset.blockBtnActive) return;
+        self.clearHandles();
+        for (var i = 0; i < slots.length; i++) {
+          self._addHandle(svgEl, participant, slots[i], participantMap, ctx);
+        }
+      });
+
+      zone.addEventListener('mouseleave', function (e) {
+        var rel = e.relatedTarget;
+        if (rel && rel.closest && rel.closest('#sequence-drag-overlay')) return;
+        self.clearHandles();
+      });
+
+      this._hoverTargets.push(zone);
+    },
+
+    _addHandle: function (svgEl, participant, slot, participantMap, ctx) {
+      var x = participant.cx;
+      var y = slot.y + HANDLE_OFFSET_Y;
+      var self = this;
+
+      var hit = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      hit.setAttribute('class', 'sequence-plus-hit');
+      hit.setAttribute('cx', x);
+      hit.setAttribute('cy', y);
+      hit.setAttribute('r', '18');
+      hit.setAttribute('fill', '#000');
+      hit.setAttribute('fill-opacity', '0.001');
+      hit.setAttribute('stroke', 'none');
+      hit.style.pointerEvents = 'all';
+      hit.style.cursor = 'crosshair';
+      this._overlay.appendChild(hit);
+
+      var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('class', 'sequence-plus-btn');
+      circle.setAttribute('cx', x);
+      circle.setAttribute('cy', y);
+      circle.setAttribute('r', '12');
+      circle.setAttribute('fill', '#1565c0');
+      circle.setAttribute('stroke', '#fff');
+      circle.setAttribute('stroke-width', '2');
+      circle.style.pointerEvents = 'none';
+      this._overlay.appendChild(circle);
+
+      var plus = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      plus.setAttribute('class', 'sequence-plus-label');
+      plus.setAttribute('x', x);
+      plus.setAttribute('y', y + 1.5);
+      plus.setAttribute('text-anchor', 'middle');
+      plus.setAttribute('dominant-baseline', 'middle');
+      plus.setAttribute('fill', '#fff');
+      plus.setAttribute('font-size', '20');
+      plus.setAttribute('font-weight', '700');
+      plus.style.pointerEvents = 'none';
+      plus.textContent = '+';
+      this._overlay.appendChild(plus);
+
+      hit.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var startX = e.clientX, startY = e.clientY;
+        var didDrag = false;
+
+        var onMove = function (me) {
+          var dx = me.clientX - startX, dy = me.clientY - startY;
+          if (!didDrag && (dx * dx + dy * dy) > 25) {
+            didDrag = true;
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            self._startDrag(svgEl, participant.id, x, y, slot, participantMap, ctx);
+          }
+        };
+
+        var onUp = function () {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          if (!didDrag) {
+            var screen = SvgPositionTracker.svgToScreen(svgEl, x, y);
+            ctx.setState({
+              selectedSequenceParticipantId: null,
+              selectedSequenceMessageIndex: null,
+              selectedSequenceMessageIndices: [],
+              selectedSequenceBlockId: null,
+              sequenceToolbar: {
+                type: 'insert',
+                participantId: participant.id,
+                insertIndex: slot.insertIndex,
+                stmtInsertAt: slot.stmtInsertAt,
+                x: screen ? screen.x : e.clientX,
+                y: screen ? screen.y : e.clientY
+              }
+            });
+          }
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+
+      // mouseup 후 발생하는 click 이 document._clickCloseHandler 까지 버블링해서
+      // sequenceToolbar 를 즉시 null 로 만드는 문제를 막는다
+      hit.addEventListener('click', function (e) {
+        e.stopPropagation();
+      });
+
+      this._handles.push(hit, circle, plus);
+    },
+
+    _startDrag: function (svgEl, fromId, startX, startY, slot, participantMap, ctx) {
+      var insertIndex = slot && slot.insertIndex !== undefined ? slot.insertIndex : slot;
+      var stmtInsertAt = slot && slot.stmtInsertAt !== undefined ? slot.stmtInsertAt : undefined;
+      var self = this;
+      this._bringOverlayToFront(svgEl);
+      this._dragging = true;
+      ctx.setState({ portDragging: true });
+      this.clearHandles();
+
+      this._dragLine.setAttribute('x1', startX);
+      this._dragLine.setAttribute('y1', startY);
+      this._dragLine.setAttribute('x2', startX);
+      this._dragLine.setAttribute('y2', startY);
+      this._dragLine.style.display = '';
+
+      var currentTarget = null;
+      var pointerClientX = 0;
+      var pointerClientY = 0;
+      var autoPanFrame = null;
+
+      var updateDragAtClient = function (clientX, clientY) {
+        var svgPt = SvgPositionTracker.getSVGPoint(svgEl, clientX, clientY);
+        self._dragLine.setAttribute('x2', svgPt.x);
+        self._dragLine.setAttribute('y2', startY);
+
+        var target = self._findTarget(svgPt.x, svgPt.y, fromId, startY, participantMap);
+        if (target !== currentTarget) {
+          if (currentTarget) self._clearTargetHighlight(participantMap[currentTarget]);
+          currentTarget = target;
+          if (currentTarget) self._highlightTarget(participantMap[currentTarget]);
+        }
+      };
+
+      var getAutoPanDelta = function (clientX, clientY) {
+        var rect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+        var threshold = 56;
+        var maxStep = 8;
+        var dx = 0;
+        var dy = 0;
+        var progress = 0;
+
+        if (!rect) return { dx: 0, dy: 0 };
+
+        if (clientX <= rect.left + threshold) {
+          progress = Math.min(1, (rect.left + threshold - clientX) / threshold);
+          dx = Math.ceil(progress * maxStep);
+        } else if (clientX >= rect.right - threshold) {
+          progress = Math.min(1, (clientX - (rect.right - threshold)) / threshold);
+          dx = -Math.ceil(progress * maxStep);
+        }
+
+        if (clientY <= rect.top + threshold) {
+          progress = Math.min(1, (rect.top + threshold - clientY) / threshold);
+          dy = Math.ceil(progress * maxStep);
+        } else if (clientY >= rect.bottom - threshold) {
+          progress = Math.min(1, (clientY - (rect.bottom - threshold)) / threshold);
+          dy = -Math.ceil(progress * maxStep);
+        }
+
+        return { dx: dx, dy: dy };
+      };
+
+      var stopAutoPan = function () {
+        if (!autoPanFrame) return;
+        cancelAnimationFrame(autoPanFrame);
+        autoPanFrame = null;
+      };
+
+      var autoPanTick = function () {
+        autoPanFrame = null;
+        if (!ctx.getState().portDragging) return;
+
+        var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+        if (!delta.dx && !delta.dy) return;
+
+        if (ctx.panPreviewBy) {
+          ctx.panPreviewBy(delta.dx, delta.dy);
+          updateDragAtClient(pointerClientX, pointerClientY);
+        }
+
+        autoPanFrame = requestAnimationFrame(autoPanTick);
+      };
+
+      var scheduleAutoPan = function () {
+        if (autoPanFrame) return;
+        var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+        if (!delta.dx && !delta.dy) return;
+        autoPanFrame = requestAnimationFrame(autoPanTick);
+      };
+
+      var onMove = function (me) {
+        pointerClientX = me.clientX;
+        pointerClientY = me.clientY;
+        updateDragAtClient(pointerClientX, pointerClientY);
+        scheduleAutoPan();
+      };
+
+      var onUp = function (me) {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        stopAutoPan();
+        self._dragLine.style.display = 'none';
+        self._targetLine.style.display = 'none';
+        self._dragging = false;
+        ctx.setState({ portDragging: false });
+
+        if (currentTarget) self._clearTargetHighlight(participantMap[currentTarget]);
+
+        var svgPt = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
+        var target = self._findTarget(svgPt.x, svgPt.y, fromId, startY, participantMap);
+        if (target) {
+          var payload = { fromId: fromId, toId: target, text: 'new msg', insertIndex: insertIndex };
+          if (stmtInsertAt !== undefined) payload.stmtInsertAt = stmtInsertAt;
+          ctx.emit('add-sequence-message', payload);
+        }
+      };
+
+      var startScreenPt = SvgPositionTracker.svgToScreen(svgEl, startX, startY);
+      pointerClientX = startScreenPt.x;
+      pointerClientY = startScreenPt.y;
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    },
+
+    _findTarget: function (x, y, fromId, rowY, participantMap) {
+      var best = null;
+      var bestDist = Infinity;
+      var SNAP_X = 56;
+      var SNAP_Y = 22;
+      var ids = Object.keys(participantMap);
+
+      for (var i = 0; i < ids.length; i++) {
+        var id = ids[i];
+        var p = participantMap[id];
+        if (!p || !p.bbox) continue;
+
+        var cx = p.cx;
+        var dx = Math.abs(x - cx);
+        var dy = Math.abs(y - rowY);
+        if (dy < SNAP_Y && dx < SNAP_X && dx < bestDist) {
+          bestDist = dx;
+          best = id;
+        }
+      }
+
+      return best;
+    },
+
+    _highlightTarget: function (el) {
+      if (!el) return;
+      if (el.el) {
+        el.el.classList.add('sequence-participant-drag-target');
+        this._targetLine.setAttribute('x1', el.cx);
+        this._targetLine.setAttribute('x2', el.cx);
+        this._targetLine.setAttribute('y1', el.lifelineTopY);
+        this._targetLine.setAttribute('y2', el.lifelineBottomY);
+        this._targetLine.style.display = '';
+        return;
+      }
+      el.classList.add('sequence-participant-drag-target');
+    },
+
+    _clearTargetHighlight: function (el) {
+      if (!el) return;
+      if (el.el) {
+        el.el.classList.remove('sequence-participant-drag-target');
+        return;
+      }
+      el.classList.remove('sequence-participant-drag-target');
+    },
+
+    clearHandles: function () {
+      for (var i = 0; i < this._handles.length; i++) this._handles[i].remove();
+      this._handles = [];
+    },
+
+    _clearHoverTargets: function () {
+      for (var i = 0; i < this._hoverTargets.length; i++) this._hoverTargets[i].remove();
+      this._hoverTargets = [];
+    },
+
+    _bringOverlayToFront: function (svgEl) {
+      if (this._overlay && this._overlay.parentNode === svgEl) {
+        svgEl.appendChild(this._overlay);
+      }
+    }
+  };
+
+  global.SequenceMessageDragHandler = SequenceMessageDragHandler;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/actions/SequenceBlockHandler.js ===== */
+(function (global) {
+  'use strict';
+
+  var SequenceBlockHandler = {
+    _overlay: null,
+    _selectionRect: null,
+    _selectionHighlight: null,
+
+    initOverlay: function (svgEl) {
+      var old = svgEl.querySelector('#sequence-block-overlay');
+      if (old) old.remove();
+
+      var overlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      overlay.setAttribute('id', 'sequence-block-overlay');
+      overlay.style.pointerEvents = 'none';
+      svgEl.appendChild(overlay);
+      this._overlay = overlay;
+
+      var selectionRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      selectionRect.setAttribute('class', 'sequence-block-selection-rect');
+      selectionRect.style.display = 'none';
+      selectionRect.style.pointerEvents = 'none';
+      overlay.appendChild(selectionRect);
+      this._selectionRect = selectionRect;
+
+      var selectionHighlight = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      selectionHighlight.setAttribute('class', 'sequence-block-selection-highlight');
+      selectionHighlight.style.display = 'none';
+      selectionHighlight.style.pointerEvents = 'none';
+      overlay.appendChild(selectionHighlight);
+      this._selectionHighlight = selectionHighlight;
+    },
+
+    hideSelectionHighlight: function () {
+      if (this._selectionHighlight) this._selectionHighlight.style.display = 'none';
+    },
+
+    _showSelectionHighlight: function (bbox) {
+      if (!this._selectionHighlight || !bbox) return;
+      this._selectionHighlight.setAttribute('x', bbox.x);
+      this._selectionHighlight.setAttribute('y', bbox.y);
+      this._selectionHighlight.setAttribute('width', bbox.width);
+      this._selectionHighlight.setAttribute('height', bbox.height);
+      this._selectionHighlight.style.display = '';
+    },
+
+    _getSelectionBBox: function (selectedIndices, messages, selectedNoteStatementIndices, notes) {
+      var pad = 12;
+      var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+      for (var i = 0; i < messages.length; i++) {
+        if (selectedIndices.indexOf(messages[i].index) === -1) continue;
+        var box = messages[i].hitBox || messages[i].bbox;
+        if (!box) continue;
+        left   = Math.min(left,   box.x);
+        top    = Math.min(top,    box.y);
+        right  = Math.max(right,  box.x + box.width);
+        bottom = Math.max(bottom, box.y + box.height);
+      }
+      for (var j = 0; j < (notes || []).length; j++) {
+        if ((selectedNoteStatementIndices || []).indexOf(notes[j].statementIndex) === -1) continue;
+        var nbox = notes[j].bbox;
+        if (!nbox) continue;
+        left   = Math.min(left,   nbox.x);
+        top    = Math.min(top,    nbox.y);
+        right  = Math.max(right,  nbox.x + nbox.width);
+        bottom = Math.max(bottom, nbox.y + nbox.height);
+      }
+      if (!isFinite(left)) return null;
+      return { x: left - pad, y: top - pad, width: right - left + pad * 2, height: bottom - top + pad * 2 };
+    },
+
+    attach: function (svgEl, model, ctx, canvas) {
+      if (!this._overlay) this.initOverlay(svgEl);
+      this._bringOverlayToFront(svgEl);
+
+      var participantMap = SequencePositionTracker.collectParticipants(svgEl, model);
+      var messages = SequencePositionTracker.collectMessages(svgEl, model);
+      var notes    = SequencePositionTracker.collectNotePositions(svgEl, model);
+      this._renderBlockBadges(svgEl, model, participantMap, ctx, messages, notes);
+      this._attachSelection(svgEl, messages, notes, ctx, canvas);
+
+      if (ctx.watchSequenceSelectionHighlight) {
+        ctx.watchSequenceSelectionHighlight();
+      }
+    },
+
+    _attachSelection: function (svgEl, messages, notes, ctx, canvas) {
+      var self = this;
+
+      // contextmenu는 svgEl과 canvas 모두 차단
+      var suppressCtx = function (e) {
+        if (e.target && e.target.closest && e.target.closest('#sequence-block-overlay .sequence-block-badge-hit')) return;
+        e.preventDefault();
+      };
+      svgEl.addEventListener('contextmenu', suppressCtx);
+      if (canvas) canvas.addEventListener('contextmenu', suppressCtx, true);
+
+      // mousedown 리스너는 canvas(여백 포함)와 svgEl 양쪽에 붙인다.
+      // canvas가 없으면 svgEl에만 붙임.
+      var dragTarget = canvas || svgEl;
+      dragTarget.addEventListener('mousedown', function (e) {
+        if (e.button !== 2) return;
+        if (e.target && e.target.closest && e.target.closest('.sequence-block-badge-hit')) return;
+        // badge 영역의 우클릭은 배지 자체 핸들러로 위임
+        e.preventDefault();
+        e.stopPropagation();
+
+        var start = SvgPositionTracker.getSVGPoint(svgEl, e.clientX, e.clientY);
+        var currentSelection = [];
+        var currentNoteSelection = [];
+
+        self._selectionRect.style.display = '';
+        self._updateSelectionRect(start, start);
+
+        var onMove = function (me) {
+          var current = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
+          self._updateSelectionRect(start, current);
+          currentSelection = self._collectSelectedMessages(start, current, messages);
+          currentNoteSelection = self._collectSelectedNotes(start, current, notes);
+          ctx.setState({
+            selectedSequenceParticipantId: null,
+            selectedSequenceMessageIndex: null,
+            selectedSequenceBlockId: null,
+            selectedSequenceMessageIndices: currentSelection.slice(),
+            selectedNoteStatementIndices: currentNoteSelection.slice(),
+            sequenceToolbar: null
+          });
+        };
+
+        var onUp = function () {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          self._selectionRect.style.display = 'none';
+
+          if (!currentSelection.length && !currentNoteSelection.length) {
+            self.hideSelectionHighlight();
+            ctx.setState({
+              selectedSequenceMessageIndices: [],
+              selectedNoteStatementIndices: [],
+              selectedSequenceBlockId: null
+            });
+            return;
+          }
+
+          var selBBox = self._getSelectionBBox(currentSelection, messages, currentNoteSelection, notes);
+          self._showSelectionHighlight(selBBox);
+
+          var toolbarPos = { x: 0, y: 0 };
+          if (selBBox) {
+            var center = SvgPositionTracker.svgToScreen(svgEl, selBBox.x + selBBox.width / 2, selBBox.y);
+            toolbarPos.x = center.x;
+            toolbarPos.y = center.y;
+          }
+
+          var enclosing = SequenceStatementUtils.findEnclosingBranchBlock(
+            ctx.getModel ? ctx.getModel() : null,
+            currentSelection,
+            currentNoteSelection
+          );
+
+          ctx.setState({
+            selectedSequenceParticipantId: null,
+            selectedSequenceMessageIndex: null,
+            selectedSequenceBlockId: null,
+            selectedSequenceMessageIndices: currentSelection.slice(),
+            selectedNoteStatementIndices: currentNoteSelection.slice(),
+            sequenceToolbar: {
+              type: 'selection',
+              messageIndices: currentSelection.slice(),
+              noteStatementIndices: currentNoteSelection.slice(),
+              parentKind: enclosing ? enclosing.kind : null,
+              x: toolbarPos.x,
+              y: toolbarPos.y
+            }
+          });
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    },
+
+    _collectSelectedNotes: function (start, current, notes) {
+      var left = Math.min(start.x, current.x);
+      var right = Math.max(start.x, current.x);
+      var top = Math.min(start.y, current.y);
+      var bottom = Math.max(start.y, current.y);
+      var selected = [];
+
+      for (var i = 0; i < (notes || []).length; i++) {
+        var box = notes[i].bbox;
+        if (!box) continue;
+        var intersects = !(
+          box.x + box.width < left ||
+          box.x > right ||
+          box.y + box.height < top ||
+          box.y > bottom
+        );
+        if (intersects) selected.push(notes[i].statementIndex);
+      }
+      return selected;
+    },
+
+    _collectSelectedMessages: function (start, current, messages) {
+      var left = Math.min(start.x, current.x);
+      var right = Math.max(start.x, current.x);
+      var top = Math.min(start.y, current.y);
+      var bottom = Math.max(start.y, current.y);
+      var selected = [];
+
+      for (var i = 0; i < messages.length; i++) {
+        var box = messages[i].hitBox || messages[i].bbox;
+        if (!box) continue;
+        var intersects = !(
+          box.x + box.width < left ||
+          box.x > right ||
+          box.y + box.height < top ||
+          box.y > bottom
+        );
+        if (intersects) selected.push(messages[i].index);
+      }
+
+      return selected;
+    },
+
+    _updateSelectionRect: function (start, current) {
+      var left = Math.min(start.x, current.x);
+      var top = Math.min(start.y, current.y);
+      var width = Math.abs(current.x - start.x);
+      var height = Math.abs(current.y - start.y);
+      this._selectionRect.setAttribute('x', left);
+      this._selectionRect.setAttribute('y', top);
+      this._selectionRect.setAttribute('width', width);
+      this._selectionRect.setAttribute('height', height);
+    },
+
+    _renderBlockBadges: function (svgEl, model, participantMap, ctx, messages, notes) {
+      var blocks = SequenceStatementUtils.listBlocks(model && model.statements);
+      var labelTextEls = this._sortTextElementsByPosition(Array.prototype.slice.call(svgEl.querySelectorAll('.labelText')), svgEl);
+      var allLoopTextEls = this._sortTextElementsByPosition(Array.prototype.slice.call(svgEl.querySelectorAll('.loopText')), svgEl);
+      var usedLoopIndices = {};
+      var stmts = model && model.statements;
+      var stmtYByIndex = this._collectStatementYByIndex(model, messages, notes);
+      var blockBindings = [];
+
+      // block title + 버튼용 overlay 및 공유 hover 상태
+      var oldBtnOverlay = svgEl.querySelector('#sequence-block-insert-overlay');
+      if (oldBtnOverlay) oldBtnOverlay.remove();
+      var btnOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      btnOverlay.setAttribute('id', 'sequence-block-insert-overlay');
+      svgEl.appendChild(btnOverlay);
+
+      var shared = { btns: null, hideTimer: null };
+      function sharedCancelHide() {
+        if (shared.hideTimer !== null) { clearTimeout(shared.hideTimer); shared.hideTimer = null; }
+      }
+      function sharedHideNow() {
+        sharedCancelHide();
+        if (shared.btns) {
+          for (var k = 0; k < shared.btns.length; k++) shared.btns[k].remove();
+          shared.btns = null;
+        }
+        if (svgEl.dataset) delete svgEl.dataset.blockBtnActive;
+      }
+      // message/note 버튼과 상호 억제를 위해 현재 hide 함수를 static으로 노출
+      SequenceBlockHandler._currentHideBlockNow = sharedHideNow;
+      function sharedScheduleHide() {
+        sharedCancelHide();
+        shared.hideTimer = setTimeout(function () { sharedHideNow(); }, 500);
+      }
+
+      // 1차: 모든 block의 메인 title(loop/alt/opt/par text)을 먼저 예약한다.
+      // nested loop title이 outer alt의 branch title로 잘못 소비되지 않도록 한다.
+      for (var i = 0; i < blocks.length; i++) {
+        var block = blocks[i];
+        var labelEl = labelTextEls[i] || null;
+        var mainTitleEl = this._findMatchingLoopText(svgEl, labelEl, allLoopTextEls, usedLoopIndices);
+        blockBindings.push({
+          block: block,
+          labelEl: labelEl,
+          mainTitleEl: mainTitleEl
+        });
+      }
+
+      // 2차: 모든 블록의 branch를 statementIndex 순서로 모아 Y순 loopText와 1:1 매칭한다.
+      // depth-first 처리는 순차 배치된 블록(loop 안 alt, opt 안 alt 등)에서 loopText를
+      // 잘못 소비하는 문제가 있으므로, SVG 렌더 순서(= statementIndex 순서)로 통합 처리한다.
+
+      // 분기 클릭 라우팅용 데이터 수집
+      var allBranchClickRanges = [];
+      var branchElRefs = [];
+      var allBranchItems = [];
+
+      // 모든 블록의 branch를 statementIndex 순서로 수집
+      var allBranchAssignments = [];
+      for (var j = 0; j < blockBindings.length; j++) {
+        var bb = blockBindings[j].block;
+        for (var b = 0; b < bb.branchIndices.length; b++) {
+          allBranchAssignments.push({ bindingIdx: j, branchIdx: b, si: bb.branchIndices[b] });
+        }
+      }
+      allBranchAssignments.sort(function (a, c) { return a.si - c.si; });
+
+      // statementIndex 순서로 loopText 할당 → SVG Y순서와 일치
+      var branchElByStmt = {};
+      for (var ai = 0; ai < allBranchAssignments.length; ai++) {
+        var assign = allBranchAssignments[ai];
+        var btelEl = this._findNextUnusedLoopText(allLoopTextEls, usedLoopIndices);
+        branchElByStmt[assign.si] = btelEl;
+
+        var bBlock = blockBindings[assign.bindingIdx].block;
+        var fallbackBranchY = this._estimateBranchSeparatorY(bBlock, assign.branchIdx, stmtYByIndex);
+        var fallbackTitleBox = this._getElementBBoxInSvg(svgEl, blockBindings[assign.bindingIdx].mainTitleEl);
+        var fallbackTitleCx = fallbackTitleBox ? (fallbackTitleBox.x + fallbackTitleBox.width / 2) : null;
+        var bInfo = {
+          blockId: bBlock.id,
+          statementIndex: assign.si,
+          text: (stmts && stmts[assign.si] ? stmts[assign.si].text : '') || ''
+        };
+        allBranchItems.push(bInfo);
+
+        if (btelEl) {
+          branchElRefs.push({ el: btelEl, info: bInfo });
+          if (btelEl.getBBox) {
+            try {
+              var bbb = this._getElementBBoxInSvg(svgEl, btelEl);
+              if (!bbb) continue;
+              var rangeY = fallbackBranchY !== null && fallbackBranchY !== undefined
+                ? fallbackBranchY
+                : (bbb.y + Math.max(bbb.height, 16) / 2);
+              var rangeCx = fallbackTitleCx !== null ? fallbackTitleCx : (bbb.x + bbb.width / 2);
+              var rangeHalfWidth = Math.max(90, (bbb.width + 48) / 2);
+              allBranchClickRanges.push(Object.assign({
+                el: btelEl,
+                xMin: rangeCx - rangeHalfWidth,
+                xMax: rangeCx + rangeHalfWidth,
+                yMin: rangeY - 16,
+                yMax: rangeY + 16
+              }, bInfo));
+            } catch (eBBox) {}
+          }
+        } else if (fallbackBranchY !== null && fallbackBranchY !== undefined) {
+          var fallbackHalfWidth = fallbackTitleBox ? Math.max(90, (fallbackTitleBox.width + 48) / 2) : 90;
+          allBranchClickRanges.push(Object.assign({
+            xMin: fallbackTitleCx !== null ? fallbackTitleCx - fallbackHalfWidth : undefined,
+            xMax: fallbackTitleCx !== null ? fallbackTitleCx + fallbackHalfWidth : undefined,
+            yMin: fallbackBranchY - 16,
+            yMax: fallbackBranchY + 16
+          }, bInfo));
+        }
+      }
+
+      // 안전 필터: Mermaid가 else/and loopText를 block label과 같은 SVG 그룹에
+      // 넣는 경우가 있어, 부모가 아니라 실제 main title element만 제거한다.
+      var mainTitleEls = [];
+      for (var mpi = 0; mpi < blockBindings.length; mpi++) {
+        if (blockBindings[mpi].mainTitleEl) mainTitleEls.push(blockBindings[mpi].mainTitleEl);
+      }
+      if (mainTitleEls.length) {
+        branchElRefs = branchElRefs.filter(function (ref) {
+          return mainTitleEls.indexOf(ref.el) === -1;
+        });
+        allBranchClickRanges = allBranchClickRanges.filter(function (range) {
+          return !range.el || mainTitleEls.indexOf(range.el) === -1;
+        });
+      }
+
+      // 각 블록에 이벤트 부착 (block-level 처리 순서는 statementIndex 기준)
+      var sortedBindings = blockBindings.slice().sort(function (a, b) {
+        return a.block.statementIndex - b.block.statementIndex;
+      });
+
+      for (var j = 0; j < sortedBindings.length; j++) {
+        var binding = sortedBindings[j];
+        var boundBlock = binding.block;
+        var branchTitleEls = [];
+        var branchStatements = [];
+        for (var b = 0; b < boundBlock.branchIndices.length; b++) {
+          var si = boundBlock.branchIndices[b];
+          branchTitleEls.push(branchElByStmt[si] || null);
+          branchStatements.push(stmts && stmts[si] ? stmts[si] : {});
+        }
+
+        this._attachBlockElementInteractions(
+          svgEl,
+          boundBlock,
+          binding.labelEl,
+          binding.mainTitleEl,
+          branchTitleEls,
+          branchStatements,
+          ctx,
+          model,
+          participantMap,
+          stmtYByIndex,
+          btnOverlay,
+          shared,
+          sharedCancelHide,
+          sharedHideNow,
+          sharedScheduleHide
+        );
+      }
+
+      // participant hover zone 등 overlay가 else/and 텍스트를 가릴 수 있으므로
+      // svgEl에 capture 단계 리스너를 달아 어떤 element보다 먼저 분기 클릭을 잡는다.
+      // 전략1(Y범위) → 전략2(element identity) → 전략3(텍스트 매칭) 순서로 시도
+      if (allBranchItems.length) {
+        var branchMouseDownHandled = false;
+        var findBranchRangeMatch = function (e, requireX) {
+          if (!allBranchClickRanges.length) return null;
+          var svgPt = SvgPositionTracker.getSVGPoint(svgEl, e.clientX, e.clientY);
+          if (!svgPt) return null;
+
+          var bestRange = null, bestRangeDist = Infinity;
+          for (var ri = 0; ri < allBranchClickRanges.length; ri++) {
+            var range = allBranchClickRanges[ri];
+            if (svgPt.y < range.yMin || svgPt.y > range.yMax) continue;
+            if (requireX) {
+              if (range.xMin === undefined || range.xMax === undefined) continue;
+              if (svgPt.x < range.xMin || svgPt.x > range.xMax) continue;
+            }
+
+            var midY = (range.yMin + range.yMax) / 2;
+            var midX = (range.xMin !== undefined && range.xMax !== undefined) ? (range.xMin + range.xMax) / 2 : svgPt.x;
+            var dist = Math.abs(svgPt.y - midY) + Math.abs(svgPt.x - midX) * 0.2;
+            if (dist < bestRangeDist) { bestRangeDist = dist; bestRange = range; }
+          }
+          return bestRange;
+        };
+        var openMatchedBranchToolbar = function (e, matched, preventDefault) {
+          if (preventDefault) e.preventDefault();
+          e.stopPropagation();
+          ctx.setState({
+            selectedSequenceParticipantId: null,
+            selectedSequenceMessageIndex: null,
+            selectedSequenceMessageIndices: [],
+            selectedSequenceBlockId: matched.blockId,
+            sequenceToolbar: {
+              type: 'branch-title',
+              blockId: matched.blockId,
+              statementIndex: matched.statementIndex,
+              text: matched.text,
+              x: e.clientX,
+              y: e.clientY
+            }
+          });
+        };
+        var suppressNextDocumentClick = function () {
+          var suppressClick = function (clickEvent) {
+            clickEvent.preventDefault();
+            clickEvent.stopPropagation();
+            document.removeEventListener('click', suppressClick, true);
+          };
+          document.addEventListener('click', suppressClick, true);
+        };
+
+        svgEl.addEventListener('mousedown', function (e) {
+          if (e.button !== 0) return;
+          var downMatched = findBranchRangeMatch(e, true);
+          if (!downMatched) return;
+          branchMouseDownHandled = true;
+          openMatchedBranchToolbar(e, downMatched, true);
+          suppressNextDocumentClick();
+        }, true);
+
+        svgEl.addEventListener('click', function (e) {
+          try {
+            if (branchMouseDownHandled) {
+              branchMouseDownHandled = false;
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+
+            var matched = null;
+
+            // 전략1: element identity — 클릭 위치의 element가 branch loopText 본체인지 직접 확인
+            if (!matched && branchElRefs.length && document.elementsFromPoint) {
+              var pointEls = document.elementsFromPoint(e.clientX, e.clientY);
+              outer: for (var pi = 0; pi < pointEls.length; pi++) {
+                for (var bi = 0; bi < branchElRefs.length; bi++) {
+                  if (pointEls[pi] === branchElRefs[bi].el) {
+                    matched = branchElRefs[bi].info; break outer;
+                  }
+                }
+              }
+            }
+
+            // 전략2: pre-computed Y 범위 (element identity 실패 시 fallback)
+            if (!matched && allBranchClickRanges.length) {
+              matched = findBranchRangeMatch(e, true);
+            }
+
+            // 전략3: 텍스트 내용 매칭 (loopText 클래스 한정), 중복 텍스트는 Y위치로 가장 가까운 것 선택
+            if (!matched && allBranchItems.length && document.elementsFromPoint) {
+              var pointEls3 = document.elementsFromPoint(e.clientX, e.clientY);
+              outer3: for (var pi3 = 0; pi3 < pointEls3.length; pi3++) {
+                var pel = pointEls3[pi3];
+                if (!pel || !pel.classList || !pel.classList.contains('loopText')) continue;
+                var pelText = pel.textContent ? pel.textContent.trim().replace(/^\[|\]$/g, '') : '';
+                var pelY = null;
+                try {
+                  var pelBox = SequenceBlockHandler._getElementBBoxInSvg(svgEl, pel);
+                  pelY = pelBox ? pelBox.y : null;
+                } catch (eY) {}
+
+                var textMatches = [];
+                for (var bi3 = 0; bi3 < allBranchItems.length; bi3++) {
+                  if (allBranchItems[bi3].text && pelText === allBranchItems[bi3].text) {
+                    textMatches.push(allBranchItems[bi3]);
+                  }
+                }
+                if (textMatches.length === 1) {
+                  matched = textMatches[0]; break outer3;
+                } else if (textMatches.length > 1 && pelY !== null) {
+                  // 중복 텍스트: allBranchClickRanges Y 중심과 pelY 거리 기준으로 가장 가까운 것 선택
+                  var bestMatch = null, bestDist3 = Infinity;
+                  for (var ti = 0; ti < textMatches.length; ti++) {
+                    for (var ri3 = 0; ri3 < allBranchClickRanges.length; ri3++) {
+                      if (allBranchClickRanges[ri3].statementIndex === textMatches[ti].statementIndex) {
+                        var midY3 = (allBranchClickRanges[ri3].yMin + allBranchClickRanges[ri3].yMax) / 2;
+                        var d3 = Math.abs(pelY - midY3);
+                        if (d3 < bestDist3) { bestDist3 = d3; bestMatch = textMatches[ti]; }
+                        break;
+                      }
+                    }
+                  }
+                  if (bestMatch) { matched = bestMatch; break outer3; }
+                }
+              }
+            }
+
+            if (matched) {
+              openMatchedBranchToolbar(e, matched, false);
+            }
+          } catch (eCapture) {}
+        }, true); // capture 단계 — overlay보다 먼저 실행
+      }
+
+      // 3차: recognized 블록이 소비하지 못한 나머지 labelText = critical/break/box 등
+      // 미지원 문법. 클릭 시 안내 alert만 표시한다.
+      for (var k = blocks.length; k < labelTextEls.length; k++) {
+        var unusedEl = labelTextEls[k];
+        var unusedGroup = unusedEl && (unusedEl.closest ? unusedEl.closest('g') : unusedEl.parentNode);
+        if (!unusedGroup) continue;
+        unusedGroup.style.cursor = 'pointer';
+        unusedGroup.style.pointerEvents = 'all';
+        unusedGroup.addEventListener('click', function (e) {
+          e.stopPropagation();
+          if (ctx.showUnsupportedHint) ctx.showUnsupportedHint();
+        });
+      }
+    },
+
+    _collectStatementYByIndex: function (model, messages, notes) {
+      var stmts = (model && model.statements) || [];
+      var byIndex = {};
+      var msgCursor = 0;
+
+      for (var i = 0; i < stmts.length; i++) {
+        var stmt = stmts[i];
+        if (!stmt) continue;
+        if (stmt.type === 'message') {
+          var msg = messages && messages[msgCursor];
+          if (msg && msg.rowY !== null && msg.rowY !== undefined) byIndex[i] = msg.rowY;
+          msgCursor++;
+        }
+      }
+
+      for (var n = 0; n < (notes || []).length; n++) {
+        var note = notes[n];
+        if (!note || note.statementIndex === undefined || !note.bbox) continue;
+        byIndex[note.statementIndex] = note.bbox.y + note.bbox.height / 2;
+      }
+
+      return byIndex;
+    },
+
+    _estimateBranchSeparatorY: function (block, branchIdx, stmtYByIndex) {
+      if (!block || !block.branchIndices || branchIdx < 0 || branchIdx >= block.branchIndices.length) return null;
+      var branchStmtIndex = block.branchIndices[branchIdx];
+      var prevY = null;
+      var nextY = null;
+      var start = block.statementIndex + 1;
+      var end = block.endIndex !== -1 ? block.endIndex : branchStmtIndex + 1;
+
+      for (var i = start; i < branchStmtIndex; i++) {
+        if (stmtYByIndex[i] !== undefined && stmtYByIndex[i] !== null) prevY = stmtYByIndex[i];
+      }
+
+      for (var j = branchStmtIndex + 1; j < end; j++) {
+        if (stmtYByIndex[j] !== undefined && stmtYByIndex[j] !== null) {
+          nextY = stmtYByIndex[j];
+          break;
+        }
+      }
+
+      if (prevY !== null && nextY !== null) return (prevY + nextY) / 2;
+      return null;
+    },
+
+    _getElementBBoxInSvg: function (svgEl, el) {
+      if (!el || !el.getBBox) return null;
+
+      var box;
+      try { box = el.getBBox(); } catch (e) { return null; }
+      if (!box) return null;
+
+      if (!svgEl || !svgEl.createSVGPoint || !el.getScreenCTM || !svgEl.getScreenCTM) return box;
+
+      var elMatrix = null;
+      var svgMatrix = null;
+      try {
+        elMatrix = el.getScreenCTM();
+        svgMatrix = svgEl.getScreenCTM();
+      } catch (e2) {
+        return box;
+      }
+      if (!elMatrix || !svgMatrix) return box;
+
+      var invSvg;
+      try { invSvg = svgMatrix.inverse(); } catch (e3) { return box; }
+
+      var pt = svgEl.createSVGPoint();
+      var corners = [
+        [box.x, box.y],
+        [box.x + box.width, box.y],
+        [box.x, box.y + box.height],
+        [box.x + box.width, box.y + box.height]
+      ];
+      var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+
+      for (var i = 0; i < corners.length; i++) {
+        pt.x = corners[i][0];
+        pt.y = corners[i][1];
+        var rootPt = pt.matrixTransform(elMatrix).matrixTransform(invSvg);
+        left = Math.min(left, rootPt.x);
+        top = Math.min(top, rootPt.y);
+        right = Math.max(right, rootPt.x);
+        bottom = Math.max(bottom, rootPt.y);
+      }
+
+      if (!isFinite(left)) return box;
+      return { x: left, y: top, width: right - left, height: bottom - top };
+    },
+
+    _sortTextElementsByPosition: function (elements, svgEl) {
+      var self = this;
+      return (elements || []).slice().sort(function (a, b) {
+        var boxA = null;
+        var boxB = null;
+
+        try { boxA = self._getElementBBoxInSvg(svgEl, a); } catch (e1) {}
+        try { boxB = self._getElementBBoxInSvg(svgEl, b); } catch (e2) {}
+
+        if (!boxA && !boxB) return 0;
+        if (!boxA) return 1;
+        if (!boxB) return -1;
+
+        var dy = boxA.y - boxB.y;
+        if (Math.abs(dy) > 1) return dy;
+
+        return boxA.x - boxB.x;
+      });
+    },
+
+    _findMatchingLoopText: function (svgEl, labelEl, allLoopTextEls, usedLoopIndices) {
+      if (!labelEl) return null;
+
+      // 전략1: labelEl과 동일한 부모 g를 공유하는 loopText → Mermaid SVG에서
+      // block header의 labelText와 loopText(조건 텍스트)는 항상 같은 g 안에 있다.
+      var labelParent = labelEl.parentNode;
+      if (labelParent) {
+        for (var i = 0; i < allLoopTextEls.length; i++) {
+          if (usedLoopIndices[i]) continue;
+          if (allLoopTextEls[i] && allLoopTextEls[i].parentNode === labelParent) {
+            usedLoopIndices[i] = true;
+            return allLoopTextEls[i];
+          }
+        }
+      }
+
+      // 전략2: Y 근접 fallback (임계값 40 이내만 허용)
+      // else/and separator loopText가 다음 block header보다 Y가 근접할 수 있으므로
+      // _findNextUnusedLoopText 호출(무조건 소비)은 하지 않는다.
+      var labelBox = this._getElementBBoxInSvg(svgEl, labelEl);
+      if (!labelBox) return null;
+
+      var bestEl = null;
+      var bestIdx = -1;
+      var bestDist = 40; // SVG 단위 최대 허용 거리
+
+      for (var j = 0; j < allLoopTextEls.length; j++) {
+        if (usedLoopIndices[j]) continue;
+        var loopEl = allLoopTextEls[j];
+        if (!loopEl || !loopEl.getBBox) continue;
+        var loopBox = this._getElementBBoxInSvg(svgEl, loopEl);
+        if (!loopBox) continue;
+        var dist = Math.abs(loopBox.y - labelBox.y);
+        if (dist < bestDist) { bestDist = dist; bestEl = loopEl; bestIdx = j; }
+      }
+
+      if (bestIdx !== -1) { usedLoopIndices[bestIdx] = true; return bestEl; }
+      return null;
+    },
+
+    _findNextUnusedLoopText: function (allLoopTextEls, usedLoopIndices) {
+      for (var i = 0; i < allLoopTextEls.length; i++) {
+        if (usedLoopIndices[i]) continue;
+        usedLoopIndices[i] = true;
+        return allLoopTextEls[i];
+      }
+      return null;
+    },
+
+    _attachBlockElementInteractions: function (svgEl, block, labelEl, titleEl, branchTitleEls, branchStatements, ctx, model, participantMap, stmtYByIndex, btnOverlay, shared, sharedCancelHide, sharedHideNow, sharedScheduleHide) {
+      // 분기 title Y 범위를 미리 계산 — labelGroup 클릭 핸들러 안에서 Y 라우팅에 사용
+      var branchYRanges = [];
+      var titleBoxForBranch = this._getElementBBoxInSvg(svgEl, titleEl);
+      var titleCenterX = titleBoxForBranch ? (titleBoxForBranch.x + titleBoxForBranch.width / 2) : null;
+      for (var pre = 0; pre < branchTitleEls.length; pre++) {
+        var bel = branchTitleEls[pre];
+        var fallbackBranchY = this._estimateBranchSeparatorY(block, pre, stmtYByIndex || {});
+        try {
+          var bbb = bel && bel.getBBox ? this._getElementBBoxInSvg(svgEl, bel) : null;
+          var rangeY = fallbackBranchY !== null && fallbackBranchY !== undefined
+            ? fallbackBranchY
+            : (bbb ? bbb.y + Math.max(bbb.height, 16) / 2 : null);
+          if (rangeY === null || rangeY === undefined) continue;
+          var rangeCx = titleCenterX !== null
+            ? titleCenterX
+            : (bbb ? bbb.x + bbb.width / 2 : null);
+          var rangeHalfWidth = bbb
+            ? Math.max(90, (bbb.width + 48) / 2)
+            : (titleBoxForBranch ? Math.max(90, (titleBoxForBranch.width + 48) / 2) : 90);
+          branchYRanges.push({
+            xMin: rangeCx !== null ? rangeCx - rangeHalfWidth : undefined,
+            xMax: rangeCx !== null ? rangeCx + rangeHalfWidth : undefined,
+            yMin: rangeY - 16,
+            yMax: rangeY + 16,
+            statementIndex: block.branchIndices[pre],
+            branchStmt: branchStatements[pre] || {}
+          });
+        } catch (e0) {}
+      }
+
+      // labelText의 부모 그룹(labelBox rect 포함)을 클릭 → Y 위치 기반 라우팅
+      // labelGroup의 배경 rect가 else/and 행도 덮으므로, 클릭 Y로 분기 여부 판단한다.
+      var openBranchToolbar = function (statementIndex, branchStmt, clientX, clientY) {
+        ctx.setState({
+          selectedSequenceParticipantId: null,
+          selectedSequenceMessageIndex: null,
+          selectedSequenceMessageIndices: [],
+          selectedSequenceBlockId: block.id,
+          sequenceToolbar: {
+            type: 'branch-title',
+            blockId: block.id,
+            statementIndex: statementIndex,
+            text: (branchStmt && branchStmt.text) || '',
+            x: clientX,
+            y: clientY
+          }
+        });
+      };
+
+      var labelGroup = labelEl && (labelEl.closest ? labelEl.closest('g') : labelEl.parentNode);
+      if (labelGroup) {
+        labelGroup.style.cursor = 'pointer';
+        labelGroup.style.pointerEvents = 'all';
+        labelGroup.addEventListener('click', function (e) {
+          e.stopPropagation();
+          // else/and 분기 행 클릭인지 Y 좌표로 판단
+          if (branchYRanges.length) {
+            try {
+              var svgPt = SvgPositionTracker.getSVGPoint(svgEl, e.clientX, e.clientY);
+              if (svgPt) {
+                for (var bi = 0; bi < branchYRanges.length; bi++) {
+                  var range = branchYRanges[bi];
+                  var inBranchX = range.xMin !== undefined && range.xMax !== undefined &&
+                    svgPt.x >= range.xMin && svgPt.x <= range.xMax;
+                  if (inBranchX && svgPt.y >= range.yMin && svgPt.y <= range.yMax) {
+                    openBranchToolbar(range.statementIndex, range.branchStmt, e.clientX, e.clientY);
+                    return;
+                  }
+                }
+              }
+            } catch (eRoute) {}
+          }
+          ctx.setState({
+            selectedSequenceParticipantId: null,
+            selectedSequenceMessageIndex: null,
+            selectedSequenceMessageIndices: [],
+            selectedSequenceBlockId: block.id,
+            sequenceToolbar: {
+              type: 'block',
+              blockId: block.id,
+              kind: block.kind,
+              text: block.text || '',
+              hasBranches: block.branchIndices.length > 0,
+              x: e.clientX,
+              y: e.clientY
+            }
+          });
+        });
+        if (ctx.watchSequenceBlockSelection) {
+          ctx.watchSequenceBlockSelection(block.id, labelGroup);
+        }
+      }
+
+      // 메인 title(loopText) 클릭 → 컨텍스트 툴바 (Edit / Delete) + hover → + 버튼
+      if (titleEl) {
+        titleEl.style.cursor = 'pointer';
+        titleEl.style.pointerEvents = 'all';
+
+        var onTitleClick = function (e) {
+          e.stopPropagation();
+          if (ctx.setState) {
+            ctx.setState({
+              selectedSequenceParticipantId: null,
+              selectedSequenceMessageIndex: null,
+              selectedSequenceMessageIndices: [],
+              selectedSequenceBlockId: block.id,
+              sequenceToolbar: {
+                type: 'block-title',
+                blockId: block.id,
+                kind: block.kind,
+                text: block.text || '',
+                x: e.clientX,
+                y: e.clientY
+              }
+            });
+          }
+        };
+        titleEl.addEventListener('click', onTitleClick);
+
+        if (btnOverlay && participantMap && SequenceSvgHandler) {
+          var onTitleEnter = function () {
+            var bbox;
+            try { bbox = titleEl.getBBox ? titleEl.getBBox() : null; } catch (e2) {}
+            if (!bbox || !bbox.width) return;
+            sharedHideNow();
+            if (SequenceSvgHandler && SequenceSvgHandler._currentHideInsertNow) SequenceSvgHandler._currentHideInsertNow();
+            if (svgEl.dataset) svgEl.dataset.blockBtnActive = '1';
+
+            // participant마다 + 버튼 하나씩, 각자의 lifeline cx에 배치
+            var allBtns = [];
+            var positions = [{ y: bbox.y + bbox.height + 12, isBefore: false }];
+            var ids = Object.keys(participantMap);
+            for (var pi = 0; pi < ids.length; pi++) {
+              var p = participantMap[ids[pi]];
+              if (!p) continue;
+              var btns = SequenceSvgHandler._createNoteInsertButtons(
+                btnOverlay, bbox, block.statementIndex, ids[pi],
+                svgEl, model, participantMap, ctx,
+                sharedCancelHide, sharedScheduleHide, p.cx, positions
+              );
+              for (var bi = 0; bi < btns.length; bi++) allBtns.push(btns[bi]);
+            }
+            shared.btns = allBtns;
+          };
+          titleEl.addEventListener('mouseenter', onTitleEnter);
+          titleEl.addEventListener('mouseleave', sharedScheduleHide);
+        }
+      }
+
+      // 분기 title cursor 표시 (클릭은 labelGroup Y 라우팅이 처리)
+      for (var b = 0; b < branchTitleEls.length; b++) {
+        var bCursorEl = branchTitleEls[b];
+        if (bCursorEl) {
+          bCursorEl.style.cursor = 'pointer';
+          bCursorEl.style.pointerEvents = 'all';
+        }
+      }
+    },
+
+    _bringOverlayToFront: function (svgEl) {
+      if (this._overlay && this._overlay.parentNode === svgEl) {
+        svgEl.appendChild(this._overlay);
+      }
+    }
+  };
+
+  global.SequenceBlockHandler = SequenceBlockHandler;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/actions/SequenceSvgHandler.js ===== */
+(function (global) {
+  'use strict';
+
+  function clamp(value, min, max) {
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
+  }
+
+  var SequenceSvgHandler = {
+    attach: function (svgEl, model, ctx) {
+      var participantMap = SequencePositionTracker.collectParticipants(svgEl, model);
+      var participantTargets = SequencePositionTracker.collectParticipantTargets(svgEl, model);
+      var messages = SequencePositionTracker.collectMessages(svgEl, model);
+      var notes = SequencePositionTracker.collectNotePositions(svgEl, model);
+      participantMap = SequencePositionTracker.refineParticipantLifelines(participantMap, messages);
+      var insertSlots = SequencePositionTracker.collectInsertSlots(participantMap, messages, notes, model);
+
+      // 메시지 엣지와 노트가 공유하는 hover 상태 — 한쪽에 호버하면 다른 쪽 버튼이 사라진다
+      var sharedInsert = { btns: null, hideTimer: null };
+      function sharedInsertCancelHide() {
+        if (sharedInsert.hideTimer !== null) { clearTimeout(sharedInsert.hideTimer); sharedInsert.hideTimer = null; }
+      }
+      function sharedInsertHideNow() {
+        sharedInsertCancelHide();
+        if (sharedInsert.btns) {
+          for (var k = 0; k < sharedInsert.btns.length; k++) sharedInsert.btns[k].remove();
+          sharedInsert.btns = null;
+        }
+        if (svgEl.dataset) delete svgEl.dataset.noteHoverActive;
+      }
+      // block title 버튼과 상호 억제를 위해 현재 hide 함수를 static으로 노출
+      SequenceSvgHandler._currentHideInsertNow = sharedInsertHideNow;
+      function sharedInsertScheduleHide() {
+        sharedInsertCancelHide();
+        sharedInsert.hideTimer = setTimeout(function () { sharedInsertHideNow(); }, 500);
+      }
+
+      SequenceMessageDragHandler.initOverlay(svgEl);
+      // SequenceMessageDragHandler.attach(svgEl, participantMap, insertSlots, ctx);
+      SequenceSvgHandler._attachParticipants(participantTargets, svgEl, ctx);
+      SequenceSvgHandler._attachMessages(messages, svgEl, model, participantMap, ctx, sharedInsert, sharedInsertCancelHide, sharedInsertHideNow, sharedInsertScheduleHide);
+      SequenceSvgHandler._attachNotes(svgEl, model, ctx, participantMap, sharedInsert, sharedInsertCancelHide, sharedInsertHideNow, sharedInsertScheduleHide);
+    },
+
+    _attachParticipants: function (participantTargets, svgEl, ctx) {
+      for (var i = 0; i < participantTargets.length; i++) {
+        SequenceSvgHandler._attachParticipant(participantTargets[i], svgEl, ctx);
+      }
+    },
+
+    _attachParticipant: function (data, svgEl, ctx) {
+      var el = data.el;
+      if (!el) return;
+      el.style.cursor = 'pointer';
+
+      el.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        ctx.setState({
+          selectedSequenceParticipantId: data.id,
+          selectedSequenceMessageIndex: null,
+          selectedSequenceMessageIndices: [],
+          selectedSequenceBlockId: null,
+          sequenceToolbar: {
+            type: 'participant',
+            id: data.id,
+            kind: data.kind || 'participant',
+            x: e.clientX,
+            y: e.clientY
+          }
+        });
+        ctx.emit('sequence-participant-selected', data.id);
+      });
+
+      el.addEventListener('dblclick', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        SequenceSvgHandler.startParticipantEdit(data.id, el, ctx);
+      });
+
+      ctx.watchSequenceParticipantSelection(data.id, el);
+    },
+
+    _attachMessages: function (messages, svgEl, model, participantMap, ctx, shared, sharedCancelHide, sharedHideNow, sharedScheduleHide) {
+      var oldOverlay = svgEl.querySelector('#sequence-message-insert-overlay');
+      if (oldOverlay) oldOverlay.remove();
+      var msgOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      msgOverlay.setAttribute('id', 'sequence-message-insert-overlay');
+      svgEl.appendChild(msgOverlay);
+
+      for (var i = 0; i < messages.length; i++) {
+        SequenceSvgHandler._attachMessage(messages[i], svgEl, model, participantMap, msgOverlay, shared, sharedCancelHide, sharedHideNow, sharedScheduleHide, ctx);
+      }
+    },
+
+    _attachMessage: function (data, svgEl, model, participantMap, msgOverlay, shared, sharedCancelHide, sharedHideNow, sharedScheduleHide, ctx) {
+      if (!data.lineEl && !data.textEl) return;
+      var hitEl = SequenceSvgHandler._makeMessageHit(svgEl, data);
+      var visualEl = data.lineEl || data.textEl;
+      var textEl = data.textEl;
+
+      if (!hitEl) hitEl = visualEl;
+      hitEl.style.cursor = 'pointer';
+
+      var onSelect = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        ctx.setState({
+          selectedSequenceParticipantId: null,
+          selectedSequenceMessageIndex: data.index,
+          selectedSequenceMessageIndices: [],
+          selectedSequenceBlockId: null,
+          sequenceToolbar: {
+            type: 'message',
+            index: data.index,
+            x: e.clientX,
+            y: e.clientY
+          }
+        });
+        ctx.emit('sequence-message-selected', data.index);
+      };
+
+      hitEl.addEventListener('click', onSelect);
+      if (textEl && textEl !== hitEl) textEl.addEventListener('click', onSelect);
+
+      var onEdit = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        SequenceSvgHandler.startMessageEdit(data.index, e.clientX, e.clientY, svgEl, ctx);
+      };
+
+      hitEl.addEventListener('dblclick', onEdit);
+      if (textEl && textEl !== hitEl) textEl.addEventListener('dblclick', onEdit);
+
+      var msgStmtIndex = (function () {
+        var stmts = (model && model.statements) || [];
+        var count = 0;
+        for (var si = 0; si < stmts.length; si++) {
+          if (stmts[si] && stmts[si].type === 'message') {
+            if (count === data.index) return si;
+            count++;
+          }
+        }
+        return stmts.length;
+      }());
+
+      var modelMsg = model && model.messages && model.messages[data.index];
+      var msgFromId = modelMsg ? modelMsg.from : null;
+      var msgToId = modelMsg ? modelMsg.to : null;
+
+      hitEl.addEventListener('mouseenter', function () {
+        if (visualEl) visualEl.classList.add('sequence-message-hovered');
+        if (textEl) textEl.classList.add('sequence-message-text-hovered');
+        if (!data.bbox) return;
+        sharedHideNow();
+        if (SequenceBlockHandler && SequenceBlockHandler._currentHideBlockNow) SequenceBlockHandler._currentHideBlockNow();
+        var bboxCx = data.bbox.x + data.bbox.width / 2;
+        var allBtns = [];
+
+        var fromEntry = msgFromId && participantMap && participantMap[msgFromId];
+        if (fromEntry) {
+          var fromCx = fromEntry.cx + (fromEntry.cx < bboxCx ? 28 : -28);
+          allBtns = allBtns.concat(SequenceSvgHandler._createNoteInsertButtons(
+            msgOverlay, data.bbox, msgStmtIndex, msgFromId,
+            svgEl, model, participantMap, ctx,
+            sharedCancelHide, sharedScheduleHide, fromCx
+          ));
+        }
+
+        var toEntry = msgToId && msgToId !== msgFromId && participantMap && participantMap[msgToId];
+        if (toEntry) {
+          var toCx = toEntry.cx + (toEntry.cx < bboxCx ? 28 : -28);
+          allBtns = allBtns.concat(SequenceSvgHandler._createNoteInsertButtons(
+            msgOverlay, data.bbox, msgStmtIndex, msgToId,
+            svgEl, model, participantMap, ctx,
+            sharedCancelHide, sharedScheduleHide, toCx
+          ));
+        }
+
+        shared.btns = allBtns;
+      });
+      hitEl.addEventListener('mouseleave', function () {
+        if (visualEl) visualEl.classList.remove('sequence-message-hovered');
+        if (textEl) textEl.classList.remove('sequence-message-text-hovered');
+        sharedScheduleHide();
+      });
+
+      ctx.watchSequenceMessageSelection(data.index, visualEl, textEl);
+      if (ctx.watchSequenceMessageHitSelection) {
+        ctx.watchSequenceMessageHitSelection(data.index, hitEl);
+      }
+      if (ctx.watchSequenceMessageMultiSelection) {
+        ctx.watchSequenceMessageMultiSelection(data.index, visualEl, textEl, hitEl);
+      }
+    },
+
+    _makeMessageHit: function (svgEl, data) {
+      if (!data || (!data.lineEl && !data.textEl && !data.bbox)) return null;
+      var overlay = svgEl.querySelector('#sequence-message-hit-overlay');
+      if (!overlay) {
+        overlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        overlay.setAttribute('id', 'sequence-message-hit-overlay');
+        overlay.style.pointerEvents = 'all';
+        svgEl.appendChild(overlay);
+      }
+
+      try {
+        if (data.hitBox && data.hitBox.width && data.hitBox.height) {
+          var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('class', 'sequence-hit-rect');
+          rect.setAttribute('x', data.hitBox.x);
+          rect.setAttribute('y', data.hitBox.y);
+          rect.setAttribute('width', data.hitBox.width);
+          rect.setAttribute('height', data.hitBox.height);
+          rect.setAttribute('rx', '8');
+          rect.setAttribute('fill', '#000');
+          rect.setAttribute('fill-opacity', '0.003');
+          rect.style.pointerEvents = 'all';
+          overlay.appendChild(rect);
+          return rect;
+        }
+
+        var fallback = data.lineEl || data.textEl;
+        if (!fallback) return null;
+        var ghost = fallback.cloneNode(false);
+        ghost.removeAttribute('marker-end');
+        ghost.removeAttribute('marker-start');
+        ghost.setAttribute('stroke', '#000');
+        ghost.setAttribute('stroke-opacity', '0.003');
+        ghost.setAttribute('stroke-width', '18');
+        ghost.setAttribute('fill', 'none');
+        ghost.style.pointerEvents = 'stroke';
+        overlay.appendChild(ghost);
+        return ghost;
+      } catch (e) {
+        return null;
+      }
+    },
+
+    startParticipantEdit: function (participantId, screenPos, topBox, ctx) {
+      var participant = ctx.findSequenceParticipant(participantId);
+      if (!participant) return;
+      var boxW = topBox ? topBox.width : 120;
+      var width = Math.max(160, boxW + 28);
+      var centerX = screenPos ? screenPos.x : (global.innerWidth || 400) / 2;
+      var centerY = screenPos ? screenPos.y : (global.innerHeight || 300) / 2;
+      var left = clamp(
+        centerX - width / 2,
+        12,
+        Math.max(12, (global.innerWidth || 0) - width - 12)
+      );
+      var top = clamp(
+        centerY - 18,
+        12,
+        Math.max(12, (global.innerHeight || 0) - 48)
+      );
+
+      ctx.setState({
+        sequenceToolbar: null,
+        editingSequenceParticipantId: participantId,
+        editingSequenceParticipantText: participant.label || participant.id,
+        sequenceParticipantEditStyle: {
+          position: 'fixed',
+          left: left + 'px',
+          top: top + 'px',
+          zIndex: 1000,
+          width: width + 'px'
+        }
+      });
+      ctx.focusSequenceParticipantInput();
+    },
+
+    startMessageEdit: function (messageIndex, clientX, clientY, svgEl, ctx) {
+      var message = ctx.findSequenceMessage(messageIndex);
+      if (!message) return;
+      var width = 220;
+      var left = clamp(
+        clientX - width / 2,
+        12,
+        Math.max(12, (global.innerWidth || 0) - width - 12)
+      );
+      var top = clamp(
+        clientY - 22,
+        12,
+        Math.max(12, (global.innerHeight || 0) - 48)
+      );
+      ctx.setState({
+        sequenceToolbar: null,
+        editingSequenceMessageIndex: messageIndex,
+        editingSequenceMessageText: message.text || '',
+        sequenceMessageEditStyle: {
+          position: 'fixed',
+          left: left + 'px',
+          top: top + 'px',
+          zIndex: 1000,
+          width: width + 'px'
+        }
+      });
+      ctx.focusSequenceMessageInput();
+    },
+
+    _attachNotes: function (svgEl, model, ctx, participantMap, shared, sharedCancelHide, sharedHideNow, sharedScheduleHide) {
+      var noteRects = Array.prototype.slice.call(svgEl.querySelectorAll('rect.note'));
+      var noteStatements = [];
+      var statements = (model && model.statements) || [];
+      for (var i = 0; i < statements.length; i++) {
+        if (statements[i] && statements[i].type === 'note') {
+          noteStatements.push({ statementIndex: i, statement: statements[i] });
+        }
+      }
+
+      var seenGroups = [], noteGroups = [];
+      for (var r = 0; r < noteRects.length; r++) {
+        var g = noteRects[r].parentNode;
+        if (g && seenGroups.indexOf(g) === -1) { seenGroups.push(g); noteGroups.push(g); }
+      }
+
+      var oldOverlay = svgEl.querySelector('#sequence-note-insert-overlay');
+      if (oldOverlay) oldOverlay.remove();
+      var noteOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      noteOverlay.setAttribute('id', 'sequence-note-insert-overlay');
+      svgEl.appendChild(noteOverlay);
+
+      for (var j = 0; j < Math.min(noteGroups.length, noteStatements.length); j++) {
+        (function (noteGroup, noteInfo) {
+          noteGroup.style.cursor = 'pointer';
+          noteGroup.style.pointerEvents = 'all';
+          noteGroup.addEventListener('click', function (e) {
+            e.stopPropagation();
+            e.preventDefault();
+            ctx.setState({
+              selectedSequenceNoteStatementIndex: noteInfo.statementIndex,
+              selectedSequenceParticipantId: null,
+              selectedSequenceMessageIndex: null,
+              selectedSequenceMessageIndices: [],
+              selectedSequenceBlockId: null,
+              sequenceToolbar: {
+                type: 'note',
+                noteStatementIndex: noteInfo.statementIndex,
+                text: noteInfo.statement.text || '',
+                x: e.clientX,
+                y: e.clientY
+              }
+            });
+          });
+          noteGroup.addEventListener('dblclick', function (e) {
+            e.stopPropagation();
+            e.preventDefault();
+            if (ctx.openSequenceNoteEdit) {
+              ctx.openSequenceNoteEdit(noteInfo.statementIndex, noteInfo.statement.text || '', e.clientX, e.clientY);
+            }
+          });
+
+          noteGroup.addEventListener('mouseenter', function () {
+            sharedHideNow();
+            if (SequenceBlockHandler && SequenceBlockHandler._currentHideBlockNow) SequenceBlockHandler._currentHideBlockNow();
+            if (svgEl.dataset) svgEl.dataset.noteHoverActive = '1';
+            var bbox;
+            try { bbox = noteGroup.getBBox(); } catch (e) { return; }
+            var participantId = noteInfo.statement.participants && noteInfo.statement.participants[0];
+            shared.btns = SequenceSvgHandler._createNoteInsertButtons(
+              noteOverlay, bbox, noteInfo.statementIndex, participantId, svgEl, model, participantMap, ctx,
+              sharedCancelHide, sharedScheduleHide, bbox.x + bbox.width / 2
+            );
+          });
+          noteGroup.addEventListener('mouseleave', sharedScheduleHide);
+
+          if (ctx.watchSequenceNoteMultiSelection) {
+            ctx.watchSequenceNoteMultiSelection(noteInfo.statementIndex, noteGroup);
+          }
+        })(noteGroups[j], noteStatements[j]);
+      }
+    },
+
+    _createNoteInsertButtons: function (overlay, bbox, statementIndex, participantId, svgEl, model, participantMap, ctx, onEnter, onLeave, cxOverride, positionsOverride) {
+      var elements = [];
+      var cx = (cxOverride !== undefined && cxOverride !== null) ? cxOverride : (bbox.x + bbox.width / 2 + 28);
+      var positions = positionsOverride || [
+        { y: bbox.y - 12, isBefore: true },
+        { y: bbox.y + bbox.height + 12, isBefore: false }
+      ];
+
+      var hasDrag = !!(participantMap && Object.keys(participantMap).length && svgEl);
+
+      var findNearestByX = function (svgX) {
+        var best = null; var bestDist = Infinity; var SNAP = 80;
+        var ids = Object.keys(participantMap);
+        for (var i = 0; i < ids.length; i++) {
+          var p = participantMap[ids[i]];
+          if (!p) continue;
+          var dx = Math.abs(svgX - p.cx);
+          if (dx < SNAP && dx < bestDist) { bestDist = dx; best = ids[i]; }
+        }
+        return best;
+      };
+
+      for (var i = 0; i < positions.length; i++) {
+        (function (pos) {
+          // 이 버튼 위치에서의 message insertIndex: isBefore=true이면 statementIndex 이전까지, false면 이후까지
+          var insertIndex = 0;
+          var stmts = (model && model.statements) || [];
+          var limit = pos.isBefore ? statementIndex : statementIndex + 1;
+          for (var si = 0; si < limit && si < stmts.length; si++) {
+            if (stmts[si] && stmts[si].type === 'message') insertIndex++;
+          }
+
+          var hit = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          hit.setAttribute('cx', cx); hit.setAttribute('cy', pos.y); hit.setAttribute('r', '14');
+          hit.setAttribute('fill', '#000'); hit.setAttribute('fill-opacity', '0.001');
+          hit.style.pointerEvents = 'all';
+          hit.style.cursor = hasDrag ? 'ew-resize' : 'pointer';
+          overlay.appendChild(hit); elements.push(hit);
+
+          var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          circle.setAttribute('cx', cx); circle.setAttribute('cy', pos.y); circle.setAttribute('r', '10');
+          circle.setAttribute('fill', '#388e3c'); circle.setAttribute('stroke', '#fff'); circle.setAttribute('stroke-width', '2');
+          circle.style.pointerEvents = 'none';
+          overlay.appendChild(circle); elements.push(circle);
+
+          var plus = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          plus.setAttribute('x', cx); plus.setAttribute('y', pos.y + 1);
+          plus.setAttribute('text-anchor', 'middle'); plus.setAttribute('dominant-baseline', 'middle');
+          plus.setAttribute('fill', '#fff'); plus.setAttribute('font-size', '16'); plus.setAttribute('font-weight', '700');
+          plus.style.pointerEvents = 'none';
+          plus.textContent = '+';
+          overlay.appendChild(plus); elements.push(plus);
+
+          // 파란 + 버튼과 동일한 패턴: mousedown으로 drag vs click 분기
+          hit.addEventListener('mousedown', function (e) {
+            if (e.button !== 0) return;
+            e.preventDefault(); e.stopPropagation();
+            onEnter();
+
+            var startClient = { x: e.clientX, y: e.clientY };
+            var didDrag = false;
+            var currentTarget = null;
+            var dragLine = SequenceMessageDragHandler._dragLine;
+            var targetLine = SequenceMessageDragHandler._targetLine;
+            var pointerClientX = e.clientX;
+            var pointerClientY = e.clientY;
+            var autoPanFrame = null;
+
+            var clearTarget = function () {
+              if (currentTarget && participantMap[currentTarget] && participantMap[currentTarget].el) {
+                participantMap[currentTarget].el.classList.remove('sequence-participant-drag-target');
+              }
+              if (targetLine) targetLine.style.display = 'none';
+              currentTarget = null;
+            };
+
+            var setTarget = function (id) {
+              clearTarget();
+              currentTarget = id;
+              if (id && participantMap[id]) {
+                var p = participantMap[id];
+                if (p.el) p.el.classList.add('sequence-participant-drag-target');
+                if (targetLine) {
+                  targetLine.setAttribute('x1', p.cx); targetLine.setAttribute('x2', p.cx);
+                  targetLine.setAttribute('y1', p.lifelineTopY); targetLine.setAttribute('y2', p.lifelineBottomY);
+                  targetLine.style.display = '';
+                }
+              }
+            };
+
+            var getAutoPanDelta = function (clientX, clientY) {
+              var rect = ctx.getPreviewRect ? ctx.getPreviewRect() : null;
+              if (!rect) return { dx: 0, dy: 0 };
+              var threshold = 56, maxStep = 8, dx = 0, dy = 0, progress = 0;
+              if (clientX <= rect.left + threshold) {
+                progress = Math.min(1, (rect.left + threshold - clientX) / threshold);
+                dx = Math.ceil(progress * maxStep);
+              } else if (clientX >= rect.right - threshold) {
+                progress = Math.min(1, (clientX - (rect.right - threshold)) / threshold);
+                dx = -Math.ceil(progress * maxStep);
+              }
+              if (clientY <= rect.top + threshold) {
+                progress = Math.min(1, (rect.top + threshold - clientY) / threshold);
+                dy = Math.ceil(progress * maxStep);
+              } else if (clientY >= rect.bottom - threshold) {
+                progress = Math.min(1, (clientY - (rect.bottom - threshold)) / threshold);
+                dy = -Math.ceil(progress * maxStep);
+              }
+              return { dx: dx, dy: dy };
+            };
+
+            var stopAutoPan = function () {
+              if (!autoPanFrame) return;
+              cancelAnimationFrame(autoPanFrame);
+              autoPanFrame = null;
+            };
+
+            var updateDragAtClient = function (clientX, clientY) {
+              var svgPt = SvgPositionTracker.getSVGPoint(svgEl, clientX, clientY);
+              if (dragLine) { dragLine.setAttribute('x2', svgPt.x); dragLine.setAttribute('y2', pos.y); }
+              setTarget(findNearestByX(svgPt.x));
+            };
+
+            var autoPanTick = function () {
+              autoPanFrame = null;
+              if (!didDrag) return;
+              var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+              if (!delta.dx && !delta.dy) return;
+              if (ctx.panPreviewBy) {
+                ctx.panPreviewBy(delta.dx, delta.dy);
+                updateDragAtClient(pointerClientX, pointerClientY);
+              }
+              autoPanFrame = requestAnimationFrame(autoPanTick);
+            };
+
+            var scheduleAutoPan = function () {
+              if (autoPanFrame) return;
+              var delta = getAutoPanDelta(pointerClientX, pointerClientY);
+              if (!delta.dx && !delta.dy) return;
+              autoPanFrame = requestAnimationFrame(autoPanTick);
+            };
+
+            var onMove = function (me) {
+              pointerClientX = me.clientX;
+              pointerClientY = me.clientY;
+              if (!hasDrag) return;
+              var dx = me.clientX - startClient.x, dy = me.clientY - startClient.y;
+              if (!didDrag && (dx * dx + dy * dy) > 25) {
+                didDrag = true;
+                if (dragLine) {
+                  dragLine.setAttribute('x1', cx); dragLine.setAttribute('y1', pos.y);
+                  dragLine.setAttribute('x2', cx); dragLine.setAttribute('y2', pos.y);
+                  dragLine.style.display = '';
+                }
+              }
+              if (!didDrag) return;
+              updateDragAtClient(me.clientX, me.clientY);
+              scheduleAutoPan();
+            };
+
+            var onUp = function (me) {
+              document.removeEventListener('mousemove', onMove);
+              document.removeEventListener('mouseup', onUp);
+              stopAutoPan();
+              clearTarget();
+              if (dragLine) dragLine.style.display = 'none';
+              if (targetLine) targetLine.style.display = 'none';
+
+              if (!didDrag) {
+                // 클릭 = 파란 + 버튼처럼 toolbar 표시 (Self Loop / Memo)
+                ctx.setState({
+                  selectedSequenceParticipantId: null,
+                  selectedSequenceMessageIndex: null,
+                  selectedSequenceMessageIndices: [],
+                  selectedSequenceBlockId: null,
+                  sequenceToolbar: {
+                    type: 'insert',
+                    participantId: participantId,
+                    insertIndex: insertIndex,
+                    stmtInsertAt: pos.isBefore ? statementIndex : statementIndex + 1,
+                    x: me.clientX,
+                    y: me.clientY
+                  }
+                });
+              } else if (hasDrag) {
+                // 드래그 = 메시지 생성: note 바로 위/아래 statement 위치에 삽입
+                var svgPt = SvgPositionTracker.getSVGPoint(svgEl, me.clientX, me.clientY);
+                var target = findNearestByX(svgPt.x);
+                if (target) {
+                  ctx.emit('add-sequence-message', {
+                    fromId: participantId, toId: target,
+                    text: 'new msg', insertIndex: insertIndex,
+                    stmtInsertAt: pos.isBefore ? statementIndex : statementIndex + 1
+                  });
+                }
+              }
+              onLeave();
+            };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+          });
+
+          hit.addEventListener('click', function (e) { e.stopPropagation(); });
+          hit.addEventListener('mouseenter', function () { onEnter(); circle.setAttribute('fill', '#43a047'); });
+          hit.addEventListener('mouseleave', function () { circle.setAttribute('fill', '#388e3c'); onLeave(); });
+        })(positions[i]);
+      }
+
+      return elements;
+    },
+
+    // solid(단일 dash) ↔ dotted(이중 dash) 토글
+    toggleMessageLineType: function (message) {
+      return SequenceMessageCodec.toggleLineStyle(message.operator || SequenceMessageCodec.DEFAULT_OPERATOR);
+    }
+  };
+
+  global.SequenceSvgHandler = SequenceSvgHandler;
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/mixins/flowchartActionsMixin.js ===== */
+/**
+ * flowchartActionsMixin
+ * Container component가 flowchartModelEditing을 사용할 수 있도록 감싼 얇은 wrapper.
+ *
+ * 호출부 요구사항:
+ *   - data: model (type, nodes, edges, direction)
+ *   - data: nodeIdAllocator (IdAllocator 인스턴스)
+ *   - data: script
+ *   - methods: _snapshot, updateScriptFromModel, _schedulePreviewFit
+ *   - computed: isFlowchart
+ *
+ * deleteSelected dispatcher는 컴포넌트에 남고, flowchart 삭제 분기만 여기서 처리.
+ */
+(function (global) {
+  'use strict';
+
+  global.flowchartActionsMixin = {
+    methods: {
+      _applyFlowchartEdit: function (nextModel, options) {
+        if (!nextModel || nextModel === this.model) return false;
+        this._snapshot();
+        this.model = nextModel;
+        this.updateScriptFromModel();
+        if (options && options.fitPreview) this._schedulePreviewFit();
+        return true;
+      },
+
+      addNode: function (shape) {
+        if (!this.isFlowchart) return;
+
+        var nodeShape = shape;
+        var nodeText = 'Node';
+        var nodeFill = '';
+
+        if (shape && typeof shape === 'object') {
+          nodeShape = shape.shape;
+          nodeText = shape.text || nodeText;
+          nodeFill = shape.fill || '';
+        }
+
+        if (!nodeShape) nodeShape = 'rect';
+
+        var newNodeId = this.nodeIdAllocator.next(this.script, this.model.nodes);
+        var applied = this._applyFlowchartEdit(
+          flowchartModelEditing.addNode(this.model, {
+            id: newNodeId,
+            text: nodeText,
+            shape: nodeShape,
+            fill: nodeFill
+          }),
+          { fitPreview: true }
+        );
+        if (applied) this._notifyNewNode(newNodeId);
+      },
+
+      addEdge: function (data) {
+        if (!this.isFlowchart) return;
+        this._applyFlowchartEdit(flowchartModelEditing.addEdge(this.model, data));
+      },
+
+      updateNodeText: function (data) {
+        if (!this.isFlowchart) return;
+        this._applyFlowchartEdit(flowchartModelEditing.updateNodeText(this.model, data));
+      },
+
+      updateNodeShape: function (data) {
+        if (!this.isFlowchart) return;
+        this._applyFlowchartEdit(flowchartModelEditing.updateNodeShape(this.model, data));
+      },
+
+      updateNodeStyle: function (data) {
+        if (!this.isFlowchart) return;
+        this._applyFlowchartEdit(flowchartModelEditing.updateNodeStyle(this.model, data));
+      },
+
+      updateNodeFill: function (data) {
+        if (!this.isFlowchart) return;
+        this._applyFlowchartEdit(flowchartModelEditing.updateNodeFill(this.model, data));
+      },
+
+      updateEdgeText: function (data) {
+        if (!this.isFlowchart) return;
+        this._applyFlowchartEdit(flowchartModelEditing.updateEdgeText(this.model, data));
+      },
+
+      updateEdgeType: function (data) {
+        if (!this.isFlowchart) return;
+        this._applyFlowchartEdit(flowchartModelEditing.updateEdgeType(this.model, data));
+      },
+
+      updateEdgeStyle: function (data) {
+        if (!this.isFlowchart) return;
+        this._applyFlowchartEdit(flowchartModelEditing.updateEdgeStyle(this.model, data));
+      },
+
+      updateEdgeColor: function (data) {
+        if (!this.isFlowchart) return;
+        this._applyFlowchartEdit(flowchartModelEditing.updateEdgeColor(this.model, data));
+      },
+
+      changeDirection: function (dir) {
+        if (!this.isFlowchart) return;
+        this._applyFlowchartEdit(
+          flowchartModelEditing.changeDirection(this.model, dir),
+          { fitPreview: true }
+        );
+      },
+
+      // deleteSelected dispatcher가 flowchart 분기를 여기로 위임. _snapshot은 dispatcher 쪽에 이미 찍혔음.
+      _deleteFlowchartSelection: function (data) {
+        var nextModel = flowchartModelEditing.deleteSelection(this.model, data);
+        if (!nextModel || nextModel === this.model) return false;
+        this.model = nextModel;
+        return true;
+      },
+
+      wrapNodesInSubgraph: function (data) {
+        if (!this.isFlowchart || !data || !data.nodeIds || !data.nodeIds.length) return;
+        this._applyFlowchartEdit(
+          flowchartModelEditing.wrapNodesInSubgraph(this.model, data.nodeIds, data.title),
+          { fitPreview: false }
+        );
+      },
+
+      updateSubgraphTitle: function (data) {
+        if (!this.isFlowchart || !data || !data.subgraphId) return;
+        this._applyFlowchartEdit(
+          flowchartModelEditing.updateSubgraphTitle(this.model, data.subgraphId, data.title),
+          { fitPreview: false }
+        );
+      },
+
+      removeSubgraph: function (subgraphId) {
+        if (!this.isFlowchart || !subgraphId) return;
+        this._applyFlowchartEdit(
+          flowchartModelEditing.removeSubgraph(this.model, subgraphId),
+          { fitPreview: false }
+        );
+      }
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/mixins/sequenceActionsMixin.js ===== */
+/**
+ * sequenceActionsMixin
+ * Container component가 sequenceModelEditing을 사용할 수 있도록 감싼 얇은 wrapper.
+ * flowchartActionsMixin과 세트로 사용한다.
+ *
+ * 호출부 요구사항:
+ *   - data: model (type, participants, messages, autonumber)
+ *   - data: participantIdAllocator (IdAllocator 인스턴스)
+ *   - data: script
+ *   - methods: _snapshot, updateScriptFromModel
+ *   - computed: isFlowchart
+ *
+ * deleteSelected dispatcher는 컴포넌트에 남고, sequence 삭제 분기만 여기서 처리.
+ */
+(function (global) {
+  'use strict';
+
+  global.sequenceActionsMixin = {
+    methods: {
+      _applySequenceEdit: function (nextModel) {
+        if (!nextModel || nextModel === this.model) return false;
+        this._snapshot();
+        this.model = nextModel;
+        this.updateScriptFromModel();
+        return true;
+      },
+
+      addSequenceParticipant: function () {
+        if (this.isFlowchart) return;
+        var newId = this.participantIdAllocator.next(this.script, this.model.participants);
+        var applied = this._applySequenceEdit(sequenceModelEditing.addParticipant(this.model, {
+          id: newId,
+          label: 'Participant ' + this.participantIdAllocator.counter,
+          kind: 'participant'
+        }));
+        if (applied) this._notifyNewParticipant(newId);
+      },
+
+      addSequenceActor: function () {
+        if (this.isFlowchart) return;
+        var newId = this.participantIdAllocator.next(this.script, this.model.participants);
+        var applied = this._applySequenceEdit(sequenceModelEditing.addParticipant(this.model, {
+          id: newId,
+          label: 'Actor ' + this.participantIdAllocator.counter,
+          kind: 'actor'
+        }));
+        if (applied) this._notifyNewParticipant(newId);
+      },
+
+      toggleParticipantKind: function (data) {
+        if (this.isFlowchart) return;
+        this._applySequenceEdit(sequenceModelEditing.toggleParticipantKind(this.model, data));
+      },
+
+      moveSequenceParticipant: function (data) {
+        if (this.isFlowchart) return;
+        this._applySequenceEdit(sequenceModelEditing.moveParticipant(this.model, data));
+      },
+
+      addSequenceMessage: function (payload) {
+        if (this.isFlowchart) return;
+        this._applySequenceEdit(sequenceModelEditing.addMessage(this.model, payload));
+      },
+
+      updateSequenceParticipantText: function (data) {
+        if (this.isFlowchart) return;
+        this._applySequenceEdit(sequenceModelEditing.updateParticipantText(this.model, data));
+      },
+
+      updateSequenceMessageText: function (data) {
+        if (this.isFlowchart) return;
+        this._applySequenceEdit(sequenceModelEditing.updateMessageText(this.model, data));
+      },
+
+      reverseSequenceMessage: function (index) {
+        if (this.isFlowchart) return;
+        this._applySequenceEdit(sequenceModelEditing.reverseMessage(this.model, index));
+      },
+
+      toggleAutonumber: function () {
+        if (this.isFlowchart) return;
+        this._applySequenceEdit(sequenceModelEditing.toggleAutonumber(this.model));
+      },
+
+      toggleSequenceMessageLineType: function (index) {
+        if (this.isFlowchart) return;
+        this._applySequenceEdit(sequenceModelEditing.toggleMessageLineType(this.model, index));
+      },
+
+      setSequenceMessageLineType: function (data) {
+        if (this.isFlowchart) return;
+        this._applySequenceEdit(sequenceModelEditing.setMessageLineType(this.model, data));
+      },
+
+      addSequenceBranch: function (data) {
+        if (this.isFlowchart || !data || !data.keyword) return;
+        var hasMessages = data.messageIndices && data.messageIndices.length;
+        var hasNotes = data.noteStatementIndices && data.noteStatementIndices.length;
+        if (!hasMessages && !hasNotes) return;
+        this._applySequenceEdit(sequenceModelEditing.addBranch(this.model, data));
+      },
+
+      wrapSequenceMessagesInBlock: function (data) {
+        if (this.isFlowchart || !data || !data.kind) return;
+        this._applySequenceEdit(sequenceModelEditing.wrapMessagesInBlock(this.model, data));
+      },
+
+      updateSequenceBlockText: function (data) {
+        if (this.isFlowchart || !data || !data.blockId) return;
+        this._applySequenceEdit(sequenceModelEditing.updateBlockText(this.model, data));
+      },
+
+      updateSequenceBranchText: function (data) {
+        if (this.isFlowchart || !data || data.statementIndex === null || data.statementIndex === undefined) return;
+        this._applySequenceEdit(sequenceModelEditing.updateBranchText(this.model, data));
+      },
+
+      changeSequenceBlockType: function (data) {
+        if (this.isFlowchart || !data || !data.blockId || !data.kind) return;
+        this._applySequenceEdit(sequenceModelEditing.changeBlockType(this.model, data));
+      },
+
+      addSequenceNote: function (data) {
+        if (this.isFlowchart || !data || !data.participantId) return;
+        this._applySequenceEdit(sequenceModelEditing.addNote(this.model, data));
+      },
+
+      insertSequenceNoteAt: function (data) {
+        if (this.isFlowchart || !data || !data.participantId) return;
+        this._applySequenceEdit(sequenceModelEditing.insertNoteAtStatementIndex(this.model, data));
+      },
+
+      updateSequenceNoteText: function (data) {
+        if (this.isFlowchart || !data || data.statementIndex === null || data.statementIndex === undefined) return;
+        this._applySequenceEdit(sequenceModelEditing.updateNoteText(this.model, data));
+      },
+
+      // deleteSelected dispatcher가 sequence 분기를 여기로 위임.
+      _deleteSequenceSelection: function (data) {
+        var nextModel = sequenceModelEditing.deleteSelection(this.model, data);
+        if (!nextModel || nextModel === this.model) return false;
+        this.model = nextModel;
+        this.updateScriptFromModel();
+        return true;
+      }
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/mixins/exportMixin.js ===== */
+/**
+ * exportMixin
+ * LiveEditor와 FullEditor가 공유하는 export/copy 래퍼.
+ * SvgExport 서비스(이미 분리돼 있음)를 감싸고, 토스트 메시지를 연결한다.
+ *
+ * 호출부 요구사항:
+ *   - ref: preview (mermaid-preview 컴포넌트)
+ *   - methods: showToast (toastMixin에서 제공)
+ */
+(function (global) {
+  'use strict';
+
+  global.exportMixin = {
+    methods: {
+      _runExport: function (promise, successMsg) {
+        var self = this;
+        return promise
+          .then(function () {
+            self.showToast(successMsg, 'success');
+          })
+          .catch(function () {
+            self.showToast('Export failed', 'error');
+          });
+      },
+
+      getSvgElement: function () {
+        var preview = this.$refs.preview;
+        if (!preview) return null;
+        // canvas ref는 v-if="svgContent" 조건이라 렌더 완료 전엔 DOM에 없을 수 있음
+        var canvas = preview.$refs && preview.$refs.canvas;
+        if (canvas) return canvas.querySelector('svg');
+        // fallback: svgContent 문자열에서 파싱 (외부에서 getSvgElement를 직접 호출한 경우)
+        if (preview.svgContent) {
+          var tmp = document.createElement('div');
+          tmp.innerHTML = preview.svgContent;
+          return tmp.querySelector('svg');
+        }
+        return null;
+      },
+
+      getSvgText: function () {
+        var preview = this.$refs.preview;
+        if (preview && preview.svgContent) {
+          return preview.svgContent;
+        }
+        var svgEl = this.getSvgElement();
+        if (svgEl) {
+          return new XMLSerializer().serializeToString(svgEl);
+        }
+        return '';
+      },
+
+      exportSvg: function () {
+        var svgEl = this.getSvgElement();
+        var svgSource = svgEl || this.getSvgText();
+        if (!svgSource) return;
+        return this._runExport(
+          SvgExport.exportSvg(svgSource, { filename: 'diagram.svg', sourceElement: svgEl }),
+          'SVG exported!'
+        );
+      },
+
+      exportPng: function () {
+        var svgEl = this.getSvgElement();
+        var svgSource = svgEl || this.getSvgText();
+        if (!svgSource) return;
+        return this._runExport(
+          SvgExport.exportPng(svgSource, { filename: 'diagram.png', scale: 2, padding: 20, sourceElement: svgEl }),
+          'PNG exported!'
+        );
+      },
+
+      exportJpg: function () {
+        var svgEl = this.getSvgElement();
+        var svgSource = svgEl || this.getSvgText();
+        if (!svgSource) return;
+        return this._runExport(
+          SvgExport.exportJpg(svgSource, { filename: 'diagram.jpg', scale: 2, padding: 20, quality: 0.92, sourceElement: svgEl }),
+          'JPG exported!'
+        );
+      },
+
+      copySvg: function () {
+        var svgStr = this.getSvgText();
+        if (!svgStr) return;
+        var self = this;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(svgStr).then(function () {
+            self.showToast('SVG copied to clipboard!', 'success');
+          }).catch(function () {
+            self._fallbackCopy(svgStr);
+          });
+        } else {
+          this._fallbackCopy(svgStr);
+        }
+      },
+
+      _fallbackCopy: function (text) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.top = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand('copy');
+          this.showToast('SVG copied!', 'success');
+        } catch (e) {
+          this.showToast('Copy failed — try Ctrl+C', 'error');
+        }
+        document.body.removeChild(ta);
+      }
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/mixins/toastMixin.js ===== */
+/**
+ * toastMixin
+ * 화면 하단에 나타났다 사라지는 토스트 메시지.
+ * LiveEditor와 FullEditor가 공유한다.
+ */
+(function (global) {
+  'use strict';
+
+  global.toastMixin = {
+    data: function () {
+      return {
+        toastMsg: '',
+        toastVisible: false,
+        _toastTimer: null
+      };
+    },
+
+    methods: {
+      showToast: function (msg, type) {
+        var self = this;
+        this.toastMsg     = msg;
+        this.toastVisible = true;
+        clearTimeout(this._toastTimer);
+        this._toastTimer = setTimeout(function () {
+          self.toastVisible = false;
+        }, 2800);
+      }
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/mixins/previewInlineEditMixin.js ===== */
+/**
+ * previewInlineEditMixin
+ * MermaidPreview의 인라인 편집 메서드를 동작 변경 없이 분리한 mixin.
+ */
+(function (global) {
+  'use strict';
+
+  global.previewInlineEditMixin = {
+    methods: {
+    _confirmActiveEdits: function () {
+      if (this.editingNodeId) this.confirmNodeEdit();
+      if (this.editingEdgeIndex !== null) this.confirmEdgeEdit();
+      if (this.editingSequenceParticipantId) this.confirmSequenceParticipantEdit();
+      if (this.editingSequenceMessageIndex !== null) this.confirmSequenceMessageEdit();
+      if (this.editingSequenceBlockId !== null || this.editingSequenceBranchStatementIndex !== null) this.confirmSequenceBlockEdit();
+      if (this.editingSequenceNoteStatementIndex !== null) this.confirmSequenceNoteEdit();
+    },
+
+    isStaticDiagram: function () {
+      return !!(this.model && this.model.profile === 'static');
+    },
+
+    isGraphProfile: function () {
+      return !!(this.model && (this.model.headerKeyword === 'graph' || this.model.profile === 'graph'));
+    },
+
+    isStaticNodeEditing: function () {
+      return !!(this.editingNodeId && this.isStaticDiagram());
+    },
+
+    isGraphEdgeEditing: function () {
+      return this.editingEdgeIndex !== null && this.isGraphProfile();
+    },
+
+    getGraphEdgeEditBoxSize: function (text) {
+      var lines = String(text || '').split(/\r\n|\r|\n/).length;
+      if (lines <= 1) {
+        return { width: 260, height: 56 };
+      }
+      return {
+        width: lines >= 4 ? 320 : 300,
+        height: Math.min(130, Math.max(76, lines * 20 + 30))
+      };
+    },
+
+    confirmNodeEdit: function () {
+      if (this.editingNodeId && this.editingText.trim()) {
+        this.$emit('update-node-text', {
+          nodeId: this.editingNodeId,
+          text:   SvgNodeHandler.toModelText(this.model, this.editingText.trim())
+        });
+      }
+      this.editingNodeId = null;
+      this.editingText   = '';
+      this.editingNodeColor = '#e2e8f0';
+    },
+
+    cancelNodeEdit: function () {
+      this.editingNodeId = null;
+      this.editingText   = '';
+      this.editingNodeColor = '#e2e8f0';
+    },
+
+    onNodeEditKeyDown: function (e) {
+      if (e.key === 'Enter')  { e.preventDefault(); this.confirmNodeEdit(); }
+      if (e.key === 'Escape') { this.cancelNodeEdit(); }
+    },
+
+    onStaticNodeEditKeyDown: function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        this.confirmNodeEdit();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.cancelNodeEdit();
+      }
+    },
+
+    confirmEdgeEdit: function () {
+      if (this.editingEdgeIndex !== null) {
+        this.$emit('update-edge-text', {
+          index: this.editingEdgeIndex,
+          text:  this.isGraphProfile()
+            ? SvgNodeHandler.toModelText(this.model, this.editingEdgeText.trim())
+            : this.editingEdgeText.trim()
+        });
+      }
+      this.editingEdgeIndex = null;
+      this.editingEdgeText  = '';
+      this.editingEdgeColor = '#5c7ab0';
+      this.selectedEdgeIndex = null;
+      this._clearEdgeVisualState();
+    },
+
+    cancelEdgeEdit: function () {
+      this.editingEdgeIndex = null;
+      this.editingEdgeText  = '';
+      this.editingEdgeColor = '#5c7ab0';
+      this.selectedEdgeIndex = null;
+      this._clearEdgeVisualState();
+    },
+
+    onEdgeEditKeyDown: function (e) {
+      if (e.key === 'Enter')  { e.preventDefault(); this.confirmEdgeEdit(); }
+      if (e.key === 'Escape') { this.cancelEdgeEdit(); }
+    },
+
+    onGraphEdgeEditKeyDown: function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        this.confirmEdgeEdit();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.cancelEdgeEdit();
+      }
+    },
+
+    confirmSequenceParticipantEdit: function () {
+      if (this.editingSequenceParticipantId && this.editingSequenceParticipantText.trim()) {
+        this.$emit('update-sequence-participant-text', {
+          participantId: this.editingSequenceParticipantId,
+          text: this.editingSequenceParticipantText.trim()
+        });
+      }
+      this.editingSequenceParticipantId = null;
+      this.editingSequenceParticipantText = '';
+    },
+
+    cancelSequenceParticipantEdit: function () {
+      this.editingSequenceParticipantId = null;
+      this.editingSequenceParticipantText = '';
+    },
+
+    onSequenceParticipantEditKeyDown: function (e) {
+      if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceParticipantEdit(); }
+      if (e.key === 'Escape') { this.cancelSequenceParticipantEdit(); }
+    },
+
+    confirmSequenceMessageEdit: function () {
+      if (this.editingSequenceMessageIndex !== null) {
+        this.$emit('update-sequence-message-text', {
+          index: this.editingSequenceMessageIndex,
+          text: this.editingSequenceMessageText.trim()
+        });
+      }
+      this.editingSequenceMessageIndex = null;
+      this.editingSequenceMessageText = '';
+    },
+
+    cancelSequenceMessageEdit: function () {
+      this.editingSequenceMessageIndex = null;
+      this.editingSequenceMessageText = '';
+    },
+
+    onSequenceMessageEditKeyDown: function (e) {
+      if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceMessageEdit(); }
+      if (e.key === 'Escape') { this.cancelSequenceMessageEdit(); }
+    },
+
+    confirmSequenceBlockEdit: function () {
+      if (this.editingSequenceBlockId !== null) {
+        this.$emit('update-sequence-block-text', {
+          blockId: this.editingSequenceBlockId,
+          text: this.editingSequenceBlockText.trim()
+        });
+      } else if (this.editingSequenceBranchStatementIndex !== null) {
+        this.$emit('update-sequence-branch-text', {
+          statementIndex: this.editingSequenceBranchStatementIndex,
+          text: this.editingSequenceBlockText.trim()
+        });
+      }
+      this.editingSequenceBlockId = null;
+      this.editingSequenceBranchStatementIndex = null;
+      this.editingSequenceBlockText = '';
+    },
+
+    cancelSequenceBlockEdit: function () {
+      this.editingSequenceBlockId = null;
+      this.editingSequenceBranchStatementIndex = null;
+      this.editingSequenceBlockText = '';
+    },
+
+    onSequenceBlockEditKeyDown: function (e) {
+      if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceBlockEdit(); }
+      if (e.key === 'Escape') { this.cancelSequenceBlockEdit(); }
+    },
+
+    confirmSequenceNoteEdit: function () {
+      if (this.editingSequenceNoteStatementIndex !== null) {
+        this.$emit('update-sequence-note-text', {
+          statementIndex: this.editingSequenceNoteStatementIndex,
+          text: this.editingSequenceNoteText.trim()
+        });
+      }
+      this.editingSequenceNoteStatementIndex = null;
+      this.editingSequenceNoteText = '';
+    },
+
+    cancelSequenceNoteEdit: function () {
+      this.editingSequenceNoteStatementIndex = null;
+      this.editingSequenceNoteText = '';
+    },
+
+    onSequenceNoteEditKeyDown: function (e) {
+      if (e.key === 'Enter')  { e.preventDefault(); this.confirmSequenceNoteEdit(); }
+      if (e.key === 'Escape') { this.cancelSequenceNoteEdit(); }
+    },
+
+    subgraphTitleEdit: function () {
+      var tb = this.subgraphTitleToolbar;
+      if (!tb) return;
+      this.subgraphTitleToolbar = null;
+      var currentSg = ((this.model && this.model.subgraphs) || []).filter(function (s) { return s.id === tb.sgId; })[0];
+      var canvas = this.$refs.canvas;
+      var cr = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+      this.editingSubgraphId   = tb.sgId;
+      this.editingSubgraphText = currentSg ? currentSg.title : tb.sgId;
+      this.editingSubgraphStyle = {
+        position: 'absolute',
+        left:   tb.x + 'px',
+        top:    tb.y + 'px',
+        width:  '140px',
+        zIndex: 1000
+      };
+      var self = this;
+      this.$nextTick(function () {
+        var el = self.$refs.editSubgraphInput;
+        if (el) { el.focus(); el.select(); }
+        var onOutsideDown = function (me) {
+          var inputEl = self.$refs.editSubgraphInput;
+          if (inputEl && inputEl.contains(me.target)) return;
+          document.removeEventListener('mousedown', onOutsideDown, true);
+          self.confirmSubgraphEdit();
+        };
+        document.addEventListener('mousedown', onOutsideDown, true);
+      });
+    },
+
+    confirmSubgraphEdit: function () {
+      var id   = this.editingSubgraphId;
+      var text = (this.editingSubgraphText || '').trim();
+      this.editingSubgraphId   = null;
+      this.editingSubgraphText = '';
+      if (!id) return;
+      if (!text) {
+        this.$emit('remove-subgraph', id);
+      } else {
+        this.$emit('update-subgraph-title', { subgraphId: id, title: text });
+      }
+    },
+
+    cancelSubgraphEdit: function () {
+      this.editingSubgraphId   = null;
+      this.editingSubgraphText = '';
+    },
+
+    _onSubgraphEditKeyDown: function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); this.confirmSubgraphEdit(); }
+      if (e.key === 'Escape') { this.cancelSubgraphEdit(); }
+    },
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/mixins/previewToolbarMixin.js ===== */
+/**
+ * previewToolbarMixin
+ * MermaidPreview의 플로우 엣지/시퀀스 툴바 메서드를 동작 변경 없이 분리한 mixin.
+ */
+(function (global) {
+  'use strict';
+
+  global.previewToolbarMixin = {
+    methods: {
+    getFlowEdgeParts: function (type) {
+      return FlowEdgeCodec ? FlowEdgeCodec.parseType(type) : { body: 'solid', head: 'none' };
+    },
+
+    getFlowEdgeType: function () {
+      if (!this.edgeToolbar) return '---';
+      var edge = (this.model.edges || [])[this.edgeToolbar.edgeIndex];
+      return edge && edge.type ? edge.type : '---';
+    },
+
+    getFlowEdgeBodyLabel: function () {
+      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
+      var options = this.$options.FLOW_EDGE_BODY_OPTIONS || [];
+      for (var i = 0; i < options.length; i++) {
+        if (options[i].key === parts.body) return options[i].label;
+      }
+      return '──';
+    },
+
+    getFlowEdgeHeadLabel: function () {
+      var head = this.getFlowEdgeParts(this.getFlowEdgeType()).head;
+      var options = this.$options.FLOW_EDGE_HEAD_OPTIONS || [];
+      for (var i = 0; i < options.length; i++) {
+        if (options[i].key === head) return options[i].label;
+      }
+      return '─';
+    },
+
+    getFlowEdgeColorValue: function () {
+      if (!this.edgeToolbar) return '';
+      var edge = (this.model.edges || [])[this.edgeToolbar.edgeIndex];
+      return edge && edge.color ? edge.color : '';
+    },
+
+    getSequenceMessageLineType: function () {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'message') {
+        return SequenceMessageCodec.DEFAULT_OPERATOR;
+      }
+      var message = (this.model.messages || [])[this.sequenceToolbar.index];
+      var parsed = SequenceMessageCodec.parseOperator(message && message.operator);
+      return parsed.base || SequenceMessageCodec.DEFAULT_OPERATOR;
+    },
+
+    getSequenceMessageLineTypeLabel: function () {
+      var current = this.getSequenceMessageLineType();
+      var options = this.$options.LINE_TYPE_OPTIONS || [];
+      for (var i = 0; i < options.length; i++) {
+        if (options[i].operator === current) return options[i].label;
+      }
+      return '───▶';
+    },
+
+    getAvailableFlowEdgeHeadOptions: function () {
+      return this.$options.FLOW_EDGE_HEAD_OPTIONS || [];
+    },
+
+    composeFlowEdgeType: function (body, head) {
+      return FlowEdgeCodec ? FlowEdgeCodec.composeType(body, head) : '---';
+    },
+
+    toggleFlowEdgeColorPicker: function () {
+      if (!this.edgeToolbar) return;
+      this.flowEdgeColorPicker = !this.flowEdgeColorPicker;
+      if (this.flowEdgeColorPicker) {
+        this.flowEdgeBodyPicker = false;
+        this.flowEdgeHeadPicker = false;
+      }
+    },
+
+    toggleFlowEdgeBodyPicker: function () {
+      if (!this.edgeToolbar) return;
+      this.flowEdgeBodyPicker = !this.flowEdgeBodyPicker;
+      if (this.flowEdgeBodyPicker) {
+        this.flowEdgeColorPicker = false;
+        this.flowEdgeHeadPicker = false;
+      }
+    },
+
+    toggleFlowEdgeHeadPicker: function () {
+      if (!this.edgeToolbar) return;
+      this.flowEdgeHeadPicker = !this.flowEdgeHeadPicker;
+      if (this.flowEdgeHeadPicker) {
+        this.flowEdgeColorPicker = false;
+        this.flowEdgeBodyPicker = false;
+      }
+    },
+
+    edgeToolbarSetType: function (type) {
+      if (!this.edgeToolbar) return;
+      this.$emit('update-edge-type', {
+        index: this.edgeToolbar.edgeIndex,
+        type: type
+      });
+    },
+
+    edgeToolbarSelectLineBody: function (body) {
+      if (!this.edgeToolbar) return;
+      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
+      this.edgeToolbarSetType(this.composeFlowEdgeType(body, parts.head));
+      this.flowEdgeBodyPicker = false;
+    },
+
+    edgeToolbarSelectLineHead: function (head) {
+      if (!this.edgeToolbar) return;
+      var parts = this.getFlowEdgeParts(this.getFlowEdgeType());
+      this.edgeToolbarSetType(this.composeFlowEdgeType(parts.body, head));
+      this.flowEdgeHeadPicker = false;
+    },
+
+    edgeToolbarEdit: function () {
+      if (!this.edgeToolbar) return;
+      var idx = this.edgeToolbar.edgeIndex;
+      var clickX = this.edgeToolbar.x;
+      var clickY = this.edgeToolbar.y;
+      this.edgeToolbar = null;
+      var edge = (this.model.edges || [])[idx];
+      if (!edge) return;
+
+      var graphMode = this.isGraphProfile();
+      var editText = graphMode ? SvgNodeHandler.toEditableText(this.model, edge.text || '') : (edge.text || '');
+      var editBox = graphMode ? this.getGraphEdgeEditBoxSize(editText) : { width: 160, height: 0 };
+      this.selectedEdgeIndex = idx;
+      this.editingEdgeIndex = idx;
+      this.editingEdgeText = editText;
+      this.editingEdgeColor = edge.color || '#5c7ab0';
+      this.edgeEditInputStyle = {
+        position: 'absolute',
+        left: Math.max(8, clickX - (graphMode ? Math.round(editBox.width / 2) : 80)) + 'px',
+        top: Math.max(8, clickY - 18) + 'px',
+        zIndex: 1000,
+        width: graphMode ? editBox.width + 'px' : '160px',
+        height: graphMode ? editBox.height + 'px' : undefined
+      };
+      this.flowEdgeColorPicker = false;
+      this.flowEdgeBodyPicker = false;
+      this.flowEdgeHeadPicker = false;
+      this.$nextTick(this._buildCtxLite().focusEdgeEditInput);
+    },
+
+    edgeToolbarDelete: function () {
+      if (!this.edgeToolbar) return;
+      this.$emit('delete-selected', { nodeId: null, edgeIndex: this.edgeToolbar.edgeIndex });
+      this.edgeToolbar       = null;
+      this.flowEdgeColorPicker = false;
+      this.flowEdgeBodyPicker = false;
+      this.flowEdgeHeadPicker = false;
+      this.selectedEdgeIndex = null;
+    },
+
+    edgeToolbarChangeColor: function (color) {
+      if (!this.edgeToolbar) return;
+      this.$emit('update-edge-color', {
+        index: this.edgeToolbar.edgeIndex,
+        color: color || ''
+      });
+      this.flowEdgeColorPicker = false;
+    },
+
+    sequenceToolbarEdit: function () {
+      if (!this.sequenceToolbar) return;
+      var toolbar = this.sequenceToolbar;
+      var canvas = this.$refs.canvas;
+      var svgEl = canvas ? canvas.querySelector('svg') : null;
+
+      if (toolbar.type === 'participant') {
+        var participantMap = SequencePositionTracker.collectParticipants(svgEl, this.model);
+        var participant = participantMap[toolbar.id];
+        if (participant) {
+          var topBox = participant.topBox || participant.bbox;
+          var screenPos = { x: toolbar.x, y: toolbar.y };
+          SequenceSvgHandler.startParticipantEdit(toolbar.id, screenPos, topBox, this._buildCtxLite());
+        }
+      } else if (toolbar.type === 'message') {
+        SequenceSvgHandler.startMessageEdit(toolbar.index, toolbar.x, toolbar.y, svgEl, this._buildCtxLite());
+      } else if (toolbar.type === 'block' || toolbar.type === 'block-title') {
+        this._buildCtxLite().openSequenceBlockEdit(toolbar.blockId, toolbar.text || '', toolbar.x, toolbar.y);
+      } else if (toolbar.type === 'branch-title') {
+        this._buildCtxLite().openSequenceBranchEdit(toolbar.statementIndex, toolbar.text || '', toolbar.x, toolbar.y);
+      } else if (toolbar.type === 'note') {
+        this._buildCtxLite().openSequenceNoteEdit(toolbar.noteStatementIndex, toolbar.text || '', toolbar.x, toolbar.y);
+      }
+    },
+
+    sequenceToolbarDelete: function () {
+      if (!this.sequenceToolbar) return;
+      if (this.sequenceToolbar.type === 'participant') {
+        this.$emit('delete-selected', {
+          sequenceParticipantId: this.sequenceToolbar.id,
+          sequenceMessageIndex: null
+        });
+        this.selectedSequenceParticipantId = null;
+      } else if (this.sequenceToolbar.type === 'message') {
+        this.$emit('delete-selected', {
+          sequenceParticipantId: null,
+          sequenceMessageIndex: this.sequenceToolbar.index
+        });
+        this.selectedSequenceMessageIndex = null;
+      } else if (this.sequenceToolbar.type === 'block' || this.sequenceToolbar.type === 'block-title') {
+        this.$emit('delete-selected', {
+          sequenceParticipantId: null,
+          sequenceMessageIndex: null,
+          sequenceBlockId: this.sequenceToolbar.blockId
+        });
+        this.selectedSequenceBlockId = null;
+      } else if (this.sequenceToolbar.type === 'branch-title') {
+        this.$emit('update-sequence-branch-text', {
+          statementIndex: this.sequenceToolbar.statementIndex,
+          text: ''
+        });
+      } else if (this.sequenceToolbar.type === 'note') {
+        this.$emit('delete-selected', { sequenceNoteStatementIndex: this.sequenceToolbar.noteStatementIndex });
+        this.selectedSequenceNoteStatementIndex = null;
+      }
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarAddMessage: function () {
+      if (!this.sequenceToolbar) return;
+      if (this.sequenceToolbar.type === 'participant') {
+        this.$emit('add-sequence-message', { participantId: this.sequenceToolbar.id });
+      } else if (this.sequenceToolbar.type === 'message') {
+        this.$emit('add-sequence-message', { afterIndex: this.sequenceToolbar.index });
+      }
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarReverse: function () {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'message') return;
+      this.$emit('reverse-sequence-message', this.sequenceToolbar.index);
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarToggleLineType: function () {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'message') return;
+      this.lineTypePicker = !this.lineTypePicker;
+    },
+
+    sequenceToolbarSelectLineType: function (operator) {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'message') return;
+      this.$emit('set-sequence-message-line-type', { index: this.sequenceToolbar.index, operator: operator });
+      this.lineTypePicker = false;
+    },
+
+    sequenceToolbarChangeBlockType: function (kind) {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'block') return;
+      this.$emit('change-sequence-block-type', {
+        blockId: this.sequenceToolbar.blockId,
+        kind: kind
+      });
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarInsertSelfLoop: function () {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'insert') return;
+      var tb = this.sequenceToolbar;
+      var payload = { fromId: tb.participantId, toId: tb.participantId, insertIndex: tb.insertIndex };
+      if (tb.stmtInsertAt !== undefined && tb.stmtInsertAt !== null) {
+        payload.stmtInsertAt = tb.stmtInsertAt;
+      }
+      this.$emit('add-sequence-message', payload);
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarInsertMemo: function () {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'insert') return;
+      var tb = this.sequenceToolbar;
+      if (tb.stmtInsertAt !== undefined && tb.stmtInsertAt !== null) {
+        this.$emit('insert-sequence-note-at', {
+          statementIndex: tb.stmtInsertAt,
+          participantId: tb.participantId,
+          isBefore: true
+        });
+      } else {
+        this.$emit('create-sequence-note', {
+          participantId: tb.participantId,
+          insertIndex: tb.insertIndex
+        });
+      }
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarAddBranch: function (keyword) {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'selection') return;
+      this.$emit('add-sequence-branch', {
+        keyword: keyword,
+        text: keyword === 'else' ? 'else title' : 'and title',
+        messageIndices: (this.sequenceToolbar.messageIndices || []).slice(),
+        noteStatementIndices: (this.sequenceToolbar.noteStatementIndices || []).slice()
+      });
+      this.selectedSequenceMessageIndices = [];
+      this.selectedNoteStatementIndices = [];
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarWrapBlock: function (kind) {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'selection') return;
+      this.$emit('wrap-sequence-messages-in-block', {
+        kind: kind,
+        text: kind + '_title',
+        messageIndices: (this.sequenceToolbar.messageIndices || []).slice(),
+        noteStatementIndices: (this.sequenceToolbar.noteStatementIndices || []).slice()
+      });
+      this.selectedSequenceMessageIndices = [];
+      this.selectedNoteStatementIndices = [];
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarToggleKind: function () {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'participant') return;
+      this.$emit('toggle-participant-kind', { participantId: this.sequenceToolbar.id });
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarMoveLeft: function () {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'participant') return;
+      this.$emit('move-sequence-participant', { participantId: this.sequenceToolbar.id, direction: 'left' });
+      this.sequenceToolbar = null;
+    },
+
+    sequenceToolbarMoveRight: function () {
+      if (!this.sequenceToolbar || this.sequenceToolbar.type !== 'participant') return;
+      this.$emit('move-sequence-participant', { participantId: this.sequenceToolbar.id, direction: 'right' });
+      this.sequenceToolbar = null;
+    },
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/mixins/previewViewportMixin.js ===== */
+/**
+ * previewViewportMixin
+ * MermaidPreview의 viewport, pan, zoom, visibility 보조 메서드를 동작 변경 없이 분리한 mixin.
+ */
+(function (global) {
+  'use strict';
+
+  global.previewViewportMixin = {
+    methods: {
+    scheduleFit: function () {
+      this._fitAfterRender = true;
+    },
+
+    _applyTransform: function () {
+      if (!this._svgEl) return;
+      var snappedPanX = Math.round(this.panX);
+      var snappedPanY = Math.round(this.panY);
+      var snappedZoom = Math.round(this.cfgZoom * 1000) / 1000;
+      // SVG width/height를 zoom에 맞게 조절해 벡터 품질을 유지한다.
+      // CSS scale() 대신 이 방식을 쓰면 foreignObject 내부 텍스트도 선명하게 렌더된다.
+      var intrinsicW = this._intrinsicWidth || 1;
+      var intrinsicH = this._intrinsicHeight || 1;
+      this._svgEl.style.width  = (intrinsicW * snappedZoom) + 'px';
+      this._svgEl.style.height = (intrinsicH * snappedZoom) + 'px';
+      this._svgEl.style.transformOrigin = '0 0';
+      this._svgEl.style.transform = 'translate(' + snappedPanX + 'px, ' + snappedPanY + 'px)';
+      var self = this;
+      requestAnimationFrame(function () { self._refreshFloatingUiPositions(); });
+    },
+
+    _getContentBounds: function () {
+      if (!this._svgEl) return null;
+
+      // viewBox는 Mermaid가 SVG 생성 시 전체 다이어그램 크기로 정확히 설정한다.
+      // getBBox()는 foreignObject 레이아웃 전에 호출되면 부분 bounds를 반환할 수 있어
+      // fitView 계산이 틀려지므로 viewBox를 우선 사용한다.
+      var vb = this._svgEl.viewBox && this._svgEl.viewBox.baseVal;
+      if (vb && vb.width && vb.height) {
+        return { x: vb.x, y: vb.y, width: vb.width, height: vb.height };
+      }
+
+      try {
+        var box = this._svgEl.getBBox();
+        if (box && box.width && box.height) {
+          return { x: box.x, y: box.y, width: box.width, height: box.height };
+        }
+      } catch (e) {}
+
+      return null;
+    },
+
+    _setupViewport: function (svgEl, canvas, forcefit) {
+      var prevZoom = this.cfgZoom;
+      var prevPanX = this.panX;
+      var prevPanY = this.panY;
+      var hadPrev  = !!this._svgEl;
+
+      this._svgEl = svgEl;
+      svgEl.style.overflow = 'visible';
+      svgEl.style.display = 'block';
+      svgEl.style.position = 'absolute';
+      svgEl.style.top = '0';
+      svgEl.style.left = '0';
+      svgEl.style.maxWidth = 'none';
+      svgEl.style.maxHeight = 'none';
+      svgEl.style.backfaceVisibility = 'hidden';
+      svgEl.style.webkitFontSmoothing = 'antialiased';
+      svgEl.setAttribute('text-rendering', 'geometricPrecision');
+
+      var vb = svgEl.viewBox && svgEl.viewBox.baseVal;
+      var bounds = this._getContentBounds();
+      var intrinsicWidth = (vb && vb.width) || (bounds && bounds.width) || 1;
+      var intrinsicHeight = (vb && vb.height) || (bounds && bounds.height) || 1;
+
+      this._intrinsicWidth  = intrinsicWidth;
+      this._intrinsicHeight = intrinsicHeight;
+
+      svgEl.style.width = intrinsicWidth + 'px';
+      svgEl.style.height = intrinsicHeight + 'px';
+
+      var self = this;
+
+      if (forcefit || !hadPrev) {
+        // 브라우저 레이아웃 완료 후 fit 해야 canvas 크기를 정확히 읽을 수 있다.
+        requestAnimationFrame(function () { self.fitView(); });
+      } else {
+        this.cfgZoom = prevZoom;
+        this.panX    = prevPanX;
+        this.panY    = prevPanY;
+        this._applyTransform();
+      }
+
+      canvas.onwheel = function (e) {
+        if (self._shouldLetEditTextScroll(e.target)) return;
+        e.preventDefault();
+        self._zoomAtClient(e.deltaY < 0 ? 1.1 : 0.9, e.clientX, e.clientY);
+      };
+
+      // 패닝은 배경에서만 시작해서 node/edge interaction과 충돌하지 않게 한다.
+      canvas.onmousedown = function (e) {
+        if (e.button !== 0) return;
+        if (!self._canPreparePan(e.target, svgEl)) return;
+        e.preventDefault();
+        self._panCandidate = { startX: e.clientX, startY: e.clientY, panX: self.panX, panY: self.panY };
+      };
+
+      canvas.onmousemove = function (e) {
+        if (!self._panState && self._panCandidate) {
+          var dx = e.clientX - self._panCandidate.startX;
+          var dy = e.clientY - self._panCandidate.startY;
+          if (Math.abs(dx) + Math.abs(dy) >= 4) {
+            self._panState = self._panCandidate;
+            self._panCandidate = null;
+            canvas.classList.add('preview-area__canvas--panning');
+          }
+        }
+        if (!self._panState) return;
+        self.panX = self._panState.panX + (e.clientX - self._panState.startX);
+        self.panY = self._panState.panY + (e.clientY - self._panState.startY);
+        self._applyTransform();
+      };
+
+      if (this._panMouseUpHandler) {
+        document.removeEventListener('mouseup', this._panMouseUpHandler);
+      }
+      this._panMouseUpHandler = function () { self._endPan(); };
+      document.addEventListener('mouseup', this._panMouseUpHandler);
+    },
+
+    _shouldLetEditTextScroll: function (target) {
+      if (!this.isStaticDiagram()) return false;
+      if (!target || !target.closest) return false;
+      var overlay = target.closest('.node-edit-overlay');
+      if (!overlay) return false;
+      var editor = target.closest('textarea') || (overlay.querySelector && overlay.querySelector('textarea'));
+      return !!(editor && editor.scrollHeight > editor.clientHeight);
+    },
+
+    _canPreparePan: function (target, svgEl) {
+      if (!target || !svgEl) return false;
+      if (target.closest && (
+        target.closest('.edge-toolbar') ||
+        target.closest('.sequence-toolbar') ||
+        target.closest('.context-menu') ||
+        target.closest('.node-edit-overlay') ||
+        target.closest('#conn-port-overlay') ||
+        target.closest('#sequence-drag-overlay') ||
+        target.closest('#sequence-block-overlay')
+      )) {
+        return false;
+      }
+      return true;
+    },
+
+    _endPan: function () {
+      var canvas = this.$refs.canvas;
+      if (this._panState) this._suppressClickAfterPan = true;
+      this._panState = null;
+      this._panCandidate = null;
+      if (canvas) canvas.classList.remove('preview-area__canvas--panning');
+    },
+
+    _zoomAtClient: function (factor, clientX, clientY) {
+      var canvas = this.$refs.canvas;
+      if (!canvas) return;
+      var rect = canvas.getBoundingClientRect();
+      var cx = clientX - rect.left;
+      var cy = clientY - rect.top;
+
+      var newZoom = Math.max(0.05, Math.min(5.0, this.cfgZoom * factor));
+      var ratio   = newZoom / this.cfgZoom;
+
+      this.panX    = cx - (cx - this.panX) * ratio;
+      this.panY    = cy - (cy - this.panY) * ratio;
+      this.cfgZoom = newZoom;
+      this._applyTransform();
+    },
+
+    _allPositionsZero: function (positions) {
+      var ids = Object.keys(positions);
+      if (!ids.length) return false;
+      for (var i = 0; i < ids.length; i++) {
+        if (positions[ids[i]].width > 0) return false;
+      }
+      return true;
+    },
+
+    _scheduleRerenderWhenVisible: function () {
+      if (this._visibilityObserver) return;
+      var self = this;
+      var el = this.$el;
+      if (!el || typeof IntersectionObserver === 'undefined') return;
+      this._visibilityObserver = new IntersectionObserver(function (entries) {
+        if (entries[0].isIntersecting) {
+          self._visibilityObserver.disconnect();
+          self._visibilityObserver = null;
+          self.scheduleFit();
+          self.renderDiagram();
+        }
+      }, { threshold: 0 });
+      this._visibilityObserver.observe(el);
+    },
+
+    fitView: function () {
+      var canvas = this.$refs.canvas;
+      if (!canvas || !this._svgEl) return;
+
+      var canvasW = canvas.clientWidth  || canvas.offsetWidth;
+      var canvasH = canvas.clientHeight || canvas.offsetHeight;
+
+      if (!canvasW || !canvasH) {
+        var self = this;
+        requestAnimationFrame(function () { self.fitView(); });
+        return;
+      }
+
+      var bounds = this._getContentBounds();
+      if (!bounds || !bounds.width || !bounds.height) return;
+
+      var pad    = Math.max(24, Math.min(canvasW, canvasH) * 0.06);
+      var scaleX = (canvasW - pad * 2) / bounds.width;
+      var scaleY = (canvasH - pad * 2) / bounds.height;
+      var scale  = Math.min(scaleX, scaleY);
+      scale = Math.min(5.0, scale);
+
+      this.cfgZoom = scale;
+      this.panX    = (canvasW - bounds.width * scale) / 2 - bounds.x * scale;
+      this.panY    = (canvasH - bounds.height * scale) / 2 - bounds.y * scale;
+      this._applyTransform();
+    },
+
+    zoomIn: function () {
+      var canvas = this.$refs.canvas;
+      if (!canvas) return;
+      var rect = canvas.getBoundingClientRect();
+      this._zoomAtClient(1.2, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    },
+
+    zoomOut: function () {
+      var canvas = this.$refs.canvas;
+      if (!canvas) return;
+      var rect = canvas.getBoundingClientRect();
+      this._zoomAtClient(0.8, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    },
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/mixins/previewSubgraphMixin.js ===== */
+/**
+ * previewSubgraphMixin
+ * MermaidPreview의 subgraph title과 rubber-band 선택 메서드를 동작 변경 없이 분리한 mixin.
+ */
+(function (global) {
+  'use strict';
+
+  global.previewSubgraphMixin = {
+    methods: {
+    _attachSubgraphInteractions: function (svgEl) {
+      var self = this;
+      var subgraphs = (this.model && this.model.subgraphs) || [];
+      if (!subgraphs.length) return;
+
+      // id → subgraph 빠른 탐색용 맵
+      var sgById = {};
+      for (var k = 0; k < subgraphs.length; k++) sgById[subgraphs[k].id] = subgraphs[k];
+
+      function normalizeClusterId(rawId) {
+        rawId = String(rawId || '');
+        if (!rawId) return '';
+        if (sgById[rawId]) return rawId;
+
+        var candidates = [
+          rawId.replace(/^cluster_/, ''),
+          rawId.replace(/^subGraph/i, ''),
+          rawId.replace(/^.*flowchart-/, '').replace(/-\d+$/, '')
+        ];
+        for (var c = 0; c < candidates.length; c++) {
+          if (sgById[candidates[c]]) return candidates[c];
+        }
+        return '';
+      }
+
+      function getSubgraphIdFromDom(clusterEl) {
+        var rawIds = [
+          clusterEl.getAttribute('data-id'),
+          clusterEl.getAttribute('data-node'),
+          clusterEl.id
+        ];
+        for (var r = 0; r < rawIds.length; r++) {
+          var normalized = normalizeClusterId(rawIds[r]);
+          if (normalized) return normalized;
+        }
+        return '';
+      }
+
+      function usableRect(el) {
+        if (!el || !el.getBoundingClientRect) return null;
+        var rect = el.getBoundingClientRect();
+        return rect && rect.width > 0 && rect.height > 0 ? rect : null;
+      }
+
+      function getLabelText(labelEl) {
+        if (!labelEl) return '';
+        var text = labelEl.textContent || '';
+        return String(text).replace(/\u00a0/g, ' ').trim();
+      }
+
+      function getSubgraphIdFromLabel(labelEl) {
+        var labelText = getLabelText(labelEl);
+        if (!labelText) return '';
+        for (var s = 0; s < subgraphs.length; s++) {
+          var title = String(subgraphs[s].title || subgraphs[s].id || '').trim();
+          if (title && title === labelText) return subgraphs[s].id;
+        }
+        return '';
+      }
+
+      function sameNodeSet(a, b) {
+        if (!a || !b || a.length !== b.length) return false;
+        var seen = {};
+        for (var i = 0; i < a.length; i++) seen[a[i]] = true;
+        for (var j = 0; j < b.length; j++) {
+          if (!seen[b[j]]) return false;
+        }
+        return true;
+      }
+
+      function getSubgraphIdFromContainedNodes(nodeIdsInCluster) {
+        if (!nodeIdsInCluster || !nodeIdsInCluster.length) return '';
+
+        for (var exact = 0; exact < subgraphs.length; exact++) {
+          if (sameNodeSet(subgraphs[exact].nodeIds || [], nodeIdsInCluster)) {
+            return subgraphs[exact].id;
+          }
+        }
+
+        var bestId = '';
+        var bestScore = 0;
+        var tied = false;
+        for (var j = 0; j < subgraphs.length; j++) {
+          var nodeIds = subgraphs[j].nodeIds || [];
+          var score = 0;
+          for (var m = 0; m < nodeIdsInCluster.length; m++) {
+            if (nodeIds.indexOf(nodeIdsInCluster[m]) !== -1) score++;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestId = subgraphs[j].id;
+            tied = false;
+          } else if (score > 0 && score === bestScore) {
+            tied = true;
+          }
+        }
+
+        return tied ? '' : bestId;
+      }
+
+      function openSubgraphToolbar(e, sgId, clusterEl, labelEl) {
+        e.preventDefault();
+        e.stopPropagation();
+        var canvas = self.$refs.canvas;
+        var cr = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+        var labelRect = usableRect(labelEl);
+        var clusterRect = usableRect(clusterEl);
+        var anchorX = e.clientX;
+        var anchorY = e.clientY;
+
+        if (labelRect) {
+          anchorX = labelRect.left + labelRect.width / 2;
+          anchorY = labelRect.top + labelRect.height / 2;
+        } else if (clusterRect) {
+          anchorX = clusterRect.left + clusterRect.width / 2;
+          anchorY = clusterRect.top + 12;
+        }
+
+        self.subgraphTitleToolbar = {
+          sgId: sgId,
+          x: Math.round(anchorX - cr.left),
+          y: Math.round(anchorY - cr.top)
+        };
+      }
+
+      function attachTitleHit(clusterEl, labelEl, sgId) {
+        var rectEl = clusterEl.querySelector('rect');
+        if (!rectEl || !rectEl.parentNode || rectEl.parentNode !== clusterEl) return;
+
+        var x = parseFloat(rectEl.getAttribute('x') || '0');
+        var y = parseFloat(rectEl.getAttribute('y') || '0');
+        var width = parseFloat(rectEl.getAttribute('width') || '0');
+        if (!width) return;
+
+        var hit = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        hit.setAttribute('class', 'subgraph-title-hit');
+        hit.setAttribute('x', x);
+        hit.setAttribute('y', y);
+        hit.setAttribute('width', width);
+        hit.setAttribute('height', '28');
+        hit.setAttribute('fill', '#000');
+        hit.setAttribute('fill-opacity', '0.003');
+        hit.setAttribute('stroke', 'none');
+        // Mermaid의 `.cluster rect` 규칙이 presentation attribute보다 우선하므로
+        // 제목 클릭용 hit rect는 inline priority로 다시 투명하게 고정한다.
+        hit.style.setProperty('fill', '#000', 'important');
+        hit.style.setProperty('fill-opacity', '0.003', 'important');
+        hit.style.setProperty('stroke', 'none', 'important');
+        hit.style.cursor = 'pointer';
+        hit.style.pointerEvents = 'all';
+        hit.addEventListener('click', function (e) {
+          openSubgraphToolbar(e, sgId, clusterEl, labelEl);
+        });
+        clusterEl.appendChild(hit);
+      }
+
+      var clusters = svgEl.querySelectorAll('.cluster');
+      for (var i = 0; i < clusters.length; i++) {
+        (function (clusterEl) {
+          var labelEl = clusterEl.querySelector('.cluster-label');
+          var sgId = getSubgraphIdFromDom(clusterEl) || getSubgraphIdFromLabel(labelEl);
+
+          if (!sgId) {
+            // Mermaid SVG에서 .node는 .cluster의 DOM 자식이 아닌 형제다.
+            // DOM id가 없는 구버전/특수 렌더만 화면 좌표 기준 포함 여부로 fallback 매핑.
+            var clusterRect = clusterEl.getBoundingClientRect();
+            var nodeIdsInCluster = [];
+            var elements = self._elements || {};
+            for (var nodeId in elements) {
+              var nodeEl = elements[nodeId];
+              if (!nodeEl) continue;
+              var nr = nodeEl.getBoundingClientRect();
+              var nCx = nr.left + nr.width  / 2;
+              var nCy = nr.top  + nr.height / 2;
+              if (nCx >= clusterRect.left && nCx <= clusterRect.right &&
+                  nCy >= clusterRect.top  && nCy <= clusterRect.bottom) {
+                nodeIdsInCluster.push(nodeId);
+              }
+            }
+            if (nodeIdsInCluster.length > 0) {
+              sgId = getSubgraphIdFromContainedNodes(nodeIdsInCluster);
+            }
+          }
+
+          if (!sgId) return;
+
+          if (labelEl) {
+            labelEl.style.cursor = 'pointer';
+            labelEl.addEventListener('click', function (e) {
+              openSubgraphToolbar(e, sgId, clusterEl, labelEl);
+            });
+          }
+          attachTitleHit(clusterEl, labelEl, sgId);
+        })(clusters[i]);
+      }
+    },
+
+    subgraphTitleDelete: function () {
+      var tb = this.subgraphTitleToolbar;
+      if (!tb) return;
+      this.subgraphTitleToolbar = null;
+      this.$emit('remove-subgraph', tb.sgId);
+    },
+
+    _attachFlowchartRubberBand: function (canvas, svgEl) {
+      var self = this;
+      var suppressContextMenu = false;
+
+      // 캡처 단계에서 contextmenu를 가로채 브라우저 메뉴와 노드 GUI 메뉴 모두 차단
+      canvas.addEventListener('contextmenu', function (e) {
+        e.preventDefault();                    // 브라우저 기본 메뉴 항상 차단
+        if (suppressContextMenu) {
+          e.stopPropagation();                 // 드래그 후엔 노드 GUI 메뉴도 차단
+          suppressContextMenu = false;
+        }
+      }, true); // capture phase
+
+      canvas.addEventListener('mousedown', function (e) {
+        if (e.button !== 2) return;
+        // 노드 위에서 시작하면 rubber-band 대신 노드 contextmenu로 위임
+        if (e.target && e.target.closest && e.target.closest('.node')) return;
+
+        e.preventDefault();
+        var cr = canvas.getBoundingClientRect();
+        var startX = e.clientX - cr.left;
+        var startY = e.clientY - cr.top;
+        var didDrag = false;
+
+        self._rubberBand = { startX: startX, startY: startY };
+        self.rubberBandRect = null;
+        self.subgraphToolbar = null;
+        self.selectedNodeIds = [];
+
+        var onMove = function (me) {
+          var cr2 = canvas.getBoundingClientRect();
+          var curX = me.clientX - cr2.left;
+          var curY = me.clientY - cr2.top;
+          var w = Math.abs(curX - startX);
+          var h = Math.abs(curY - startY);
+          if (w > 4 || h > 4) {
+            didDrag = true;
+            self.rubberBandRect = {
+              left:   Math.min(startX, curX),
+              top:    Math.min(startY, curY),
+              width:  w,
+              height: h
+            };
+          }
+        };
+
+        var onUp = function (ue) {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+
+          var rb = self.rubberBandRect;
+          self.rubberBandRect = null;
+          self._rubberBand = null;
+
+          if (!didDrag) {
+            // 단순 우클릭 → contextmenu 이벤트 허용 (노드 GUI 메뉴용)
+            suppressContextMenu = false;
+            return;
+          }
+
+          // 드래그였으면 뒤따라오는 contextmenu를 억제
+          suppressContextMenu = true;
+
+          if (!rb || rb.width < 5 || rb.height < 5) return;
+
+          var cr3 = canvas.getBoundingClientRect();
+          var rLeft   = cr3.left + rb.left;
+          var rTop    = cr3.top  + rb.top;
+          var rRight  = rLeft + rb.width;
+          var rBottom = rTop  + rb.height;
+
+          var selectedIds = [];
+          var nodeEls = svgEl.querySelectorAll('.node');
+          for (var i = 0; i < nodeEls.length; i++) {
+            var nodeId = SvgPositionTracker.extractNodeId(nodeEls[i]);
+            if (!nodeId) continue;
+            var nr = nodeEls[i].getBoundingClientRect();
+            var cx = nr.left + nr.width  / 2;
+            var cy = nr.top  + nr.height / 2;
+            if (cx >= rLeft && cx <= rRight && cy >= rTop && cy <= rBottom) {
+              selectedIds.push(nodeId);
+            }
+          }
+
+          if (!selectedIds.length) return;
+
+          self.selectedNodeIds = selectedIds;
+          self._showFlowchartSelectionHighlight(selectedIds);
+          var cr4 = canvas.getBoundingClientRect();
+          self.subgraphToolbar = {
+            x: ue.clientX - cr4.left,
+            y: ue.clientY - cr4.top
+          };
+          self.subgraphTitleInput = '';
+
+          // 다음 mousedown(새 드래그/클릭) 시 툴바 닫기
+          var onNextMouseDown = function () {
+            self._showFlowchartSelectionHighlight([]);
+            self.subgraphToolbar = null;
+            self.selectedNodeIds = [];
+            document.removeEventListener('mousedown', onNextMouseDown);
+          };
+          document.addEventListener('mousedown', onNextMouseDown);
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    },
+
+    _showFlowchartSelectionHighlight: function (selectedIds) {
+      var svgEl = this._svgEl;
+      if (!svgEl) return;
+      var old = svgEl.querySelector('#flowchart-sel-highlight');
+      if (old) old.remove();
+      if (!selectedIds || !selectedIds.length) return;
+
+      var pad = 12;
+      var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+      for (var i = 0; i < selectedIds.length; i++) {
+        var pos = this._positions[selectedIds[i]];
+        if (!pos) continue;
+        var x = pos.origTx + pos.bboxX;
+        var y = pos.origTy + pos.bboxY;
+        left   = Math.min(left,   x);
+        top    = Math.min(top,    y);
+        right  = Math.max(right,  x + pos.width);
+        bottom = Math.max(bottom, y + pos.height);
+      }
+      if (!isFinite(left)) return;
+
+      var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('id', 'flowchart-sel-highlight');
+      rect.setAttribute('x', left - pad);
+      rect.setAttribute('y', top - pad);
+      rect.setAttribute('width',  right - left + pad * 2);
+      rect.setAttribute('height', bottom - top + pad * 2);
+      rect.setAttribute('rx', '6');
+      rect.setAttribute('class', 'flowchart-sel-highlight');
+      rect.style.pointerEvents = 'none';
+      svgEl.appendChild(rect);
+    },
+
+    confirmWrapSubgraph: function () {
+      if (!this.selectedNodeIds.length) return;
+
+      // 선택된 노드 중 이미 subgraph에 속한 게 있으면 생성 차단
+      var subgraphs = (this.model && this.model.subgraphs) || [];
+      for (var i = 0; i < subgraphs.length; i++) {
+        var sg = subgraphs[i];
+        for (var j = 0; j < sg.nodeIds.length; j++) {
+          if (this.selectedNodeIds.indexOf(sg.nodeIds[j]) !== -1) {
+            this._showHint('Selected nodes are already in a subgraph');
+            this._showFlowchartSelectionHighlight([]);
+            this.subgraphToolbar = null;
+            this.selectedNodeIds = [];
+            return;
+          }
+        }
+      }
+
+      this._showFlowchartSelectionHighlight([]);
+      this.$emit('wrap-nodes-in-subgraph', {
+        nodeIds: this.selectedNodeIds.slice(),
+        title: this.subgraphTitleInput || 'Group'
+      });
+      this.subgraphToolbar = null;
+      this.selectedNodeIds = [];
+      this.subgraphTitleInput = '';
+    },
+
+    cancelSubgraphToolbar: function () {
+      this._showFlowchartSelectionHighlight([]);
+      this.subgraphToolbar = null;
+      this.selectedNodeIds = [];
+      this.subgraphTitleInput = '';
+    }
+    }
+  };
+
+})(typeof window !== 'undefined' ? window : this);
+
+
+/* ===== src/components/MermaidEditor.js ===== */
+/**
+ * MermaidEditor component
+ * Handles the raw Mermaid script textarea for the left editor pane.
+ */
+
+Vue.component('mermaid-editor', {
+  props: {
+    value: { type: String, default: '' },
+    error: { type: String, default: '' },
+    warning: { type: String, default: '' },
+    highlightTargets: { type: Array, default: function () { return []; } },
+    diagramType: { type: String, default: 'flowchart' }
+  },
+  data: function () {
+    return {
+      localValue: this.value,
+      debounceTimer: null,
+      scrollTop: 0,
+      scrollLeft: 0
+    };
+  },
+  watch: {
+    value: function (newVal) {
+      if (newVal !== this.localValue) {
+        this.localValue = newVal;
+      }
+    }
+  },
+  computed: {
+    hasHighlights: function () {
+      return !!(this.highlightTargets && this.highlightTargets.length);
+    },
+    highlightedLineMap: function () {
+      return ParserHighlight.buildHighlightLineMap(this.localValue, this.highlightTargets);
+    },
+    highlightTransformStyle: function () {
+      return {
+        transform: 'translate(' + (-this.scrollLeft) + 'px, ' + (-this.scrollTop) + 'px)'
+      };
+    },
+    highlightHtml: function () {
+      var lines = String(this.localValue || '').split('\n');
+      if (!lines.length) lines = [''];
+      var html = [];
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        var escaped = this._escapeHtml(line || ' ');
+        var cls = this.highlightedLineMap[i + 1]
+          ? 'code-editor__highlight-line code-editor__highlight-line--active'
+          : 'code-editor__highlight-line';
+        html.push('<span class="' + cls + '">' + escaped + '</span>');
+      }
+      return html.join('');
+    },
+    placeholderText: function () {
+      if (this.diagramType === 'sequenceDiagram') {
+        return 'sequenceDiagram\n    Alice->>+John: Hello John, how are you?\n    John-->>-Alice: Hi Alice, I can hear you!';
+      }
+      return 'flowchart TD\n    A[Start] --> B[Process]\n    B --> C[End]';
+    }
+  },
+  methods: {
+    onInput: function (e) {
+      this.localValue = e.target.value;
+      var self = this;
+      if (this.diagramType === 'sequenceDiagram') {
+        clearTimeout(this.debounceTimer);
+        this.$emit('input', this.localValue);
+        return;
+      }
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = setTimeout(function () {
+        self.$emit('input', self.localValue);
+      }, 300);
+    },
+    onKeyDown: function (e) {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        var textarea = e.target;
+        var start = textarea.selectionStart;
+        var end = textarea.selectionEnd;
+        var value = textarea.value;
+        textarea.value = value.substring(0, start) + '    ' + value.substring(end);
+        textarea.selectionStart = textarea.selectionEnd = start + 4;
+        this.localValue = textarea.value;
+        this.$emit('input', this.localValue);
+      }
+    },
+    onScroll: function (e) {
+      this.scrollTop = e.target.scrollTop || 0;
+      this.scrollLeft = e.target.scrollLeft || 0;
+    },
+    _escapeHtml: function (text) {
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+  },
+  template: '\
+    <div class="panel panel--editor">\
+      <div class="code-editor">\
+        <div class="code-editor__stack">\
+          <div v-if="hasHighlights" class="code-editor__highlight-layer" aria-hidden="true">\
+            <pre class="code-editor__highlight-content" :style="highlightTransformStyle" v-html="highlightHtml"></pre>\
+          </div>\
+        <textarea\
+          ref="textarea"\
+          class="code-editor__textarea"\
+          :value="localValue"\
+          @input="onInput"\
+          @keydown="onKeyDown"\
+          @scroll="onScroll"\
+          :placeholder="placeholderText"\
+          spellcheck="false"\
+        ></textarea>\
+        </div>\
+        <div v-if="error" class="code-editor__error">\
+          <span>!</span><span>{{ error }}</span>\
+        </div>\
+        <div v-if="warning" class="code-editor__warning">\
+          <span>!</span><span>{{ warning }}</span>\
+        </div>\
+      </div>\
+    </div>\
+  '
+});
+
+
+/* ===== src/components/MermaidToolbar.js ===== */
+/**
+ * MermaidToolbar component
+ * Keeps the viewport controls separated from edit actions.
+ */
+
+Vue.component('mermaid-toolbar', {
+  SHAPES: SvgNodeHandler.SHAPES,
+  COLOR_PALETTE: [
+    { key: 'red',    value: '#ef4444' },
+    { key: 'orange', value: '#f97316' },
+    { key: 'yellow', value: '#facc15' },
+    { key: 'green',  value: '#22c55e' },
+    { key: 'blue',   value: '#3b82f6' },
+    { key: 'violet', value: '#a855f7' }
+  ],
+  props: {
+    diagramType: { type: String, default: 'flowchart' },
+    direction: { type: String, default: 'TD' },
+    canUndo: { type: Boolean, default: false },
+    canRedo: { type: Boolean, default: false },
+    autonumber: { type: Boolean, default: false },
+    fullScreen: { type: Boolean, default: false },
+    directionLocked: { type: Boolean, default: false }
+  },
+  data: function () {
+    return {
+      showShapePicker: false,
+      pendingNodeText: 'Node',
+      pendingNodeColor: '',
+      showExportMenu: false
+    };
+  },
+  computed: {
+    isFlowchart: function () {
+      return this.diagramType !== 'sequenceDiagram';
+    }
+  },
+  methods: {
+    toggleShapePicker: function () {
+      this.showShapePicker = !this.showShapePicker;
+      if (this.showShapePicker) this.showExportMenu = false;
+      if (this.showShapePicker) {
+        this.pendingNodeText = 'Node';
+        this.pendingNodeColor = '';
+      }
+    },
+    toggleExportMenu: function () {
+      this.showExportMenu = !this.showExportMenu;
+      if (this.showExportMenu) this.showShapePicker = false;
+    },
+    addNode: function (shape) {
+      this.showShapePicker = false;
+      this.$emit('add-node', {
+        shape: shape,
+        text: (this.pendingNodeText || '').trim() || 'Node',
+        fill: this.pendingNodeColor || ''
+      });
+    },
+    addSequenceParticipant: function () { this.$emit('add-sequence-participant'); },
+    addSequenceActor: function () { this.$emit('add-sequence-actor'); },
+    addSequenceMessage: function () { this.$emit('add-sequence-message'); },
+    toggleAutonumber: function () { this.$emit('toggle-autonumber'); },
+    undo: function () { this.$emit('undo'); },
+    redo: function () { this.$emit('redo'); },
+    changeDirection: function (e) { this.$emit('change-direction', e.target.value); },
+    zoomOut: function () { this.$emit('zoom-out'); },
+    zoomIn: function () { this.$emit('zoom-in'); },
+    fitView: function () { this.$emit('fit-view'); },
+    toggleFullscreen: function () { this.$emit('toggle-fullscreen'); },
+    copySvg: function () { this.$emit('copy-svg'); },
+    exportAs: function (format) {
+      this.showExportMenu = false;
+      this.$emit('export-' + format);
+    },
+    _handleDocumentClick: function (e) {
+      if (!this.showShapePicker && !this.showExportMenu) return;
+      if (this.$el && this.$el.contains(e.target)) return;
+      this.showShapePicker = false;
+      this.showExportMenu = false;
+    }
+  },
+  mounted: function () {
+    document.addEventListener('mousedown', this._handleDocumentClick, true);
+  },
+  beforeDestroy: function () {
+    document.removeEventListener('mousedown', this._handleDocumentClick, true);
+  },
+  template: '\
+    <div class="toolbar">\
+      <div class="toolbar__sub">\
+        <div class="toolbar__group">\
+          <div v-if="isFlowchart" class="toolbar__add-node-wrap">\
+            <button class="toolbar__btn toolbar__btn--active" @click="toggleShapePicker" title="Add Node">\
+              <span class="toolbar__btn-icon">+</span> Add Node\
+            </button>\
+            <div v-if="showShapePicker" class="toolbar__shape-picker" @click.stop>\
+              <div class="toolbar__shape-picker-title">Select Shape</div>\
+              <input\
+                class="toolbar__shape-input"\
+                v-model="pendingNodeText"\
+                type="text"\
+                maxlength="100"\
+                placeholder="Node name"\
+                @keydown.enter.prevent="addNode(\'rect\')"\
+              />\
+              <div class="toolbar__shape-picker-title toolbar__shape-picker-title--compact">Color</div>\
+              <div class="context-menu__color-row toolbar__shape-color-row">\
+                <button\
+                  class="context-menu__color-btn context-menu__color-btn--clear"\
+                  :class="{ \'context-menu__color-btn--selected\': !pendingNodeColor }"\
+                  title="default"\
+                  @click="pendingNodeColor = \'\'"\
+                >x</button>\
+                <button\
+                  v-for="color in $options.COLOR_PALETTE"\
+                  :key="color.key"\
+                  class="context-menu__color-btn"\
+                  :class="{ \'context-menu__color-btn--selected\': pendingNodeColor === color.value }"\
+                  :style="{ backgroundColor: color.value }"\
+                  :title="color.key"\
+                  @click="pendingNodeColor = color.value"\
+                ></button>\
+              </div>\
+              <div class="toolbar__shape-picker-grid">\
+                <button\
+                  v-for="s in $options.SHAPES"\
+                  :key="s.key"\
+                  class="toolbar__shape-picker-btn"\
+                  :title="s.name"\
+                  @click="addNode(s.key)"\
+                >\
+                  <span class="context-menu__shape-icon" :class="\'context-menu__shape-icon--\' + s.key"></span>\
+                  <span class="context-menu__shape-text">{{ s.name }}</span>\
+                </button>\
+              </div>\
+            </div>\
+          </div>\
+          <button v-else class="toolbar__btn toolbar__btn--active" @click="addSequenceParticipant" title="Add participant">\
+            <span class="toolbar__btn-icon">+</span> Participant\
+          </button>\
+          <button v-if="!isFlowchart" class="toolbar__btn" :class="{ \'toolbar__btn--active\': autonumber }" @click="toggleAutonumber" title="Toggle autonumber">\
+            AutoNumber\
+          </button>\
+        </div>\
+        <div class="toolbar__group">\
+          <button class="toolbar__btn" @click="undo" :disabled="!canUndo" title="Undo (Ctrl+Z)">Undo</button>\
+          <button class="toolbar__btn" @click="redo" :disabled="!canRedo" title="Redo (Ctrl+Y)">Redo</button>\
+        </div>\
+        <div v-if="isFlowchart" class="toolbar__group">\
+          <select class="toolbar__select" :value="direction" @change="changeDirection" :disabled="directionLocked" :title="directionLocked ? \'Direction change not supported for graph diagrams\' : \'Layout direction\'">\
+            <option value="TD">Top Down</option>\
+            <option value="LR">Left Right</option>\
+            <option value="BT">Bottom Top</option>\
+            <option value="RL">Right Left</option>\
+          </select>\
+        </div>\
+        <div class="toolbar__group toolbar__group--zoom">\
+          <button class="toolbar__icon-btn toolbar__icon-btn--floating" @click="zoomIn" title="Zoom In" aria-label="Zoom In">\
+            <svg class="toolbar__icon-svg" viewBox="0 0 24 24" aria-hidden="true">\
+              <circle cx="10" cy="10" r="6.5"></circle>\
+              <line x1="14.8" y1="14.8" x2="20" y2="20"></line>\
+              <line x1="7" y1="10" x2="13" y2="10"></line>\
+              <line x1="10" y1="7" x2="10" y2="13"></line>\
+            </svg>\
+          </button>\
+          <button class="toolbar__icon-btn toolbar__icon-btn--floating" @click="zoomOut" title="Zoom Out" aria-label="Zoom Out">\
+            <svg class="toolbar__icon-svg" viewBox="0 0 24 24" aria-hidden="true">\
+              <circle cx="10" cy="10" r="6.5"></circle>\
+              <line x1="14.8" y1="14.8" x2="20" y2="20"></line>\
+              <line x1="7" y1="10" x2="13" y2="10"></line>\
+            </svg>\
+          </button>\
+          <button class="toolbar__icon-btn toolbar__icon-btn--floating toolbar__icon-btn--fitview" @click="fitView" title="Fit to View" aria-label="Fit to View">\
+            <svg class="toolbar__icon-img toolbar__icon-img--fitview" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">\
+              <mask id="icon-zoom-to-fit-mask" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="6" y="6" width="20" height="20">\
+                <rect x="6" y="6" width="20" height="20" fill="#D9D9D9"/>\
+              </mask>\
+              <g mask="url(#icon-zoom-to-fit-mask)">\
+                <path d="M10.0625 23L9 21.9375L11.4375 19.5H10V18H14V22H12.5V20.5625L10.0625 23ZM21.9375 23L19.5 20.5625V22H18V18H22V19.5H20.5625L23 21.9375L21.9375 23ZM10 14V12.5H11.4375L9 10.0625L10.0625 9L12.5 11.4375V10H14V14H10ZM18 14V10H19.5V11.4375L21.9375 9L23 10.0625L20.5625 12.5H22V14H18Z" fill="#767676"/>\
+              </g>\
+            </svg>\
+          </button>\
+          <button class="toolbar__icon-btn toolbar__icon-btn--floating" @click="toggleFullscreen" :title="fullScreen ? \'Exit Fullscreen\' : \'Fullscreen\'" :aria-label="fullScreen ? \'Exit Fullscreen\' : \'Fullscreen\'">\
+            <svg v-if="!fullScreen" class="toolbar__icon-img" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">\
+              <mask id="icon-fullscreen-mask" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">\
+                <path fill="#D9D9D9" d="M0 0h24v24H0z"/>\
+              </mask>\
+              <g mask="url(#icon-fullscreen-mask)">\
+                <path d="M14 17h5v-5h-2v3h-3v2zm-9-5h2V9h3V7H5v5zm-1 8c-.55 0-1.02-.196-1.413-.587A1.926 1.926 0 0 1 2 18V6c0-.55.196-1.02.587-1.412A1.926 1.926 0 0 1 4 4h16c.55 0 1.02.196 1.413.588.391.391.587.862.587 1.412v12c0 .55-.196 1.02-.587 1.413A1.926 1.926 0 0 1 20 20H4zm0-2h16V6H4v12z" fill="#969696"/>\
+              </g>\
+            </svg>\
+            <svg v-else class="toolbar__icon-img" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">\
+              <mask id="icon-fullscreen-active-mask" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">\
+                <path fill="#0081ea" d="M0 0h24v24H0z"/>\
+              </mask>\
+              <g mask="url(#icon-fullscreen-active-mask)">\
+                <path d="M14 17h5v-5h-2v3h-3v2zm-9-5h2V9h3V7H5v5zm-1 8c-.55 0-1.02-.196-1.413-.587A1.926 1.926 0 0 1 2 18V6c0-.55.196-1.02.587-1.412A1.926 1.926 0 0 1 4 4h16c.55 0 1.02.196 1.413.588.391.391.587.862.587 1.412v12c0 .55-.196 1.02-.587 1.413A1.926 1.926 0 0 1 20 20H4zm0-2h16V6H4v12z" fill="#0081ea"/>\
+              </g>\
+            </svg>\
+          </button>\
+          <div class="toolbar__export-wrap">\
+            <button class="toolbar__btn" @click="toggleExportMenu" title="Export diagram">Export</button>\
+            <div v-if="showExportMenu" class="toolbar__export-menu" @click.stop>\
+              <button class="toolbar__export-option" @click="exportAs(\'png\')">PNG</button>\
+              <button class="toolbar__export-option" @click="exportAs(\'svg\')">SVG</button>\
+              <button class="toolbar__export-option" @click="exportAs(\'jpg\')">JPG</button>\
+            </div>\
+          </div>\
+        </div>\
+      </div>\
+    </div>\
+  '
+});
+
+
+/* ===== src/components/MermaidPreview.js ===== */
+﻿/**
+ * MermaidPreview 컴포넌트
+ * - SvgPositionTracker : 좌표 수집
+ * - PortDragHandler    : 4방향 포트 drag-to-connect
+ * - SvgNodeHandler     : 노드 클릭 / 더블클릭 / 우클릭 / hover
+ * - SvgEdgeHandler     : 엣지 클릭 / 라벨 / 편집
+ */
+
+var FlowEdgeCodec = window.FlowEdgeCodec;
+
+Vue.component('mermaid-preview', {
+  mixins: [
+    previewInlineEditMixin,
+    previewToolbarMixin,
+    previewViewportMixin,
+    previewSubgraphMixin
+  ],
+
+  props: {
+    model: {
+      type: Object,
+      default: function () {
+        return { type: 'flowchart', direction: 'TD', nodes: [], edges: [] };
+      }
+    }
+  },
+
+  // 템플릿에서 사용하는 전체 shape 목록
+  SHAPES: SvgNodeHandler.SHAPES,
+  LINE_TYPE_OPTIONS: window.SequenceMessageCodec ? window.SequenceMessageCodec.LINE_TYPE_OPTIONS : [],
+  COLOR_PALETTE: [
+    { key: 'red',    value: '#ef4444' },
+    { key: 'orange', value: '#f97316' },
+    { key: 'yellow', value: '#facc15' },
+    { key: 'green',  value: '#22c55e' },
+    { key: 'blue',   value: '#3b82f6' },
+    { key: 'indigo', value: '#4f46e5' },
+    { key: 'violet', value: '#a855f7' }
+  ],
+  FLOW_EDGE_BODY_OPTIONS: FlowEdgeCodec ? FlowEdgeCodec.BODY_OPTIONS : [],
+  FLOW_EDGE_HEAD_OPTIONS: FlowEdgeCodec ? FlowEdgeCodec.HEAD_OPTIONS : [],
+
+  data: function () {
+    return {
+      svgContent:  '',
+      renderError: '',
+      renderCounter: 0,
+      renderToken: 0,
+
+      selectedNodeId:    null,
+      selectedEdgeIndex: null,
+      selectedSequenceParticipantId: null,
+      selectedSequenceMessageIndex: null,
+      selectedSequenceMessageIndices: [],
+      selectedNoteStatementIndices: [],
+      selectedSequenceBlockId: null,
+      selectedSequenceNoteStatementIndex: null,
+
+      // 노드 인라인 편집
+      editingNodeId:  null,
+      editingText:    '',
+      editingNodeColor: '#e2e8f0',
+      editInputStyle: {},
+
+      // 엣지 인라인 편집
+      editingEdgeIndex:    null,
+      editingEdgeText:     '',
+      editingEdgeColor:    '#5c7ab0',
+      edgeEditInputStyle:  {},
+
+      // 시퀀스 인라인 편집
+      editingSequenceParticipantId: null,
+      editingSequenceParticipantText: '',
+      sequenceParticipantEditStyle: {},
+      editingSequenceMessageIndex: null,
+      editingSequenceMessageText: '',
+      sequenceMessageEditStyle: {},
+      editingSequenceBlockId: null,
+      editingSequenceBranchStatementIndex: null,
+      editingSequenceBlockText: '',
+      sequenceBlockEditStyle: {},
+      editingSequenceNoteStatementIndex: null,
+      editingSequenceNoteText: '',
+      sequenceNoteEditStyle: {},
+
+      // 컨텍스트 UI 상태
+      contextMenu:  null,   // { nodeId, x, y }
+      edgeToolbar:  null,   // { edgeIndex, x, y } - 플로우차트 엣지 액션 바
+      flowEdgeColorPicker: false,
+      flowEdgeBodyPicker: false,
+      flowEdgeHeadPicker: false,
+      sequenceToolbar: null, // { type, id|index, x, y }
+      lineTypePicker: false,      // sequence message line type 선택 모드
+
+      // 포트 드래그 상태
+      portDragging:  false,
+      hoveredNodeId: null,
+
+      // 힌트 오버레이 (미지원 문법 / 작업 불가 안내)
+      hintMsg: '',
+      hintVisible: false,
+      _hintTimer: null,
+
+      // flowchart 다중선택 (우클릭 드래그 rubber-band)
+      _rubberBand: null,          // { startX, startY, curX, curY } (canvas 기준 px)
+      rubberBandRect: null,       // { left, top, width, height } — template용
+      selectedNodeIds: [],
+      subgraphToolbar: null,      // { x, y } — "Wrap in Subgraph" 버튼 위치
+      subgraphTitleInput: '',
+
+      // subgraph 타이틀 컨텍스트 툴바 & 인라인 편집
+      subgraphTitleToolbar: null,   // { sgId, x, y }
+      editingSubgraphId: null,
+      editingSubgraphText: '',
+      editingSubgraphStyle: {},
+
+      // CSS transform 줌/패닝 상태
+      cfgZoom: 1.0,
+      panX: 0,
+      panY: 0,
+
+      // SVG 내부 좌표/뷰포트 상태
+      _positions: {},
+      _elements:  {},
+      _edgePaths: [],
+      _svgEl: null,
+      _fitAfterRender: false,
+      _panState: null,
+      _panMouseUpHandler: null
+    };
+  },
+
+  watch: {
+    model: {
+      handler: function () { this.renderDiagram(); },
+      deep: true
+    },
+    selectedEdgeIndex: function () {
+      this._syncSelectedEdgeVisuals();
+    },
+    sequenceToolbar: function (val) {
+      if (!val) this.lineTypePicker = false;
+    },
+  },
+
+  mounted: function () {
+    this.renderDiagram();
+    var self = this;
+
+    this._windowResizeHandler = function () {
+      if (!self._svgEl) return;
+      if (self._resizeFrame) cancelAnimationFrame(self._resizeFrame);
+      self._resizeFrame = requestAnimationFrame(function () {
+        self.fitView();
+      });
+    };
+    window.addEventListener('resize', this._windowResizeHandler);
+
+    // 전역 클릭 시 컨텍스트 메뉴와 엣지 툴바 닫기
+    this._clickCloseHandler = function () {
+      var hadEdgeToolbar = !!self.edgeToolbar;
+      self.contextMenu = null;
+      self.edgeToolbar = null;
+      self.subgraphTitleToolbar = null;
+      self.flowEdgeColorPicker = false;
+      self.flowEdgeBodyPicker = false;
+      self.flowEdgeHeadPicker = false;
+      self.sequenceToolbar = null;
+      self.selectedSequenceMessageIndices = [];
+      self.selectedNoteStatementIndices = [];
+      self.selectedSequenceBlockId = null;
+      if (hadEdgeToolbar && self.editingEdgeIndex === null) {
+        self.selectedEdgeIndex = null;
+        self._clearEdgeVisualState();
+      }
+    };
+    document.addEventListener('click', this._clickCloseHandler);
+
+    this._pointerDownCommitHandler = function (e) {
+      var target = e.target;
+      if (target && target.closest && target.closest('.node-edit-overlay')) return;
+      self._confirmActiveEdits();
+    };
+    document.addEventListener('mousedown', this._pointerDownCommitHandler, true);
+
+    this._suppressClickAfterPanHandler = function (e) {
+      if (!self._suppressClickAfterPan) return;
+      self._suppressClickAfterPan = false;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    document.addEventListener('click', this._suppressClickAfterPanHandler, true);
+
+    // 전역 키 입력: Delete, Escape, Ctrl+Z/Y
+    this._keydownHandler = function (e) {
+      // input / textarea 사용 중에는 전역 단축키를 막는다.
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (self.editingNodeId !== null || self.editingEdgeIndex !== null ||
+            self.editingSequenceParticipantId !== null || self.editingSequenceMessageIndex !== null ||
+            self.editingSequenceBlockId !== null || self.editingSequenceBranchStatementIndex !== null ||
+            self.editingSequenceNoteStatementIndex !== null) return;
+        if (self.selectedNodeId || self.selectedEdgeIndex !== null) {
+          self.$emit('delete-selected', {
+            nodeId:    self.selectedNodeId,
+            edgeIndex: self.selectedEdgeIndex
+          });
+          self.selectedNodeId    = null;
+          self.selectedEdgeIndex = null;
+        } else if (self.selectedSequenceParticipantId || self.selectedSequenceMessageIndex !== null || self.selectedSequenceBlockId) {
+          self.$emit('delete-selected', {
+            sequenceParticipantId: self.selectedSequenceParticipantId,
+            sequenceMessageIndex: self.selectedSequenceMessageIndex,
+            sequenceBlockId: self.selectedSequenceBlockId
+          });
+          self.selectedSequenceParticipantId = null;
+          self.selectedSequenceMessageIndex = null;
+          self.selectedSequenceMessageIndices = [];
+          self.selectedSequenceBlockId = null;
+        } else if (self.selectedSequenceNoteStatementIndex !== null) {
+          self.$emit('delete-selected', { sequenceNoteStatementIndex: self.selectedSequenceNoteStatementIndex });
+          self.selectedSequenceNoteStatementIndex = null;
+        }
+      }
+
+      if (e.key === 'Escape') {
+        self.cancelNodeEdit();
+        self.cancelEdgeEdit();
+        self.cancelSequenceParticipantEdit();
+        self.cancelSequenceMessageEdit();
+        self.cancelSequenceBlockEdit();
+        self.cancelSequenceNoteEdit();
+        self.selectedSequenceNoteStatementIndex = null;
+        self.selectedNodeId    = null;
+        self.selectedEdgeIndex = null;
+        self.selectedSequenceParticipantId = null;
+        self.selectedSequenceMessageIndex = null;
+        self.selectedSequenceMessageIndices = [];
+        self.selectedSequenceBlockId = null;
+        self.contextMenu       = null;
+        self.edgeToolbar       = null;
+        self.flowEdgeColorPicker = false;
+        self.flowEdgeBodyPicker = false;
+        self.flowEdgeHeadPicker = false;
+        self.sequenceToolbar   = null;
+        self.portDragging      = false;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+        e.preventDefault();
+        self.$emit('undo');
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+        e.preventDefault();
+        self.$emit('redo');
+      }
+    };
+    document.addEventListener('keydown', this._keydownHandler);
+  },
+
+  beforeDestroy: function () {
+    if (this._clickCloseHandler) {
+      document.removeEventListener('click', this._clickCloseHandler);
+      this._clickCloseHandler = null;
+    }
+    if (this._keydownHandler) {
+      document.removeEventListener('keydown', this._keydownHandler);
+      this._keydownHandler = null;
+    }
+    if (this._pointerDownCommitHandler) {
+      document.removeEventListener('mousedown', this._pointerDownCommitHandler, true);
+      this._pointerDownCommitHandler = null;
+    }
+    if (this._suppressClickAfterPanHandler) {
+      document.removeEventListener('click', this._suppressClickAfterPanHandler, true);
+      this._suppressClickAfterPanHandler = null;
+    }
+    if (this._windowResizeHandler) {
+      window.removeEventListener('resize', this._windowResizeHandler);
+      this._windowResizeHandler = null;
+    }
+    if (this._resizeFrame) {
+      cancelAnimationFrame(this._resizeFrame);
+      this._resizeFrame = null;
+    }
+    if (this._panMouseUpHandler) {
+      document.removeEventListener('mouseup', this._panMouseUpHandler);
+      this._panMouseUpHandler = null;
+    }
+    if (this._visibilityObserver) {
+      this._visibilityObserver.disconnect();
+      this._visibilityObserver = null;
+    }
+  },
+
+  methods: {
+
+
+    // 공통 렌더 유틸
+
+    _hasRenderableContent: function (model) {
+      if (!model) return false;
+      if (model.type === 'sequenceDiagram') {
+        return !!((model.participants && model.participants.length) || (model.messages && model.messages.length));
+      }
+      return !!((model.nodes && model.nodes.length) || (model.edges && model.edges.length));
+    },
+
+    _isScriptHeaderOnly: function (script) {
+      var trimmed = (script || '').trim();
+      return /^flowchart\s+(TD|TB|BT|LR|RL)\s*$/i.test(trimmed) ||
+        /^sequenceDiagram\s*$/i.test(trimmed);
+    },
+
+    renderDiagram: function () {
+      var m = this.model;
+      if (!this._hasRenderableContent(m)) {
+        this.svgContent  = '';
+        this.renderError = '';
+        return;
+      }
+
+      var script = MermaidGenerator.generate(m);
+      if (!script || this._isScriptHeaderOnly(script)) {
+        this.svgContent = '';
+        this._svgEl = null;
+        this.cfgZoom = 1.0;
+        this.panX = 0;
+        this.panY = 0;
+        return;
+      }
+
+      var self = this;
+      self.renderCounter++;
+      self.renderToken++;
+      var renderToken = self.renderToken;
+      var containerId = 'mermaid-render-' + self.renderCounter;
+      self.renderError = '';
+      self.svgContent = '';
+
+      var startRender = function () {
+        if (renderToken !== self.renderToken) return;
+
+        try {
+          window.mermaid.render(containerId, script).then(function (result) {
+            // 가장 최신 render 요청만 반영하고 이전 결과는 버린다.
+            if (renderToken !== self.renderToken) return;
+            self.svgContent  = result.svg;
+            self.renderError = '';
+            self.$emit('svg-rendered', result.svg);
+            self.$nextTick(function () { self.postRenderSetup(); });
+          }).catch(function (err) {
+            if (renderToken !== self.renderToken) return;
+            self.svgContent = '';
+            self.renderError = err.message || 'Render error';
+            var errEl = document.getElementById('d' + containerId);
+            if (errEl) errEl.remove();
+          });
+        } catch (e) {
+          if (renderToken !== self.renderToken) return;
+          self.svgContent = '';
+          self.renderError = e.message || 'Render error';
+        }
+      };
+
+      if (typeof Promise === 'undefined') {
+        startRender();
+        return;
+      }
+
+      var fontReady = null;
+      if (typeof document !== 'undefined' && document.fonts) {
+        if (document.fonts.status === 'loaded') {
+          startRender();
+          return;
+        }
+        if (document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+          fontReady = Promise.race([
+            document.fonts.ready.then(function () {}, function () {}),
+            new Promise(function (resolve) { setTimeout(resolve, 1200); })
+          ]);
+        }
+      }
+
+      if (!fontReady) {
+        startRender();
+        return;
+      }
+
+      fontReady.then(function () {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(startRender);
+        } else {
+          startRender();
+        }
+      }, startRender);
+    },
+
+    // 공통 렌더 후 인터랙션 연결 유틸
+
+    postRenderSetup: function () {
+      var canvas = this.$refs.canvas;
+      if (!canvas) return;
+      var svgEl = canvas.querySelector('svg');
+      if (!svgEl) return;
+
+      var fitAfter = this._fitAfterRender;
+      this._fitAfterRender = false;
+
+      // overlay와 interaction이 같은 좌표계를 쓰도록 viewBox를 먼저 맞춘다.
+      this._setupViewport(svgEl, canvas, fitAfter);
+
+      // 노드 위치와 SVG 요소 수집
+      var isFlowchart = this.model && this.model.type !== 'sequenceDiagram';
+
+      if (isFlowchart) {
+        var collected    = SvgPositionTracker.collectNodePositions(svgEl);
+        this._positions  = collected.positions;
+        this._elements   = collected.elements;
+        this._edgePaths  = SvgPositionTracker.collectEdgePaths(svgEl, this.model.edges);
+
+        // display:none 컨테이너 안에서 렌더되면 getBBox()가 0을 반환해
+        // 모든 노드의 width가 0이 된다. 이 경우 visible 전환 시 자동 재렌더.
+        if (this._allPositionsZero(collected.positions)) {
+          this._scheduleRerenderWhenVisible();
+        }
+
+        // 하위 핸들러에 넘길 bridge 객체 구성
+        var ctx = this._buildCtx(svgEl);
+
+        // 엣지 ghost overlay를 먼저 구성
+        SvgEdgeHandler.initGhostOverlay(svgEl);
+        SvgEdgeHandler.attach(svgEl, this._edgePaths, this._positions, ctx);
+
+        // 포트 overlay는 ghost보다 위에 올라온다.
+        PortDragHandler.initOverlay(svgEl);
+
+        // 노드 인터랙션 연결
+        SvgNodeHandler.attach(svgEl, this._positions, this._elements, ctx);
+
+        // flowchart 우클릭 드래그 rubber-band 다중선택
+        this._attachFlowchartRubberBand(canvas, svgEl);
+
+        // subgraph 타이틀 클릭 인라인 편집
+        this._attachSubgraphInteractions(svgEl);
+
+        if (this._pendingContextMenuNodeId) {
+          this._openContextMenuForNode(this._pendingContextMenuNodeId);
+        }
+      } else {
+        this._positions = {};
+        this._elements = {};
+        this._edgePaths = [];
+
+        // display:none 컨테이너에서 렌더되면 participant getBBox()가 0을 반환해
+        // 히트존이 (0,0)에 부착된다. flowchart와 동일하게 visible 전환 시 재렌더.
+        var sampleActor = svgEl.querySelector('.actor, .actor-top, g[class*="actor"]');
+        if (sampleActor && sampleActor.getBBox) {
+          try {
+            var sampleBox = sampleActor.getBBox();
+            if (!sampleBox.width && !sampleBox.height) {
+              this._scheduleRerenderWhenVisible();
+              return;
+            }
+          } catch (e) {
+            this._scheduleRerenderWhenVisible();
+            return;
+          }
+        }
+
+        var sequenceCtx = this._buildCtx(svgEl);
+        SequenceSvgHandler.attach(svgEl, this.model, sequenceCtx);
+        SequenceBlockHandler.initOverlay(svgEl);
+        SequenceBlockHandler.attach(svgEl, this.model, sequenceCtx, canvas);
+
+        if (this._pendingHighlightParticipantId) {
+          var pendingPid = this._pendingHighlightParticipantId;
+          this._pendingHighlightParticipantId = null;
+          this._flashParticipant(svgEl, pendingPid);
+        }
+      }
+
+      // 배경 클릭 시 선택 해제
+      var self = this;
+      svgEl.addEventListener('click', function (e) {
+        if (e.target === svgEl ||
+            (e.target.tagName && e.target.tagName.toLowerCase() === 'svg')) {
+          self.selectedNodeId    = null;
+          self.selectedEdgeIndex = null;
+          self.selectedSequenceParticipantId = null;
+          self.selectedSequenceMessageIndex = null;
+          self.selectedSequenceMessageIndices = [];
+          self.selectedSequenceBlockId = null;
+        }
+      });
+
+      this._refreshFloatingUiPositions();
+      this._syncSelectedEdgeVisuals();
+
+      if (this._pendingHighlightNodeId) {
+        var pendingId = this._pendingHighlightNodeId;
+        this._pendingHighlightNodeId = null;
+        this._flashNode(pendingId);
+      }
+
+    },
+
+
+    openContextMenuForNode: function (nodeId) {
+      this._pendingContextMenuNodeId = nodeId;
+      this._openContextMenuForNode(nodeId);
+    },
+
+    _openContextMenuForNode: function (nodeId) {
+      var nodeEl = this._elements && this._elements[nodeId];
+      if (!nodeEl) return;
+
+      var rect = nodeEl.getBoundingClientRect();
+      var previewRect = this.$refs.canvas && this.$refs.canvas.getBoundingClientRect
+        ? this.$refs.canvas.getBoundingClientRect()
+        : this.$el.getBoundingClientRect();
+      this.selectedNodeId = nodeId;
+      this.selectedEdgeIndex = null;
+      this.contextMenu = {
+        nodeId: nodeId,
+        anchorType: 'node',
+        x: Math.round(rect.left - previewRect.left + rect.width / 2),
+        y: Math.round(rect.top - previewRect.top + Math.max(18, rect.height * 0.35))
+      };
+      this._pendingContextMenuNodeId = null;
+    },
+
+    _refreshFloatingUiPositions: function () {
+      var previewRect = this.$refs.canvas && this.$refs.canvas.getBoundingClientRect
+        ? this.$refs.canvas.getBoundingClientRect()
+        : (this.$el && this.$el.getBoundingClientRect ? this.$el.getBoundingClientRect() : null);
+      if (this.contextMenu && this.contextMenu.anchorType === 'node') {
+        var nodeEl = this._elements && this._elements[this.contextMenu.nodeId];
+        if (nodeEl && previewRect) {
+          var nodeRect = nodeEl.getBoundingClientRect();
+          this.contextMenu = Object.assign({}, this.contextMenu, {
+            x: Math.round(nodeRect.left - previewRect.left + nodeRect.width + 10),
+            y: Math.round(nodeRect.top - previewRect.top + Math.min(24, nodeRect.height * 0.5))
+          });
+        }
+      }
+
+      if (this.edgeToolbar && this.edgeToolbar.anchorType === 'edge') {
+        return;
+      }
+    },
+
+    _syncSelectedEdgeVisuals: function () {
+      var selectedIndex = this.selectedEdgeIndex;
+      var edgePaths = this._edgePaths || [];
+      for (var i = 0; i < edgePaths.length; i++) {
+        var edgeData = edgePaths[i];
+        if (!edgeData) continue;
+
+        var isSelected = edgeData.index === selectedIndex;
+        var edgeEl = edgeData.el;
+        var pathEl = edgeData.path;
+        var hitEl = edgeData.hit;
+
+        if (edgeEl && edgeEl.classList) {
+          edgeEl.classList.toggle('edge-selected', isSelected);
+          edgeEl.classList.toggle('edge-hovered', isSelected);
+        }
+
+        if (pathEl && pathEl.classList) {
+          pathEl.classList.toggle('edge-selected', isSelected);
+          pathEl.classList.toggle('edge-hovered', isSelected);
+          if (isSelected) {
+            pathEl.style.setProperty('filter', 'drop-shadow(0 0 8px rgba(21, 101, 192, 0.28))', 'important');
+          } else {
+            pathEl.style.removeProperty('filter');
+          }
+        }
+
+        var innerPaths = edgeEl && edgeEl.querySelectorAll ? edgeEl.querySelectorAll('path') : [];
+        for (var j = 0; j < innerPaths.length; j++) {
+          innerPaths[j].classList.toggle('edge-selected', isSelected);
+          innerPaths[j].classList.toggle('edge-hovered', isSelected);
+        }
+
+        if (hitEl && hitEl.setAttribute) {
+          if (hitEl.classList) {
+            hitEl.classList.toggle('edge-hit-selected', isSelected);
+          }
+          hitEl.setAttribute('stroke', isSelected ? '#2563eb' : '#000');
+          hitEl.setAttribute('stroke-opacity', isSelected ? '0.18' : '0.003');
+          hitEl.setAttribute('stroke-width', '12');
+        }
+      }
+    },
+
+    _clearEdgeVisualState: function () {
+      var edgePaths = this._edgePaths || [];
+      for (var i = 0; i < edgePaths.length; i++) {
+        var edgeData = edgePaths[i];
+        if (!edgeData) continue;
+
+        var edgeEl = edgeData.el;
+        var pathEl = edgeData.path;
+        var hitEl = edgeData.hit;
+
+        if (edgeEl && edgeEl.classList) {
+          edgeEl.classList.remove('edge-selected');
+          edgeEl.classList.remove('edge-hovered');
+        }
+
+        if (pathEl && pathEl.classList) {
+          pathEl.classList.remove('edge-selected');
+          pathEl.classList.remove('edge-hovered');
+          pathEl.style.removeProperty('filter');
+        }
+
+        var innerPaths = edgeEl && edgeEl.querySelectorAll ? edgeEl.querySelectorAll('path') : [];
+        for (var j = 0; j < innerPaths.length; j++) {
+          innerPaths[j].classList.remove('edge-selected');
+          innerPaths[j].classList.remove('edge-hovered');
+          innerPaths[j].style.removeProperty('filter');
+        }
+
+        if (hitEl && hitEl.classList) {
+          hitEl.classList.remove('edge-hit-selected');
+        }
+        if (hitEl && hitEl.setAttribute) {
+          hitEl.setAttribute('stroke', '#000');
+          hitEl.setAttribute('stroke-opacity', '0.003');
+          hitEl.setAttribute('stroke-width', '12');
+        }
+      }
+    },
+
+
+
+
+
+
+
+
+
+
+    _buildCtx: function (svgEl) {
+      return PreviewCtxBuilder.build(this, svgEl);
+    },
+
+    // 공통 노드 편집 유틸
+
+
+
+
+
+
+
+
+
+
+    // 공통 엣지 편집 유틸
+
+
+
+
+
+    // 공통 시퀀스 편집 유틸
+
+
+
+
+
+
+
+
+
+
+
+
+
+    // 공통 노드 컨텍스트 메뉴 액션 유틸
+
+    contextEditNode: function () {
+      if (!this.contextMenu) return;
+      var nodeId = this.contextMenu.nodeId;
+      var nodeEl = this._elements[nodeId];
+      this.contextMenu = null;
+      if (!nodeEl) return;
+      var canvas = this.$refs.canvas;
+      var canvasRect = canvas && canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+      var labelEl = nodeEl.querySelector('foreignObject, .label, text');
+      var targetRect = labelEl && labelEl.getBoundingClientRect ? labelEl.getBoundingClientRect() : nodeEl.getBoundingClientRect();
+      var node = null;
+      var nodes = this.model.nodes || [];
+      for (var i = 0; i < nodes.length; i++) {
+        if (nodes[i].id === nodeId) {
+          node = nodes[i];
+          break;
+        }
+      }
+      var isStatic = this.isStaticDiagram();
+      var editText = SvgNodeHandler.toEditableText(this.model, node ? (node.text || node.id) : '');
+      var width = 240;
+      var left = canvasRect ? (targetRect.left - canvasRect.left + (targetRect.width / 2) - (width / 2)) : 0;
+      var top = canvasRect ? (targetRect.top - canvasRect.top + (targetRect.height / 2) - 18) : 0;
+      this.editingNodeId = nodeId;
+      this.editingText = editText;
+      this.editingNodeColor = node && node.fill ? node.fill : '#e2e8f0';
+      this.editInputStyle = isStatic
+        ? SvgNodeHandler.buildStaticEditStyle(targetRect, canvasRect, editText)
+        : {
+          position: 'absolute',
+          left: Math.max(8, left) + 'px',
+          top: Math.max(8, top) + 'px',
+          zIndex: 1000,
+          width: width + 'px'
+        };
+      this.$nextTick(this._buildCtxLite().focusEditInput);
+    },
+
+    contextDeleteNode: function () {
+      if (!this.contextMenu) return;
+      this.$emit('delete-selected', { nodeId: this.contextMenu.nodeId, edgeIndex: null });
+      this.contextMenu   = null;
+      this.selectedNodeId = null;
+    },
+
+    contextChangeShape: function (shape) {
+      if (!this.contextMenu) return;
+      this.$emit('update-node-shape', {
+        nodeId: this.contextMenu.nodeId,
+        shape:  shape
+      });
+    },
+
+    contextChangeNodeColor: function (fill) {
+      if (!this.contextMenu) return;
+      this.$emit('update-node-fill', {
+        nodeId: this.contextMenu.nodeId,
+        fill: fill || ''
+      });
+      this.contextMenu = null;
+    },
+
+    extractNodeId: function (nodeEl) {
+      if (!nodeEl) return null;
+      var dataId = nodeEl.getAttribute('data-id');
+      if (dataId) return dataId;
+      var id = nodeEl.getAttribute('id');
+      if (!id) return null;
+
+      // Extract the actual base ID.
+      // Mermaid v11 generates IDs like: mermaid-render-4_flowchart-Start-1
+      // 1. Remove the instance prefix (anything before 'flowchart-')
+      var flowchartIdx = id.indexOf('flowchart-');
+      var baseId = flowchartIdx !== -1 ? id.substring(flowchartIdx) : id;
+
+      // 2. Remove the standard 'flowchart-' prefix
+      baseId = baseId.replace(/^flowchart-/, '');
+
+      // 3. Remove the suffix counter (e.g. '-1', '-24')
+      baseId = baseId.replace(/-\d+$/, '');
+
+      return baseId;
+    },
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    // 공통 엣지 툴바 액션 유틸
+
+
+
+
+    // 공통 시퀀스 툴바 액션 유틸
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    // postRenderSetup 바깥에서도 재사용하는 경량 ctx
+    _buildCtxLite: function () {
+      return PreviewCtxBuilder.buildLite(this);
+    },
+
+
+
+
+    highlightNewNode: function (nodeId) {
+      this._pendingHighlightNodeId = nodeId;
+    },
+
+    _flashNode: function (nodeId) {
+      var el = this._elements && this._elements[nodeId];
+      if (!el) return;
+      el.classList.remove('node-new-flash');
+      void el.offsetWidth;
+      el.classList.add('node-new-flash');
+      setTimeout(function () { el.classList.remove('node-new-flash'); }, 3000);
+    },
+
+    highlightNewParticipant: function (participantId) {
+      this._pendingHighlightParticipantId = participantId;
+    },
+
+    _flashParticipant: function (svgEl, participantId) {
+      var targets = SequencePositionTracker.collectParticipantTargets(svgEl, this.model);
+      var el = null;
+      for (var i = 0; i < targets.length; i++) {
+        if (targets[i].id === participantId) { el = targets[i].el; break; }
+      }
+      if (!el) return;
+      el.classList.remove('node-new-flash');
+      void el.offsetWidth;
+      el.classList.add('node-new-flash');
+      setTimeout(function () { el.classList.remove('node-new-flash'); }, 3000);
+    },
+
+    _showHint: function (msg) {
+      var self = this;
+      this.hintMsg     = msg || '';
+      this.hintVisible = true;
+      clearTimeout(this._hintTimer);
+      this._hintTimer = setTimeout(function () { self.hintVisible = false; }, 1500);
+    },
+
+    showUnsupportedHint: function () {
+      this._showHint('Unsupported element cannot be edited');
+    },
+
+
+
+
+
+
+
+
+
+
+  },
+
+  template: '\
+    <div class="preview-area" @click.self="selectedNodeId = null; selectedEdgeIndex = null; selectedSequenceParticipantId = null; selectedSequenceMessageIndex = null; selectedSequenceMessageIndices = []; selectedSequenceBlockId = null;">\
+        <div v-if="portDragging" class="edge-mode-overlay" style="background: var(--success);">\
+          {{ model.type === &quot;sequence&quot; ? &quot;Release on target participant to insert message&quot; : &quot;Release on target node to connect&quot; }}\
+        </div>\
+        <div v-if="hintVisible" class="edge-mode-overlay" style="background: #f59e0b;">\
+          {{ hintMsg }}\
+        </div>\
+      <div v-if="svgContent" :key="renderCounter" ref="canvas" class="preview-area__canvas">\
+        <div class="preview-area__svg-host" v-html="svgContent"></div>\
+        <div v-if="editingSubgraphId" class="node-edit-overlay" :style="editingSubgraphStyle">\
+          <input ref="editSubgraphInput" class="node-edit-input" v-model="editingSubgraphText" @keydown="_onSubgraphEditKeyDown" @blur="confirmSubgraphEdit" />\
+        </div>\
+        <div v-if="rubberBandRect" class="flowchart-rubber-band" :style="{ left: rubberBandRect.left + \'px\', top: rubberBandRect.top + \'px\', width: rubberBandRect.width + \'px\', height: rubberBandRect.height + \'px\' }"></div>\
+        <div v-if="subgraphToolbar" class="subgraph-toolbar" :style="{ left: subgraphToolbar.x + \'px\', top: subgraphToolbar.y + \'px\' }">\
+          <span class="subgraph-toolbar__label">{{ selectedNodeIds.length }} nodes selected</span>\
+          <button class="subgraph-toolbar__btn subgraph-toolbar__btn--confirm" @mousedown.prevent="confirmWrapSubgraph">Wrap in Subgraph</button>\
+          <button class="subgraph-toolbar__btn subgraph-toolbar__btn--cancel" @mousedown.prevent="cancelSubgraphToolbar">✕</button>\
+        </div>\
+        <div v-if="subgraphTitleToolbar" class="title-context-toolbar" :style="{ left: subgraphTitleToolbar.x + \'px\', top: subgraphTitleToolbar.y + \'px\' }" @click.stop @mousedown.stop>\
+          <button class="title-context-toolbar__btn" @mousedown.prevent="subgraphTitleEdit">Edit ✎</button>\
+          <button class="title-context-toolbar__btn title-context-toolbar__btn--danger" @mousedown.prevent="subgraphTitleDelete">Delete</button>\
+        </div>\
+        <div v-if="editingNodeId" class="node-edit-overlay" :style="editInputStyle">\
+          <textarea v-if="isStaticNodeEditing()" ref="editInput" class="node-edit-input node-edit-textarea node-edit-textarea--static" v-model="editingText" @keydown="onStaticNodeEditKeyDown" @blur="confirmNodeEdit"></textarea>\
+          <input v-else ref="editInput" class="node-edit-input" v-model="editingText" @keydown="onNodeEditKeyDown" @blur="confirmNodeEdit" />\
+        </div>\
+        <div v-if="editingEdgeIndex !== null" class="node-edit-overlay" :style="edgeEditInputStyle">\
+          <textarea v-if="isGraphEdgeEditing()" ref="editEdgeInput" class="node-edit-input node-edit-textarea edge-edit-textarea--graph" v-model="editingEdgeText" placeholder="Edge label" @keydown="onGraphEdgeEditKeyDown" @blur="confirmEdgeEdit"></textarea>\
+          <input v-else ref="editEdgeInput" class="node-edit-input" v-model="editingEdgeText" placeholder="Edge label" @keydown="onEdgeEditKeyDown" @blur="confirmEdgeEdit" />\
+        </div>\
+        <div v-if="editingSequenceParticipantId" class="node-edit-overlay" :style="sequenceParticipantEditStyle">\
+          <input ref="sequenceParticipantInput" class="node-edit-input" v-model="editingSequenceParticipantText" @keydown="onSequenceParticipantEditKeyDown" @blur="confirmSequenceParticipantEdit" />\
+        </div>\
+        <div v-if="editingSequenceMessageIndex !== null" class="node-edit-overlay" :style="sequenceMessageEditStyle">\
+          <input ref="sequenceMessageInput" class="node-edit-input" v-model="editingSequenceMessageText" placeholder="Message text" @keydown="onSequenceMessageEditKeyDown" @blur="confirmSequenceMessageEdit" />\
+        </div>\
+        <div v-if="editingSequenceBlockId !== null || editingSequenceBranchStatementIndex !== null" class="node-edit-overlay" :style="sequenceBlockEditStyle">\
+          <input ref="sequenceBlockInput" class="node-edit-input" v-model="editingSequenceBlockText" placeholder="Block text" @keydown="onSequenceBlockEditKeyDown" @blur="confirmSequenceBlockEdit" />\
+        </div>\
+        <div v-if="editingSequenceNoteStatementIndex !== null" class="node-edit-overlay" :style="sequenceNoteEditStyle">\
+          <input ref="sequenceNoteInput" class="node-edit-input" v-model="editingSequenceNoteText" placeholder="Note text" @keydown="onSequenceNoteEditKeyDown" @blur="confirmSequenceNoteEdit" />\
+        </div>\
+        <div v-if="contextMenu" class="context-menu" :style="{ left: contextMenu.x + &quot;px&quot;, top: contextMenu.y + &quot;px&quot; }" @click.stop>\
+          <div class="context-menu__section-title">Change Shape</div>\
+          <div class="context-menu__shapes-grid">\
+            <button v-for="s in $options.SHAPES" :key="s.key" class="context-menu__shape-btn" :title="s.name" @click="contextChangeShape(s.key)">\
+              <span class="context-menu__shape-icon" :class="&quot;context-menu__shape-icon--&quot; + s.key"></span>\
+              <span class="context-menu__shape-text">{{ s.name }}</span>\
+            </button>\
+          </div>\
+          <div class="context-menu__section-title">Color</div>\
+          <div class="context-menu__color-row">\
+            <button class="context-menu__color-btn context-menu__color-btn--clear" aria-label="Clear color" @click="contextChangeNodeColor(&quot;&quot;)"></button>\
+            <button v-for="color in $options.COLOR_PALETTE" :key="color.key" class="context-menu__color-btn" :style="{ backgroundColor: color.value }" :title="color.key" @click="contextChangeNodeColor(color.value)"></button>\
+          </div>\
+          <div class="context-menu__separator"></div>\
+          <div class="context-menu__item" @click="contextEditNode"><span class="context-menu__item-icon">T</span> Edit Text</div>\
+          <div class="context-menu__item context-menu__item--danger" @click="contextDeleteNode"><span class="context-menu__item-icon">X</span> Delete Node</div>\
+        </div>\
+        <div v-if="edgeToolbar" class="edge-toolbar" :style="{ left: edgeToolbar.x + &quot;px&quot;, top: edgeToolbar.y + &quot;px&quot; }" @click.stop>\
+          <button class="edge-toolbar__btn" @click="edgeToolbarEdit" title="Edit label">Label ✎</button>\
+          <div class="edge-toolbar__sep"></div>\
+          <div class="edge-toolbar__type-group edge-toolbar__type-group--color">\
+            <button class="edge-toolbar__type-trigger edge-toolbar__type-trigger--color" :class="{ \'edge-toolbar__type-trigger--open\': flowEdgeColorPicker }" @click="toggleFlowEdgeColorPicker" title="Line color">\
+              <span class="edge-toolbar__color-swatch" :class="{ \'edge-toolbar__color-swatch--empty\': !getFlowEdgeColorValue() }" :style="getFlowEdgeColorValue() ? { backgroundColor: getFlowEdgeColorValue() } : {}"></span>\
+              <span class="edge-toolbar__type-caret">⌄</span>\
+            </button>\
+            <div v-if="flowEdgeColorPicker" class="edge-toolbar__type-menu edge-toolbar__type-menu--color">\
+              <button class="context-menu__color-btn context-menu__color-btn--clear" aria-label="Clear color" @click="edgeToolbarChangeColor(&quot;&quot;)"></button>\
+              <button v-for="color in $options.COLOR_PALETTE" :key="color.key" class="context-menu__color-btn" :class="{ \'context-menu__color-btn--selected\': getFlowEdgeColorValue() === color.value }" :style="{ backgroundColor: color.value }" :title="color.key" @click="edgeToolbarChangeColor(color.value)"></button>\
+            </div>\
+          </div>\
+          <div class="edge-toolbar__sep"></div>\
+          <div class="edge-toolbar__type-row">\
+            <div class="edge-toolbar__type-group">\
+              <button class="edge-toolbar__type-trigger" :class="{ \'edge-toolbar__type-trigger--open\': flowEdgeBodyPicker }" @click="toggleFlowEdgeBodyPicker" title="Line body">\
+                <span class="edge-toolbar__type-glyph edge-toolbar__type-glyph--body">{{ getFlowEdgeBodyLabel() }}</span>\
+                <span class="edge-toolbar__type-caret">⌄</span>\
+              </button>\
+              <div v-if="flowEdgeBodyPicker" class="edge-toolbar__type-menu edge-toolbar__type-menu--body">\
+                <button\
+                  v-for="opt in $options.FLOW_EDGE_BODY_OPTIONS"\
+                  :key="opt.key"\
+                  class="edge-toolbar__type-option"\
+                  :class="{ \'edge-toolbar__type-option--selected\': getFlowEdgeParts(getFlowEdgeType()).body === opt.key }"\
+                  @click="edgeToolbarSelectLineBody(opt.key)"\
+                >{{ opt.label }}</button>\
+              </div>\
+            </div>\
+            <div class="edge-toolbar__type-group">\
+              <button class="edge-toolbar__type-trigger" :class="{ \'edge-toolbar__type-trigger--open\': flowEdgeHeadPicker }" @click="toggleFlowEdgeHeadPicker" title="Arrow head">\
+                <span class="edge-toolbar__type-glyph edge-toolbar__type-glyph--head">{{ getFlowEdgeHeadLabel() }}</span>\
+                <span class="edge-toolbar__type-caret">⌄</span>\
+              </button>\
+              <div v-if="flowEdgeHeadPicker" class="edge-toolbar__type-menu edge-toolbar__type-menu--head">\
+                <button\
+                  v-for="opt in getAvailableFlowEdgeHeadOptions()"\
+                  :key="opt.key"\
+                  class="edge-toolbar__type-option"\
+                  :class="{ \'edge-toolbar__type-option--selected\': getFlowEdgeParts(getFlowEdgeType()).head === opt.key }"\
+                  @click="edgeToolbarSelectLineHead(opt.key)"\
+                >{{ opt.label }}</button>\
+              </div>\
+            </div>\
+          </div>\
+          <div class="edge-toolbar__sep"></div>\
+          <button class="edge-toolbar__btn edge-toolbar__btn--danger" @click="edgeToolbarDelete" title="Delete edge">Delete</button>\
+        </div>\
+        <div v-if="sequenceToolbar" class="sequence-toolbar" :style="{ left: sequenceToolbar.x + &quot;px&quot;, top: sequenceToolbar.y + &quot;px&quot; }" @click.stop>\
+          <button v-if="sequenceToolbar.type === &quot;insert&quot;" class="edge-toolbar__btn" @click="sequenceToolbarInsertSelfLoop">↩ Self Loop</button>\
+          <button v-if="sequenceToolbar.type === &quot;insert&quot;" class="edge-toolbar__btn" @click="sequenceToolbarInsertMemo">≡ Memo</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot; &amp;&amp; sequenceToolbar.parentKind === &quot;alt&quot;" class="edge-toolbar__btn edge-toolbar__btn--branch" @click="sequenceToolbarAddBranch(&quot;else&quot;)">+ else</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot; &amp;&amp; sequenceToolbar.parentKind === &quot;par&quot;" class="edge-toolbar__btn edge-toolbar__btn--branch" @click="sequenceToolbarAddBranch(&quot;and&quot;)">+ and</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;loop&quot;)">Loop ↻</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;alt&quot;)">Alt ⎇</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;opt&quot;)">Opt ?</button>\
+          <button v-if="sequenceToolbar.type === &quot;selection&quot;" class="edge-toolbar__btn" @click="sequenceToolbarWrapBlock(&quot;par&quot;)">Par∥</button>\
+          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;loop&quot; }" @click="sequenceToolbarChangeBlockType(&quot;loop&quot;)">Loop ↻</button>\
+          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;opt&quot; }" @click="sequenceToolbarChangeBlockType(&quot;opt&quot;)">Opt ?</button>\
+          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;alt&quot; }" @click="sequenceToolbarChangeBlockType(&quot;alt&quot;)">Alt ⎇</button>\
+          <button v-if="sequenceToolbar.type === &quot;block&quot;" class="edge-toolbar__btn" :class="{ \'edge-toolbar__btn--active\': sequenceToolbar.kind === &quot;par&quot; }" @click="sequenceToolbarChangeBlockType(&quot;par&quot;)">Par∥</button>\
+          <button v-if="sequenceToolbar.type === &quot;block-title&quot; || sequenceToolbar.type === &quot;branch-title&quot;" class="edge-toolbar__btn" @click="sequenceToolbarEdit">Edit ✎</button>\
+          <button v-if="sequenceToolbar.type !== &quot;block&quot; &amp;&amp; sequenceToolbar.type !== &quot;block-title&quot; &amp;&amp; sequenceToolbar.type !== &quot;branch-title&quot; &amp;&amp; sequenceToolbar.type !== &quot;selection&quot; &amp;&amp; sequenceToolbar.type !== &quot;insert&quot;" class="edge-toolbar__btn" @click="sequenceToolbarEdit">Text ✎</button>\
+          <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarMoveLeft" title="Move left">◀</button>\
+          <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarMoveRight" title="Move right">▶</button>\
+          <button v-if="sequenceToolbar.type === &quot;participant&quot;" class="edge-toolbar__btn" @click="sequenceToolbarToggleKind">{{ sequenceToolbar.kind === &quot;actor&quot; ? &quot;→ Participant&quot; : &quot;→ Shape&quot; }}</button>\
+          <button v-if="sequenceToolbar.type === &quot;message&quot;" class="edge-toolbar__btn" @click="sequenceToolbarReverse">Reverse</button>\
+          <div v-if="sequenceToolbar.type === &quot;message&quot;" class="edge-toolbar__type-group">\
+            <button class="edge-toolbar__type-trigger" :class="{ \'edge-toolbar__type-trigger--open\': lineTypePicker }" @click.stop="sequenceToolbarToggleLineType" title="Line type">\
+              <span class="edge-toolbar__type-glyph edge-toolbar__type-glyph--body">{{ getSequenceMessageLineTypeLabel() }}</span>\
+              <span class="edge-toolbar__type-caret">⌄</span>\
+            </button>\
+            <div v-if="lineTypePicker" class="edge-toolbar__type-menu edge-toolbar__type-menu--body">\
+              <button\
+                v-for="opt in $options.LINE_TYPE_OPTIONS"\
+                :key="opt.operator"\
+                class="edge-toolbar__type-option edge-toolbar__btn--line-opt"\
+                :class="{ \'edge-toolbar__type-option--selected\': getSequenceMessageLineType() === opt.operator }"\
+                @click="sequenceToolbarSelectLineType(opt.operator)"\
+              >{{ opt.label }}</button>\
+            </div>\
+          </div>\
+          <button v-if="sequenceToolbar.type !== &quot;selection&quot; &amp;&amp; sequenceToolbar.type !== &quot;insert&quot;" class="edge-toolbar__btn edge-toolbar__btn--danger" @click="sequenceToolbarDelete">Delete</button>\
+        </div>\
+      </div>\
+      <div v-else class="preview-area__empty">\
+        <div class="preview-area__empty-icon">[]</div>\
+        <div class="preview-area__empty-text">{{ renderError || &quot;Enter Mermaid script to render a diagram here.&quot; }}</div>\
+        <div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">{{ renderError ? &quot;Rendering failed. Check the Mermaid script.&quot; : &quot;Flowchart and sequence diagrams are supported.&quot; }}</div>\
+      </div>\
+    </div>\
+  '
+});
+
+
+/* ===== src/components/MermaidFullEditor.js ===== */
+/**
+ * MermaidFullEditor — 임베드용 올인원 컴포넌트
+ * MermaidEditor(텍스트) + MermaidToolbar + MermaidPreview를 하나로 묶음.
+ * 부모와 v-model(:value + @input)으로 diagram 문자열을 양방향 동기화한다.
+ *
+ * 사용법:
+ *   <mermaid-full-editor :value="myDiagram" @input="myDiagram = $event">
+ *   </mermaid-full-editor>
+ */
+
+Vue.component('mermaid-full-editor', {
+  mixins: [flowchartActionsMixin, sequenceActionsMixin, exportMixin, toastMixin],
+
+  props: {
+    value:      { type: String,  default: '' },
+    hideEditor: { type: Boolean, default: false }
+  },
+
+  data: function () {
+    return {
+      script: this.value || '',
+      model:  { type: 'flowchart', direction: 'TD', nodes: [], edges: [] },
+      error:  '',
+      parseWarning: '',
+
+      selectedNode: '',
+      selectedEdge: null,
+      selectedSequenceParticipant: '',
+      selectedSequenceMessage: null,
+
+      // mounted에서 생성되는 IdAllocator 인스턴스 (N* / P* 충돌 없는 ID 할당)
+      nodeIdAllocator: null,
+      participantIdAllocator: null,
+
+      history: null,
+      fullScreen: false
+      // 토스트 상태는 toastMixin에서 제공
+    };
+  },
+
+  computed: {
+    canUndo:     function () { return !!(this.history && this.history.canUndo()); },
+    canRedo:     function () { return !!(this.history && this.history.canRedo()); },
+    isFlowchart: function () { return !!this.model && this.model.type !== 'sequenceDiagram'; },
+    directionLocked: function () {
+      return !!(this.model && this.model.headerKeyword === 'graph');
+    },
+    toolbarDirection: function () {
+      var dir = '';
+      if (this.model && this.model.profile === 'static') {
+        var subgraphs = this.model.subgraphs || [];
+        if (subgraphs.length && subgraphs[0].direction) dir = subgraphs[0].direction;
+      }
+      if (!dir) dir = this.model && this.model.direction ? this.model.direction : 'TD';
+      return dir === 'TB' ? 'TD' : dir;
+    }
+  },
+
+  watch: {
+    // 부모 → 컴포넌트 동기화
+    value: function (newVal) {
+      if (newVal !== this.script) {
+        this.script = newVal;
+        this.parseScript();
+        if (this.history) this.history.clear();
+      }
+    },
+    // 컴포넌트 → 부모 동기화
+    script: function (newVal) {
+      this.$emit('input', newVal);
+    },
+    fullScreen: function () {
+      var self = this;
+      this.$nextTick(function () { self.fitView(); });
+    }
+  },
+
+  mounted: function () {
+    this.history = new HistoryManager();
+    this.nodeIdAllocator = new IdAllocator('N');
+    this.participantIdAllocator = new IdAllocator('P');
+    if (this.script) {
+      this.parseScript();
+    }
+    var self = this;
+    this.$nextTick(function () {
+      self._seedIdAllocators();
+    });
+    window.addEventListener('popstate', this._onPopState);
+  },
+
+  beforeDestroy: function () {
+    window.removeEventListener('popstate', this._onPopState);
+    if (this.fullScreen) history.back();
+  },
+
+  methods: {
+
+    // ── 텍스트 에디터에서 편집 ──────────────────────────────────────
+    onScriptChange: function (newScript) {
+      this.script = newScript;
+      this._schedulePreviewFit();
+      this.parseScript();
+    },
+
+    _schedulePreviewFit: function () {
+      if (this.$refs.preview) this.$refs.preview.scheduleFit();
+    },
+
+    _notifyNewNode: function (nodeId) {
+      if (this.$refs.preview) this.$refs.preview.highlightNewNode(nodeId);
+    },
+
+    _notifyNewParticipant: function (participantId) {
+      if (this.$refs.preview) this.$refs.preview.highlightNewParticipant(participantId);
+    },
+
+
+    _snapshot: function () { if (this.history) this.history.snapshot(this.model); },
+
+    parseScript: function () {
+      try {
+        var parsed = MermaidParser.parse(this.script);
+        this.model = parsed;
+        this.error = '';
+        this.parseWarning = ModelDiagnostics.reservedIdWarning(this.script, parsed);
+      } catch (e) {
+        this.error = e.message || 'Parse error';
+        this.parseWarning = '';
+      }
+      this._seedIdAllocators();
+    },
+
+    updateScriptFromModel: function () {
+      this.script = MermaidGenerator.generate(this.model);
+      try {
+        var parsed = MermaidParser.parse(this.script);
+        this.error = '';
+        this.parseWarning = ModelDiagnostics.reservedIdWarning(this.script, parsed);
+      } catch (e) {
+        this.error = e.message || 'Parse error';
+        this.parseWarning = '';
+      }
+    },
+
+    _seedIdAllocators: function () {
+      if (this.nodeIdAllocator) {
+        this.nodeIdAllocator.seed(this.script, (this.model && this.model.nodes) || []);
+      }
+      if (this.participantIdAllocator) {
+        this.participantIdAllocator.seed(this.script, (this.model && this.model.participants) || []);
+      }
+    },
+
+    // deleteSelected dispatcher — flowchart / sequence 분기를 각 믹스인 헬퍼로 위임
+    deleteSelected: function (data) {
+      if (!data) return;
+      this._snapshot();
+      var handled = this.isFlowchart
+        ? this._deleteFlowchartSelection(data)
+        : this._deleteSequenceSelection(data);
+      if (!handled) return;
+
+      this.selectedNode = '';
+      this.selectedEdge = null;
+      this.selectedSequenceParticipant = '';
+      this.selectedSequenceMessage = null;
+      if (this.isFlowchart) {
+        this.updateScriptFromModel();
+      }
+    },
+
+    undo: function () { if (!this.history) return; var prev = this.history.undo(this.model); if (!prev) return; this.model = prev; this.script = MermaidGenerator.generate(this.model); },
+    redo: function () { if (!this.history) return; var next = this.history.redo(this.model); if (!next) return; this.model = next; this.script = MermaidGenerator.generate(this.model); },
+
+    onNodeSelected:                function (id)    { this.selectedNode = id; this.selectedEdge = null; },
+    onEdgeSelected:                function (idx)   { this.selectedEdge = this.model.edges[idx] || null; this.selectedNode = ''; },
+    onSequenceParticipantSelected: function (id)    { this.selectedSequenceParticipant = id; this.selectedSequenceMessage = null; },
+    onSequenceMessageSelected:     function (idx)   { this.selectedSequenceMessage = (this.model.messages || [])[idx] || null; this.selectedSequenceParticipant = ''; },
+
+    fitView:  function () { if (this.$refs.preview) this.$refs.preview.fitView(); },
+    zoomIn:   function () { if (this.$refs.preview) this.$refs.preview.zoomIn(); },
+    zoomOut:  function () { if (this.$refs.preview) this.$refs.preview.zoomOut(); },
+
+    toggleFullscreen: function () {
+      if (!this.fullScreen) {
+        this.fullScreen = true;
+        history.pushState({ guiEditorFullscreen: true }, '');
+      } else {
+        this.fullScreen = false;
+        history.back();
+      }
+    },
+
+    _onPopState: function () {
+      if (this.fullScreen) this.fullScreen = false;
+    }
+
+    // flowchart/sequence 액션, export/copy, toast는 모두 믹스인에서 제공
+  },
+
+  template: '\
+    <div class="gui-editor-shell" :class="{ \'gui-editor-shell--fullscreen\': fullScreen }">\
+      <div v-if="!fullScreen && !hideEditor" class="gui-editor-shell__editor-pane">\
+        <mermaid-editor\
+          :value="script"\
+          :error="error"\
+          :warning="parseWarning"\
+          :highlight-targets="(model.diagnostics && model.diagnostics.rawTargets) || []"\
+          :diagram-type="model.type"\
+          @input="onScriptChange"\
+        ></mermaid-editor>\
+      </div>\
+      <div class="gui-editor-shell__preview-pane">\
+        <mermaid-toolbar\
+          :diagram-type="model.type"\
+          :direction="toolbarDirection"\
+          :direction-locked="directionLocked"\
+          :can-undo="canUndo"\
+          :can-redo="canRedo"\
+          :autonumber="!!model.autonumber"\
+          :full-screen="fullScreen"\
+          @toggle-fullscreen="toggleFullscreen"\
+          @add-node="addNode"\
+          @add-sequence-participant="addSequenceParticipant"\
+          @add-sequence-actor="addSequenceActor"\
+          @add-sequence-message="addSequenceMessage"\
+          @toggle-autonumber="toggleAutonumber"\
+          @undo="undo"\
+          @redo="redo"\
+          @change-direction="changeDirection"\
+          @zoom-in="zoomIn"\
+          @zoom-out="zoomOut"\
+          @fit-view="fitView"\
+          @copy-svg="copySvg"\
+          @export-png="exportPng"\
+          @export-svg="exportSvg"\
+          @export-jpg="exportJpg"\
+        ></mermaid-toolbar>\
+        <mermaid-preview\
+          ref="preview"\
+          :model="model"\
+          @add-node="addNode"\
+          @add-edge="addEdge"\
+          @add-sequence-message="addSequenceMessage"\
+          @delete-selected="deleteSelected"\
+          @wrap-nodes-in-subgraph="wrapNodesInSubgraph"\
+          @update-subgraph-title="updateSubgraphTitle"\
+          @remove-subgraph="removeSubgraph"\
+          @update-node-text="updateNodeText"\
+          @update-node-shape="updateNodeShape"\
+          @update-edge-text="updateEdgeText"\
+          @update-edge-type="updateEdgeType"\
+          @update-node-style="updateNodeStyle"\
+          @update-edge-style="updateEdgeStyle"\
+          @update-node-fill="updateNodeFill"\
+          @update-edge-color="updateEdgeColor"\
+          @update-sequence-participant-text="updateSequenceParticipantText"\
+          @update-sequence-message-text="updateSequenceMessageText"\
+          @reverse-sequence-message="reverseSequenceMessage"\
+          @toggle-sequence-message-line-type="toggleSequenceMessageLineType"\
+          @set-sequence-message-line-type="setSequenceMessageLineType"\
+          @add-sequence-branch="addSequenceBranch"\
+          @wrap-sequence-messages-in-block="wrapSequenceMessagesInBlock"\
+          @update-sequence-block-text="updateSequenceBlockText"\
+          @update-sequence-branch-text="updateSequenceBranchText"\
+          @change-sequence-block-type="changeSequenceBlockType"\
+          @create-sequence-note="addSequenceNote"\
+          @insert-sequence-note-at="insertSequenceNoteAt"\
+          @update-sequence-note-text="updateSequenceNoteText"\
+          @toggle-participant-kind="toggleParticipantKind"\
+          @move-sequence-participant="moveSequenceParticipant"\
+          @node-selected="onNodeSelected"\
+          @edge-selected="onEdgeSelected"\
+          @sequence-participant-selected="onSequenceParticipantSelected"\
+          @sequence-message-selected="onSequenceMessageSelected"\
+          @undo="undo"\
+          @redo="redo"\
+          @svg-rendered="$emit(\'svg-rendered\', $event)"\
+        ></mermaid-preview>\
+      </div>\
+      <div\
+        class="gui-editor-toast"\
+        :class="[toastVisible ? \'gui-editor-toast--visible\' : \'\']"\
+      >{{ toastMsg }}</div>\
+    </div>\
+  '
+});
