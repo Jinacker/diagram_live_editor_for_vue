@@ -1,8 +1,10 @@
 # SureFlow - GUI Editor
+<img width="1412" height="734" alt="녹음 2026-06-15 153312" src="https://github.com/user-attachments/assets/597be675-8b74-40b4-92ff-d7ed865faf1e" />
 
 이 프로젝트는 Vue 2 기반 화면에서 Mermaid 다이어그램을 GUI 방식으로 편집할 수 있도록 만든 에디터입니다.
 
 현재 아래 두 가지 다이어그램을 지원합니다.
+
 
 - `flowchart`
 - `sequenceDiagram`
